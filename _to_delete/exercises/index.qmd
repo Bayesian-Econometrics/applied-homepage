@@ -1,5 +1,0 @@
----
-title: "Exercises"
----
-
-Platzhalter für die Übungsübersicht.

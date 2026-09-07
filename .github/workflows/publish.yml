@@ -20,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: quarto-dev/quarto-actions/setup@v2
-      - run: quarto render
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run quarto render
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

@@ -1,5 +1,0 @@
----
-title: "Lecture plan"
----
-
-Platzhalter für den Vorlesungsplan.
