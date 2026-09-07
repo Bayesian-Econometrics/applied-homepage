@@ -1,0 +1,55 @@
+---
+title: "Schedule"
+subtitle: "Proposed lecture and exercise plan"
+---
+
+::: {.callout-warning}
+## Draft
+This is a proposed plan derived from the module topics. Exact dates, ordering,
+and the split across sessions will be confirmed on ILIAS before the term starts.
+:::
+
+The course runs in three blocks: foundations, computation, and applications.
+Each week pairs a 2-hour lecture with a 2-hour exercise session in which we
+implement the week's method in Python.
+
+## Block I — Foundations
+
+| Week | Lecture | Exercise (Python) |
+|---|---|---|
+| 1 | Course intro; subjective probability and the Bayesian paradigm | Environment setup; NumPy/SciPy refresher |
+| 2 | Bayes' theorem, priors, likelihoods, and the posterior | Conjugate Beta-Binomial and Normal models by hand |
+| 3 | Point estimates, credible intervals, and prior sensitivity | Posterior summaries and prior-predictive checks |
+
+: {.striped}
+
+## Block II — Computation
+
+| Week | Lecture | Exercise (Python) |
+|---|---|---|
+| 4 | Monte Carlo integration and the need for sampling | Importance sampling; Monte Carlo error |
+| 5 | The Gibbs sampler | Gibbs sampler for the linear regression model |
+| 6 | Metropolis-Hastings | Random-walk MH from scratch; tuning and diagnostics |
+| 7 | Convergence diagnostics and efficient sampling | Trace plots, effective sample size, thinning |
+
+: {.striped}
+
+## Block III — Applications
+
+| Week | Lecture | Exercise (Python) |
+|---|---|---|
+| 8 | Shrinkage and the Minnesota prior | Ridge-as-prior; shrinkage in high dimensions |
+| 9 | Bayesian Vector Autoregressions (BVARs) | Estimating and forecasting a small BVAR |
+| 10 | State-space models for macroeconomics | Kalman filter and time-varying parameters |
+| 11 | Stochastic volatility and portfolio choice | SV model estimation; Bayesian portfolio weights |
+| 12 | Bayesian machine learning for causal inference | BART-style models; treatment-effect estimation |
+| 13 | Synthesis; exam preparation and review | Open lab; past-exam style problems |
+
+: {.striped}
+
+## Sessions and contact hours
+
+The plan above spans roughly 13 teaching weeks, which matches the 60 contact
+hours (2h lecture + 2h exercise per week) in the module description. The
+remaining 120 hours are independent study: working through the exercises,
+reading the literature, and preparing for the exam.

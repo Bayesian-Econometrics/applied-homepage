@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" role="img" aria-label="University of Freiburg">
+  <rect x="0" y="0" width="6" height="64" fill="#c1002a"/>
+  <text x="18" y="27" font-family="Roboto, Arial, sans-serif" font-size="20" font-weight="500" fill="#ffffff">UNI</text>
+  <text x="62" y="27" font-family="Roboto, Arial, sans-serif" font-size="20" font-weight="300" fill="#ffffff">FREIBURG</text>
+  <text x="18" y="48" font-family="Roboto, Arial, sans-serif" font-size="11" font-weight="300" fill="#cfe0f2">Albert-Ludwigs-Universität</text>
+</svg>

@@ -1,5 +1,73 @@
 ---
-title: "Kurstitel"
+title: "Applied Bayesian Econometrics"
+subtitle: "Bayesian inference for economics and finance"
+author:
+  - name: Prof. Dr. Roxana Halbleib
+  - name: Dr. Christoph Frey
+date: today
+date-format: "[Spring] YYYY"
+page-layout: full
+toc: false
 ---
 
-Platzhalter für die Startseite. Inhalte folgen.
+::: {.hero}
+A graduate course on the fundamentals of Bayesian inference and its application
+to (high-dimensional) datasets in economics and finance. We pair the theoretical
+foundations with hands-on empirical implementation in **Python**.
+:::
+
+## At a glance
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-md-4}
+::: {.fr-card}
+### Format
+2h lecture and 2h exercise session per week. 6 ECTS. Taught in English.
+:::
+:::
+
+::: {.g-col-12 .g-col-md-4}
+::: {.fr-card}
+### What you learn
+Subjective probability, MCMC, shrinkage priors, BVARs, state-space models,
+stochastic volatility, and Bayesian machine learning.
+:::
+:::
+
+::: {.g-col-12 .g-col-md-4}
+::: {.fr-card}
+### How you work
+Every method is implemented from scratch in Python during the exercise sessions.
+:::
+:::
+
+:::
+
+## What the course is about
+
+Bayesian methods treat unknown parameters as random and combine prior beliefs with
+data through the likelihood. That single idea gives a coherent way to quantify
+uncertainty, pool information, and regularise large models. This course builds the
+machinery from the ground up, then applies it to problems where it has a real
+advantage: forecasting with many predictors, modelling time-varying dynamics in
+macroeconomics, estimating volatility in finance, and inferring causal effects in
+microeconomics.
+
+The emphasis is modern and practical. You will not just read about Gibbs samplers
+and Metropolis-Hastings; you will write them. By the end you should have a working
+toolbox and the judgment to use it critically.
+
+## Where to go next
+
+- [Syllabus](syllabus.qmd) — module description, prerequisites, and learning outcomes.
+- [Schedule](schedule.qmd) — proposed week-by-week lecture and exercise plan.
+- [Literature](literature.qmd) — textbooks and core papers.
+- [Assessment](assessment.qmd) — exam format and grading.
+- [Slides](slides.qmd) — lecture decks as they are released.
+
+::: {.callout-note}
+## Course platform
+All course material, updates, and announcements are published on **ILIAS**.
+This site mirrors the structure and links to the slides as they go live.
+:::

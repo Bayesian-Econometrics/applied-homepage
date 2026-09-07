@@ -1,0 +1,24 @@
+---
+title: "Lecture notes"
+subtitle: "Bayesian econometrics, chapter by chapter"
+listing:
+  contents:
+    - "0*.qmd"
+    - "1*.qmd"
+  type: table
+  sort: "filename"
+  fields: [title, subtitle]
+  field-display-names:
+    title: "Lecture"
+    subtitle: "Topic"
+  filter-ui: false
+  page-size: 20
+toc: false
+number-sections: false
+---
+
+These are the long-form notes for each lecture: the theory written out, with the
+matching Python worked through inline so you can run and adapt it. They mirror the
+[slides](../slides.qmd) and follow the [schedule](../schedule.qmd). All code uses
+only `numpy`, `scipy`, `pandas`, and `matplotlib`, and simulates its own data, so
+every page runs without external files.

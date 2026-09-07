@@ -1,0 +1,307 @@
+---
+title: "The Gibbs sampler"
+subtitle: "Lecture 5"
+---
+
+## Sampling from full conditionals
+
+The previous lecture showed that posterior summaries are expectations we can estimate
+by averaging over samples, and that drawing those samples is the hard part. Importance
+sampling needed a good proposal over the whole parameter space at once, which becomes
+impossible as the dimension grows. The Gibbs sampler sidesteps the problem with a
+simple observation: even when the full joint posterior $p(\theta_1, \dots, \theta_k
+\mid y)$ is intractable, the **full conditional** distribution of each block given all
+the others is often a standard distribution we can sample from directly.
+
+The algorithm cycles through the blocks, updating each in turn from its full
+conditional while holding the rest at their current values. For two blocks the sweep is
+
+$$
+\theta_1^{(t)} \sim p\big(\theta_1 \mid \theta_2^{(t-1)}, y\big),
+\qquad
+\theta_2^{(t)} \sim p\big(\theta_2 \mid \theta_1^{(t)}, y\big),
+$$
+
+and we repeat this for many iterations. The draws form a Markov chain whose stationary
+distribution is exactly the joint posterior, so after an initial transient the chain
+produces (dependent) samples from the target. Gibbs sampling applies whenever every
+full conditional is a known, sampleable distribution. Conjugate priors are the usual
+way to engineer that situation, and the Bayesian linear regression model is the
+canonical example.
+
+We import the usual libraries and fix a seed.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The Bayesian linear regression model
+
+We work with the standard linear model
+
+$$
+y = X\beta + \varepsilon,
+\qquad
+\varepsilon \sim \mathcal{N}\!\big(0, \sigma^2 I_n\big),
+$$
+
+where $y$ is $n \times 1$, $X$ is $n \times k$, $\beta$ is the $k \times 1$ coefficient
+vector, and $\sigma^2$ is the error variance. The two unknowns are $\beta$ and
+$\sigma^2$. We place a conjugate **Normal prior** on the coefficients and an
+**inverse-Gamma prior** on the variance, treated as independent a priori:
+
+$$
+\beta \sim \mathcal{N}(b_0, B_0),
+\qquad
+\sigma^2 \sim \text{Inverse-Gamma}(c_0, d_0).
+$$
+
+The joint posterior $p(\beta, \sigma^2 \mid y)$ is not a distribution we can sample
+from directly, but each full conditional is.
+
+## The full conditionals
+
+**Coefficients given the variance.** With $\sigma^2$ fixed the likelihood is Gaussian
+in $\beta$, and combined with the Gaussian prior the full conditional is again Gaussian:
+
+$$
+\beta \mid \sigma^2, y \sim \mathcal{N}(b_1, B_1),
+\qquad
+B_1 = \left( B_0^{-1} + \tfrac{1}{\sigma^2} X^\top X \right)^{-1},
+\qquad
+b_1 = B_1 \left( B_0^{-1} b_0 + \tfrac{1}{\sigma^2} X^\top y \right).
+$$
+
+The posterior precision $B_1^{-1}$ adds the prior precision $B_0^{-1}$ to the data
+precision $\frac{1}{\sigma^2} X^\top X$, and the posterior mean is a precision-weighted
+average of the prior mean and the least-squares fit.
+
+**Variance given the coefficients.** With $\beta$ fixed the residuals $e = y - X\beta$
+are known, and the inverse-Gamma prior is conjugate to the Gaussian likelihood for the
+variance, giving an inverse-Gamma full conditional:
+
+$$
+\sigma^2 \mid \beta, y \sim \text{Inverse-Gamma}\!\left(
+c_0 + \tfrac{n}{2},\;\; d_0 + \tfrac{1}{2}(y - X\beta)^\top (y - X\beta)
+\right).
+$$
+
+The shape parameter gains half the sample size and the scale parameter gains half the
+residual sum of squares. The Gibbs sampler simply alternates between these two draws.
+
+## Simulating data with known coefficients
+
+So that we know the right answer, we simulate data from the model with chosen true
+coefficients and a chosen error variance. We include an intercept and two regressors.
+
+```{python}
+n, k = 200, 3
+beta_true = np.array([1.5, -2.0, 0.8])     # intercept and two slopes
+sigma2_true = 1.3
+
+X = np.column_stack([np.ones(n),
+                     rng.normal(size=n),
+                     rng.normal(size=n)])
+y = X @ beta_true + rng.normal(scale=np.sqrt(sigma2_true), size=n)
+
+# OLS benchmark for comparison
+beta_ols = np.linalg.solve(X.T @ X, X.T @ y)
+resid_ols = y - X @ beta_ols
+sigma2_ols = resid_ols @ resid_ols / (n - k)
+print("true beta :", beta_true)
+print("OLS  beta :", np.round(beta_ols, 3))
+print(f"true sigma2 {sigma2_true:.3f}   OLS sigma2 {sigma2_ols:.3f}")
+```
+
+## Implementing the Gibbs sampler from scratch
+
+We set weakly informative priors: a wide Normal on $\beta$ centred at zero and a
+diffuse inverse-Gamma on $\sigma^2$. We then alternate the two full-conditional draws
+for a fixed number of iterations, storing every draw. We sample the inverse-Gamma by
+drawing a Gamma variate and taking its reciprocal, since if $G \sim
+\text{Gamma}(\text{shape}, \text{rate})$ then $1/G \sim
+\text{Inverse-Gamma}(\text{shape}, \text{rate})$.
+
+```{python}
+# Priors
+b0 = np.zeros(k)
+B0 = np.eye(k) * 100.0          # wide Normal prior on beta
+B0_inv = np.linalg.inv(B0)
+c0, d0 = 0.01, 0.01             # diffuse inverse-Gamma on sigma^2
+
+# Storage
+n_iter = 4000
+beta_draws = np.empty((n_iter, k))
+sigma2_draws = np.empty(n_iter)
+
+# Initial value for sigma^2
+sigma2 = sigma2_ols
+XtX = X.T @ X
+Xty = X.T @ y
+
+for t in range(n_iter):
+    # 1) beta | sigma^2, y  ~  Normal(b1, B1)
+    B1 = np.linalg.inv(B0_inv + XtX / sigma2)
+    b1 = B1 @ (B0_inv @ b0 + Xty / sigma2)
+    L = np.linalg.cholesky(B1)
+    beta = b1 + L @ rng.standard_normal(k)
+
+    # 2) sigma^2 | beta, y  ~  Inverse-Gamma(shape, scale)
+    resid = y - X @ beta
+    shape = c0 + n / 2
+    scale = d0 + 0.5 * (resid @ resid)
+    sigma2 = 1.0 / rng.gamma(shape, 1.0 / scale)
+
+    beta_draws[t] = beta
+    sigma2_draws[t] = sigma2
+
+print("sampler finished:", beta_draws.shape, sigma2_draws.shape)
+```
+
+## Burn-in
+
+The chain starts from an arbitrary point and needs a few iterations to reach the region
+of high posterior probability. The early draws reflect the starting value rather than
+the posterior, so we discard an initial **burn-in** segment before computing any
+summaries. Here the sampler mixes quickly, so a modest burn-in is ample; we drop the
+first 1000 draws. A fuller treatment of convergence diagnostics, how to choose burn-in,
+assess mixing, and measure autocorrelation, comes in Lecture 7.
+
+```{python}
+burn = 1000
+beta_post = beta_draws[burn:]
+sigma2_post = sigma2_draws[burn:]
+print(f"kept {beta_post.shape[0]} draws after discarding {burn} for burn-in")
+```
+
+## Trace plots
+
+A trace plot shows the sampled value against iteration. A healthy chain looks like a
+stationary, noisy band with no trend or drift, which signals that it is exploring the
+posterior rather than still travelling toward it. We plot the full chains, including the
+burn-in region, with the discarded segment marked.
+
+```{python}
+labels = [r"$\beta_0$ (intercept)", r"$\beta_1$", r"$\beta_2$"]
+fig, axes = plt.subplots(2, 2, figsize=(10, 6))
+axes = axes.ravel()
+for j in range(k):
+    axes[j].plot(beta_draws[:, j], lw=0.6)
+    axes[j].axhline(beta_true[j], color="black", ls=":", lw=1)
+    axes[j].axvline(burn, color="red", lw=1, alpha=0.6)
+    axes[j].set_title(labels[j])
+    axes[j].set_xlabel("iteration")
+axes[3].plot(sigma2_draws, lw=0.6, color="darkgreen")
+axes[3].axhline(sigma2_true, color="black", ls=":", lw=1)
+axes[3].axvline(burn, color="red", lw=1, alpha=0.6)
+axes[3].set_title(r"$\sigma^2$")
+axes[3].set_xlabel("iteration")
+fig.suptitle("Trace plots (dotted = true value, red line = end of burn-in)")
+plt.tight_layout()
+plt.show()
+```
+
+The chains settle immediately into a stable band centred near the true values, with the
+burn-in region indistinguishable from the rest, confirming that the sampler mixes well
+for this model.
+
+## Posterior summaries and comparison to OLS
+
+With the post-burn-in draws in hand, every posterior summary is a sample average, just
+as in the Monte Carlo lecture. We report posterior means and 95% credible intervals and
+place them next to the OLS estimates and the true values.
+
+```{python}
+post_mean = beta_post.mean(axis=0)
+ci = np.quantile(beta_post, [0.025, 0.975], axis=0)
+
+table = pd.DataFrame({
+    "true": beta_true,
+    "OLS": beta_ols,
+    "post mean": post_mean,
+    "2.5%": ci[0],
+    "97.5%": ci[1],
+}, index=["beta0", "beta1", "beta2"])
+print(table.round(3))
+
+print(f"\nsigma^2:  true {sigma2_true:.3f}   OLS {sigma2_ols:.3f}   "
+      f"post mean {sigma2_post.mean():.3f}   "
+      f"95% CI [{np.quantile(sigma2_post, 0.025):.3f}, "
+      f"{np.quantile(sigma2_post, 0.975):.3f}]")
+```
+
+The posterior means coincide with the OLS estimates to three decimals. This is expected:
+with a very diffuse prior the data dominate, so the Bayesian posterior mean and the
+least-squares estimate agree. The advantage of the Gibbs output is that we also have the
+full posterior, including credible intervals and the joint uncertainty over all
+parameters, obtained by exactly the same machinery that would handle a model where OLS
+does not apply.
+
+## Posterior histograms
+
+Finally we plot the marginal posterior of each coefficient with the true value and the
+OLS estimate overlaid. The histograms are the empirical marginal posteriors built from
+the kept draws.
+
+```{python}
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.6))
+for j in range(k):
+    axes[j].hist(beta_post[:, j], bins=40, density=True,
+                 color="steelblue", alpha=0.85)
+    axes[j].axvline(beta_true[j], color="black", ls=":", lw=1.5,
+                    label="true")
+    axes[j].axvline(beta_ols[j], color="red", lw=1.2, label="OLS")
+    axes[j].set_title(labels[j])
+    axes[j].set_xlabel("value")
+axes[0].legend()
+fig.suptitle("Marginal posteriors with true and OLS values")
+plt.tight_layout()
+plt.show()
+```
+
+Each posterior is tightly concentrated around the true coefficient, with the OLS
+estimate sitting essentially on top of the posterior mode. The width of each histogram
+is the posterior uncertainty about that coefficient, the quantity that the credible
+intervals summarise.
+
+## Takeaways
+
+The Gibbs sampler turns an intractable joint posterior into a sequence of tractable
+full-conditional draws, cycling through parameter blocks one at a time. For the Bayesian
+linear regression model with conjugate Normal and inverse-Gamma priors, both full
+conditionals are standard distributions, so the sampler is a short loop of a Normal draw
+and an inverse-Gamma draw. After discarding a burn-in segment, the draws are samples
+from the posterior and every summary is a sample average. With diffuse priors the
+results reproduce OLS while also delivering full posterior uncertainty, and the same
+construction extends to richer models where no closed-form estimator exists.
+
+::: {.exercises}
+**Exercises**
+
+1. Replace the diffuse Normal prior with a tight prior, $\beta \sim \mathcal{N}(0,
+   0.1\,I)$, rerun the sampler, and explain how and why the posterior means now differ
+   from the OLS estimates.
+2. Increase the sample size to $n = 2000$ and describe what happens to the width of the
+   posterior credible intervals and to the agreement with OLS.
+3. Modify the sampler to also store and plot the running posterior mean of $\beta_1$
+   against iteration, and use it to argue informally that a burn-in of 1000 is more than
+   enough here.
+4. The full conditional for $\sigma^2$ uses the residual sum of squares at the current
+   $\beta$. Verify analytically that the inverse-Gamma update follows from the Gaussian
+   likelihood and the inverse-Gamma prior.
+5. Add a fourth regressor that is an exact copy of the second (perfect collinearity) and
+   describe what goes wrong in the OLS solution and in the Gibbs sampler.
+:::
+
+## References
+
+Chan et al., *Bayesian Econometric Methods* (2nd ed.), ch. 4. Gelman et al., *Bayesian
+Data Analysis* (3rd ed.), ch. 11 and 14. Koop, *Bayesian Econometrics*, ch. 3-4.
+Lambert, *A Student's Guide to Bayesian Statistics*, ch. 12 and 14.

@@ -1,0 +1,28 @@
+# Shared settings for all lecture-note pages (tidyfinance-style chapters)
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    code-tools: true
+    code-copy: true
+    code-overflow: wrap
+    highlight-style: github
+    fig-width: 7
+    fig-height: 4.2
+    fig-align: center
+    fig-dpi: 200
+
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: false
+  freeze: auto
+
+jupyter: python3
+
+author:
+  - name: Prof. Dr. Roxana Halbleib
+  - name: Dr. Christoph Frey

@@ -1,0 +1,88 @@
+---
+title: "Syllabus"
+subtitle: "Module: Applied Bayesian Econometrics"
+---
+
+## Module facts
+
+| | |
+|---|---|
+| **Module** | Applied Bayesian Econometrics |
+| **Module coordinators** | Prof. Dr. Roxana Halbleib & Dr. Christoph Frey |
+| **Responsible department** | Statistik und Ökonometrie |
+| **Module parts** | Lecture and exercise session |
+| **Credit points** | 6 ECTS |
+| **Contact hours** | 2h lecture + 2h exercise session (SWS) |
+| **Recommended semester** | 3rd semester |
+| **Duration** | 1 semester |
+| **Mandatory / elective** | Elective |
+| **Schedule** | Irregular |
+| **Language** | English |
+
+: Module overview {.striped}
+
+### Workload
+
+| Component | Hours |
+|---|---|
+| Total | 180 h |
+| Contact study | 60 h |
+| Independent study | 120 h |
+
+: Workload (180 h total) {.striped}
+
+## Prerequisites
+
+Expected prior knowledge: mathematics, statistics, probability theory, and
+regression analysis (estimation and hypothesis testing).
+
+Knowledge of **Python** coding is essential for the exercise sessions. If your
+Python is rusty, refresh it before the first session; the exercises move quickly.
+
+## Module content
+
+The module covers the fundamentals of Bayesian inference and its application to
+(high-dimensional) datasets in economics and finance, emphasising both theoretical
+foundations and empirical implementation from a modern perspective.
+
+Core topics:
+
+- Fundamental concepts: subjective probability and the Bayesian paradigm.
+- MCMC algorithms: Gibbs sampling and Metropolis-Hastings.
+- Shrinkage via Minnesota priors.
+
+Advanced applications:
+
+- Bayesian Vector Autoregressions (BVARs) and state-space models for macroeconomics.
+- Stochastic volatility and portfolio choice for finance.
+- Bayesian machine learning for causal inference in microeconomics.
+
+Practical implementation is carried out in Python throughout.
+
+## Learning outcomes
+
+Upon successful completion of the module, students are able to:
+
+- understand the theoretical foundations of Bayesian inference and subjective probability;
+- analyse complex, high-dimensional datasets using modern Bayesian inference techniques;
+- apply Bayesian econometric methods to solve empirical problems in economics and finance;
+- implement standard Bayesian algorithms and models by writing original Python code;
+- critically evaluate empirical findings and interpret results while rigorously
+  accounting for the uncertainty inherent in economic data.
+
+## Programmes
+
+This module appears in the module handbooks of the following programmes:
+
+| Handbook | Area / category |
+|---|---|
+| M.Sc. BWL (PNPM) | Volkswirtschaftslehre |
+| M.Sc. BWL (PNPM) | Quantitative Methoden |
+| M.Sc. BWL (PNPM) | Wirtschaftsinformatik |
+| M.Sc. VWL | Accounting, Finance and Taxation |
+| M.Sc. VWL | Business Analytics |
+| M.Sc. VWL | Constitutional Economics and Competition Policy |
+| M.Sc. VWL | Empirical Economics |
+| M.Sc. VWL | Network Economics and IT Risk Management |
+
+: Occurrence in the module handbooks {.striped}

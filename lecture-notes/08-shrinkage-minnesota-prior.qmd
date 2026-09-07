@@ -1,0 +1,320 @@
+---
+title: "Shrinkage and the Minnesota prior"
+subtitle: "Lecture 8"
+---
+
+## The high-dimensional problem
+
+Most of the models we care about in macroeconomics and finance carry many parameters
+relative to the available data. A monthly vector autoregression with eight variables
+and a year of lags already has hundreds of coefficients, and a cross-sectional
+regression with a long list of candidate predictors is no better. Ordinary least
+squares treats every coefficient as free and fits them to minimise in-sample error.
+When the number of regressors is large relative to the sample, this freedom is a
+liability: the estimator chases noise, the fitted coefficients have enormous variance,
+and the model forecasts poorly out of sample even though it fits the training data
+beautifully.
+
+The Bayesian response is to refuse to let the coefficients roam freely. We encode a
+prior belief that the coefficients are small, or close to some sensible default, and
+let the data pull them away from that default only when the evidence is strong. This
+is **shrinkage**, and in the Bayesian framework it is not an add-on trick but the
+direct consequence of writing down a prior. This lecture derives the connection
+between a Normal prior and ridge regression, implements a Bayesian ridge from scratch,
+and then builds up the **Minnesota prior**, the workhorse shrinkage device for
+time-series and vector autoregressions that we use in the next lecture.
+
+We import the same small set of libraries used throughout the notes and fix a seed.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## Shrinkage as a prior: from Normal prior to ridge
+
+Consider the linear regression
+$$
+y = X\beta + \varepsilon, \qquad \varepsilon \sim \mathcal{N}(0, \sigma^2 I_n),
+$$
+with $y$ an $n$-vector, $X$ an $n \times k$ matrix of regressors, and $\beta$ the
+$k$-vector of coefficients we want to learn. The likelihood is Gaussian,
+$$
+p(y \mid \beta) \propto \exp\!\left(-\frac{1}{2\sigma^2}(y - X\beta)^\top (y - X\beta)\right).
+$$
+
+Now place a Normal prior centred at zero on the coefficients,
+$$
+\beta \sim \mathcal{N}(0,\; \tau^2 I_k),
+$$
+which says that, before seeing the data, we expect each coefficient to be small, with
+$\tau$ controlling how small. The posterior is proportional to the product of
+likelihood and prior. Taking logs, the posterior mode maximises
+$$
+-\frac{1}{2\sigma^2}(y - X\beta)^\top (y - X\beta) \;-\; \frac{1}{2\tau^2}\beta^\top \beta,
+$$
+which is the same as minimising
+$$
+(y - X\beta)^\top (y - X\beta) \;+\; \lambda\, \beta^\top \beta,
+\qquad \lambda = \frac{\sigma^2}{\tau^2}.
+$$
+
+That second expression is exactly **ridge regression**. The ridge penalty $\lambda$ is
+the ratio of noise variance to prior variance: a tight prior (small $\tau^2$) means a
+large penalty and heavy shrinkage, while a diffuse prior (large $\tau^2$) sends
+$\lambda \to 0$ and recovers OLS. Because the model is conjugate, the full posterior is
+itself Gaussian, and its mean equals the ridge point estimate:
+$$
+\beta \mid y \sim \mathcal{N}\!\left(\hat\beta,\, V\right),\qquad
+V = \sigma^2 (X^\top X + \lambda I_k)^{-1},\qquad
+\hat\beta = V\, \frac{X^\top y}{\sigma^2} = (X^\top X + \lambda I_k)^{-1} X^\top y.
+$$
+
+So ridge regression is not a competitor to the Bayesian approach. It *is* the Bayesian
+posterior mean under a zero-mean Normal prior, and the Bayesian view gives us the bonus
+of a full posterior covariance $V$ for free.
+
+## Bayesian ridge versus OLS in a high-dimensional regression
+
+Let us make the overfitting problem concrete. We simulate a regression with many
+regressors, only a few of which truly matter, and a sample size that is not generous
+relative to the number of coefficients. We then compare OLS to the Bayesian ridge
+posterior mean on held-out data.
+
+```{python}
+n_train, n_test, k = 60, 2000, 40
+X_all = rng.standard_normal((n_train + n_test, k))
+
+# true coefficients: a handful of moderate effects, the rest near zero
+beta_true = np.zeros(k)
+beta_true[:5] = rng.normal(0, 1.0, size=5)
+beta_true[5:] = rng.normal(0, 0.05, size=k - 5)
+
+sigma = 1.0
+y_all = X_all @ beta_true + rng.normal(0, sigma, size=n_train + n_test)
+
+X_tr, X_te = X_all[:n_train], X_all[n_train:]
+y_tr, y_te = y_all[:n_train], y_all[n_train:]
+print(f"n_train = {n_train}, regressors k = {k}")
+```
+
+OLS is the unregularised fit. The Bayesian ridge adds $\lambda I_k$ inside the inverse,
+with $\lambda = \sigma^2 / \tau^2$ set by the prior tightness $\tau$.
+
+```{python}
+def fit_ols(X, y):
+    return np.linalg.solve(X.T @ X, X.T @ y)
+
+def fit_ridge(X, y, lam):
+    k = X.shape[1]
+    return np.linalg.solve(X.T @ X + lam * np.eye(k), X.T @ y)
+
+def mse(beta_hat, X, y):
+    resid = y - X @ beta_hat
+    return float(np.mean(resid ** 2))
+
+beta_ols = fit_ols(X_tr, y_tr)
+
+tau = 0.3
+lam = sigma ** 2 / tau ** 2
+beta_ridge = fit_ridge(X_tr, y_tr, lam)
+
+print(f"OLS    out-of-sample MSE: {mse(beta_ols, X_te, y_te):.3f}")
+print(f"Ridge  out-of-sample MSE: {mse(beta_ridge, X_te, y_te):.3f}  (lambda = {lam:.2f})")
+```
+
+The ridge estimator forecasts substantially better out of sample, even though OLS fits
+the training sample more closely. The next figure shows why: OLS coefficients scatter
+wildly around the truth, while the ridge coefficients are pulled toward zero and track
+the genuine signal far more cleanly.
+
+```{python}
+order = np.argsort(np.abs(beta_true))[::-1]
+fig, ax = plt.subplots()
+ax.plot(beta_true[order], "k-", lw=2, label="true")
+ax.plot(beta_ols[order], "o", ms=4, alpha=0.6, label="OLS")
+ax.plot(beta_ridge[order], "s", ms=4, alpha=0.7, label="Bayesian ridge")
+ax.set_xlabel("coefficient (sorted by true magnitude)")
+ax.set_ylabel("value")
+ax.legend()
+ax.set_title("OLS scatters around the truth; ridge shrinks toward it")
+plt.tight_layout()
+plt.show()
+```
+
+## The bias-variance tradeoff and the role of the prior variance
+
+Shrinkage introduces bias: by pulling coefficients toward zero we systematically
+underestimate the large ones. In exchange we cut the variance of the estimator
+dramatically. Out-of-sample error depends on both, so there is an optimal amount of
+shrinkage that minimises the total. The prior variance $\tau^2$ is the dial that sets
+it. Sweeping $\tau$ from very tight to very loose traces out the familiar U-shaped
+curve.
+
+```{python}
+taus = np.geomspace(0.02, 5.0, 40)
+mse_curve = np.array([mse(fit_ridge(X_tr, y_tr, sigma**2 / t**2), X_te, y_te)
+                      for t in taus])
+mse_ols = mse(beta_ols, X_te, y_te)
+best = taus[np.argmin(mse_curve)]
+
+fig, ax = plt.subplots()
+ax.plot(taus, mse_curve, "-o", ms=3, label="Bayesian ridge")
+ax.axhline(mse_ols, color="grey", ls="--", label="OLS")
+ax.axvline(best, color="C3", ls=":", label=f"best tau = {best:.2f}")
+ax.set_xscale("log")
+ax.set_xlabel(r"prior std. dev. $\tau$  (looser $\to$)")
+ax.set_ylabel("out-of-sample MSE")
+ax.legend()
+ax.set_title("Bias-variance tradeoff: shrinkage strength versus forecast error")
+plt.tight_layout()
+plt.show()
+```
+
+Reading the curve from left to right: a very tight prior (small $\tau$) over-shrinks,
+forcing even the real coefficients toward zero, so bias dominates and the error is
+high. A very loose prior approaches OLS, where variance dominates. The minimum sits in
+between, and at the optimum the Bayesian ridge clearly beats OLS. In practice we either
+fix $\tau$ from prior knowledge, choose it by cross-validation, or place a further prior
+on it (a hierarchical model) and let the data inform the shrinkage. Notice also that the
+shape is forgiving: a wide range of $\tau$ values beats OLS comfortably.
+
+## The Minnesota prior for time-series and VARs
+
+The same logic extends to vector autoregressions, where the parameter count explodes.
+A VAR with $m$ variables and $p$ lags has $m^2 p$ autoregressive coefficients plus
+intercepts, and macroeconomic samples are short. A flat prior leads to wildly
+overfitted dynamics and useless forecasts. The **Minnesota prior**, introduced by
+Litterman and his coauthors at the Minneapolis Fed, is the classic shrinkage prior for
+this setting. It encodes three pieces of economic intuition through a structured Normal
+prior on the coefficients.
+
+First, each variable is *a priori* a random walk: the coefficient on a variable's own
+first lag is centred at one and everything else at zero. For data in growth rates one
+centres own-first-lag at zero instead, but the structure is the same. Second, a
+variable's own lags are believed more strongly than other variables' lags, so
+**cross-lag** coefficients are shrunk harder than **own-lag** coefficients. Third, the
+prior tightens as the lag length grows: a variable's value five quarters ago should
+matter less than its value last quarter, so the prior variance **decays with the lag**.
+
+Formally, for the coefficient on lag $\ell$ of variable $j$ in the equation for
+variable $i$, the prior is Normal with mean zero (or one for $i = j$, $\ell = 1$) and
+variance
+$$
+V_{ij\ell} =
+\begin{cases}
+\dfrac{\lambda_1}{\ell^{2}} & \text{if } i = j \quad (\text{own lag}),\\[2ex]
+\dfrac{\lambda_1\,\lambda_2}{\ell^{2}}\,\dfrac{\sigma_i^2}{\sigma_j^2} & \text{if } i \ne j \quad (\text{cross lag}).
+\end{cases}
+$$
+Here $\lambda_1$ is the overall tightness, $\lambda_2 \in (0,1)$ down-weights cross
+lags, the $1/\ell^2$ term produces the lag decay, and the variance ratio
+$\sigma_i^2/\sigma_j^2$ corrects for the different scales of the variables. The
+intercept usually gets a diffuse prior so it is barely shrunk.
+
+The following block builds this prior-variance pattern for a small VAR and visualises
+it, so the structure is tangible before we use it in the next lecture.
+
+```{python}
+m = 3          # number of variables
+p = 4          # number of lags
+lam1, lam2 = 0.2, 0.5
+sig = np.array([1.0, 1.2, 0.8])   # residual std. dev. per variable (illustrative)
+
+# prior variance for the coefficient block: rows = equation i, cols = (lag, variable j)
+prior_var = np.zeros((m, p * m))
+prior_mean = np.zeros((m, p * m))
+col_labels = []
+for ell in range(1, p + 1):
+    for j in range(m):
+        c = (ell - 1) * m + j
+        col_labels.append(f"L{ell}·y{j+1}")
+        for i in range(m):
+            if i == j:
+                prior_var[i, c] = lam1 / ell**2
+                if ell == 1:
+                    prior_mean[i, c] = 1.0          # random-walk prior mean
+            else:
+                prior_var[i, c] = lam1 * lam2 / ell**2 * sig[i]**2 / sig[j]**2
+
+print("Prior variance, equation for y1 (own lags vs cross lags, decaying):")
+print(np.round(prior_var[0], 4))
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(7.5, 3.6))
+im = ax.imshow(prior_var, aspect="auto", cmap="viridis")
+ax.set_yticks(range(m))
+ax.set_yticklabels([f"eq. y{i+1}" for i in range(m)])
+ax.set_xticks(range(p * m))
+ax.set_xticklabels(col_labels, rotation=90, fontsize=8)
+ax.set_title("Minnesota prior variance: own lags wide, cross lags tight, decaying")
+fig.colorbar(im, ax=ax, label="prior variance")
+plt.tight_layout()
+plt.show()
+```
+
+The bright entries along the own-lag positions show the loose prior on a variable's own
+dynamics; the dimmer cross-lag entries show the extra shrinkage from $\lambda_2$; and
+the fading from left to right within each variable shows the lag decay. This single
+structured Normal prior is what tames the VAR.
+
+## The illusion of sparsity
+
+A natural alternative to dense shrinkage is *sparse selection*: assume most
+coefficients are exactly zero and let a procedure pick the handful that are not. Methods
+in that family promise interpretable models with a short list of active predictors.
+Giannone, Lenza, and Primiceri (2021) examine this assumption directly across a range of
+economic datasets and find what they call an **illusion of sparsity**. The data rarely
+support models with only a few nonzero coefficients. Instead, predictive performance is
+best when many coefficients contribute a little each, exactly the dense pattern that a
+Minnesota-style Normal prior produces. Sparse models look attractive because they are
+easy to read, but the evidence favours shrinking everything toward zero rather than
+setting most things exactly to zero.
+
+This is the conceptual payoff of the lecture. Shrinkage through a Normal prior is not a
+compromise we tolerate for computational convenience; in the high-dimensional, short-
+sample world of empirical economics it is often the approach that actually forecasts
+best. The Minnesota prior is the concrete, time-series version of that idea, and it is
+the engine of the Bayesian VAR we build next.
+
+## Takeaways
+
+A zero-mean Normal prior on regression coefficients yields a Gaussian posterior whose
+mean is exactly the ridge estimator, with the penalty equal to the noise-to-prior
+variance ratio. Shrinkage trades a little bias for a large reduction in variance and
+typically beats OLS out of sample when regressors are many relative to the sample. The
+prior variance is the dial that sets the amount of shrinkage. The Minnesota prior
+applies this idea to VAR coefficients with structure: random-walk prior means, looser
+priors on own lags than cross lags, and variance decaying with the lag. The illusion-of-
+sparsity evidence suggests that dense shrinkage of this kind often outperforms sparse
+variable selection in economics.
+
+::: {.exercises}
+**Exercises**
+
+1. Re-run the high-dimensional simulation with $k = 80$ regressors and $n_{train} = 50$.
+   How much does OLS deteriorate relative to ridge, and why does the gap widen as $k$
+   approaches $n$?
+2. For a fixed $\tau$, compute the full ridge posterior covariance
+   $V = \sigma^2 (X^\top X + \lambda I_k)^{-1}$ and report the posterior standard
+   deviation of the first coefficient. Compare it to the OLS standard error.
+3. Modify the bias-variance experiment to report in-sample MSE alongside out-of-sample
+   MSE as $\tau$ varies. Explain why the two curves disagree about the best $\tau$.
+4. Change $\lambda_2$ from 0.5 to 0.1 in the Minnesota prior and redraw the variance
+   heatmap. Describe how the relative treatment of own and cross lags changes.
+5. In two or three sentences, summarise the illusion-of-sparsity finding and explain why
+   it supports a dense Normal prior over exact variable selection.
+:::
+
+## References
+
+Koop, *Bayesian Econometrics*, ch. 2-4. Chan, Koop, Poirier, and Tobias, *Bayesian
+Econometric Methods* (2nd ed.), ch. 2-4. Giannone, Lenza, and Primiceri (2021), "Economic
+Predictions with Big Data: The Illusion of Sparsity," *Econometrica*.

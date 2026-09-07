@@ -1,0 +1,124 @@
+/*-- scss:defaults --*/
+
+// Freiburg website theme (pairs with the "cosmo" bootswatch base)
+@import url('https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,500,700&display=swap');
+
+$fr-blue:  #004a99;   // uni-blau
+$fr-red:   #c1002a;   // uni-rot
+$jet:      #2c2c2c;
+$grey:     #5a6472;
+
+$font-family-sans-serif: "Roboto", -apple-system, "Segoe UI", sans-serif !default;
+$headings-font-weight: 300;
+
+$body-color: $jet !default;
+$primary: $fr-blue !default;
+$link-color: $fr-blue !default;
+$navbar-bg: $fr-blue !default;
+
+/*-- scss:rules --*/
+
+h1, h2, h3 { color: $fr-blue; font-weight: 300; }
+h1 { letter-spacing: -0.01em; }
+
+a { text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+// Navbar
+.navbar {
+  background-color: $fr-blue !important;
+}
+.navbar .navbar-brand,
+.navbar .nav-link {
+  color: #ffffff !important;
+}
+.navbar .nav-link:hover { color: #cfe0f2 !important; }
+.navbar .navbar-title { font-weight: 500; }
+
+// Title banner
+.quarto-title-banner {
+  background-color: $fr-blue;
+  color: #ffffff;
+}
+.quarto-title-banner h1, .quarto-title-banner .title { color: #ffffff; }
+
+// Hero block on the landing page
+.hero {
+  border-left: 5px solid $fr-red;
+  padding: 0.4rem 0 0.4rem 1.2rem;
+  margin: 1.2rem 0 2rem 0;
+}
+
+// Callout / accent styling
+.accent { color: $fr-red; }
+.muted { color: $grey; }
+
+// Cards used on the landing page
+.fr-card {
+  border: 1px solid #e3e6ea;
+  border-top: 3px solid $fr-blue;
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+  height: 100%;
+  transition: box-shadow 0.15s ease-in-out;
+}
+.fr-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+.fr-card h3 { margin-top: 0; font-size: 1.15rem; }
+
+// Tables
+table { font-size: 0.95rem; }
+thead th { border-bottom: 2px solid $fr-blue; color: $fr-blue; }
+table caption { color: $grey; font-variant: small-caps; }
+
+// Footer
+.nav-footer { border-top: 3px solid $fr-blue; }
+
+// --- tidyfinance-style lecture notes: code + output ---
+
+// Source code blocks: subtle card with a blue left rule
+div.sourceCode {
+  background-color: #f7f8fa;
+  border: 1px solid #e3e6ea;
+  border-left: 3px solid $fr-blue;
+  border-radius: 6px;
+  margin: 1.1rem 0;
+}
+div.sourceCode pre { padding: 0.8rem 1rem; }
+code { font-size: 0.9em; }
+code:not(.sourceCode), p code, li code {
+  color: $fr-red;
+  background-color: #f7f8fa;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+// Printed output (text + figures) sits flush under its code
+.cell-output, .cell-output-stdout {
+  border-left: 3px solid #e3e6ea;
+  margin: 0 0 1.1rem 0;
+  padding-left: 0.9rem;
+}
+.cell-output pre { background: none; font-size: 0.85em; }
+.cell figure { margin: 0.6rem 0 1.2rem 0; }
+
+// Code-tools / copy buttons in blue
+.code-tools-button, .code-copy-button { color: $fr-blue; }
+
+// Section numbers in blue
+h1 .header-section-number,
+h2 .header-section-number,
+h3 .header-section-number { color: $grey; font-weight: 300; }
+
+// Exercises callout (use ::: {.callout-tip title="Exercises"} or .exercises)
+.exercises {
+  border: 1px solid #e3e6ea;
+  border-top: 3px solid $fr-red;
+  border-radius: 6px;
+  padding: 0.6rem 1.2rem;
+  margin: 1.6rem 0;
+  background-color: #fcfcfd;
+}
+.exercises > p:first-child { color: $fr-red; font-weight: 500; }
+
+// Chapter listing cards
+.quarto-listing .card { border-top: 3px solid $fr-blue; }

@@ -1,0 +1,271 @@
+---
+title: "Convergence diagnostics and efficient sampling"
+subtitle: "Lecture 7"
+---
+
+## The problem with trusting a sampler
+
+A Markov chain Monte Carlo sampler is only useful if its draws actually represent the
+posterior. The theory guarantees that they do *eventually*, but eventually can be a very
+long time, and nothing in the output announces when the chain has arrived. A run that
+looks busy can be stuck in one region of the parameter space, badly autocorrelated, or
+still drifting away from a poor starting point. Reporting posterior summaries from such a
+run gives confident answers that are simply wrong.
+
+This lecture is about the discipline of not trusting a sampler until it has earned it. We
+cover burn-in, autocorrelation and thinning, the effective sample size, and the
+multiple-chain potential scale reduction factor known as R-hat. We implement the two
+central diagnostics, effective sample size and R-hat, from scratch in numpy, and we use a
+deliberately awkward target to show what good and bad mixing look like.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## A test bed: a correlated bivariate Normal
+
+We reuse the random-walk Metropolis sampler from the previous lecture, but on a target
+we understand completely so we can judge the diagnostics against the truth. A bivariate
+Normal with strong correlation is ideal: it is easy to write down and it is genuinely
+hard to sample with a naive random walk, because the proposal does not know about the
+correlation and keeps stepping across the narrow ridge of probability.
+
+```{python}
+rho = 0.95
+Sigma = np.array([[1.0, rho], [rho, 1.0]])
+Prec = np.linalg.inv(Sigma)
+
+def log_target(x):
+    return -0.5 * x @ Prec @ x
+
+def rw_metropolis(log_post, init, step, n_iter, rng):
+    d = len(init)
+    chain = np.empty((n_iter, d))
+    current = np.asarray(init, dtype=float)
+    current_lp = log_post(current)
+    for t in range(n_iter):
+        proposal = current + step * rng.normal(size=d)
+        proposal_lp = log_post(proposal)
+        if np.log(rng.uniform()) < proposal_lp - current_lp:
+            current, current_lp = proposal, proposal_lp
+        chain[t] = current
+    return chain
+```
+
+To diagnose convergence we run several chains from **dispersed starting points**. If
+chains launched from very different places all settle into the same distribution, that is
+strong evidence of convergence; if they disagree, at least one has not converged. We use
+four starts at the corners of a wide box.
+
+```{python}
+n_iter = 4000
+starts = np.array([[4.0, 4.0], [-4.0, 4.0], [4.0, -4.0], [-4.0, -4.0]])
+
+def run_chains(step):
+    return np.stack([rw_metropolis(log_target, s, step, n_iter, rng)
+                     for s in starts])
+
+chains_good = run_chains(0.6)    # well-tuned step
+chains_poor = run_chains(0.05)   # step far too small
+print("chains shape (chains, iterations, dimensions):", chains_good.shape)
+```
+
+## Burn-in and warm-up
+
+Because the chains start far from the typical set of the posterior, the first stretch of
+draws is contaminated by the starting point. The standard fix is to discard an initial
+**burn-in** (also called warm-up when the sampler also uses that phase to tune itself).
+There is no exact rule for how much to discard; the trace plot is the guide. Once the
+chains have forgotten their starts and overlap each other, the burn-in is long enough.
+
+The multiple-chain trace plot below shows the contrast. With a good step the four chains
+mix together within a few hundred iterations and become indistinguishable. With a tiny
+step they crawl from their corners and, even after 4000 iterations, remain visibly
+separated, each exploring only a local neighbourhood.
+
+```{python}
+fig, axes = plt.subplots(2, 1, figsize=(7, 6), sharex=True)
+panels = [(chains_good, axes[0], "good mixing (step 0.6)"),
+          (chains_poor, axes[1], "poor mixing (step 0.05)")]
+for ch, ax, label in panels:
+    for c in range(ch.shape[0]):
+        ax.plot(ch[c, :, 0], lw=0.5)
+    ax.set_ylabel(r"$x_1$")
+    ax.set_title(label, fontsize=10)
+axes[-1].set_xlabel("iteration")
+plt.tight_layout()
+plt.show()
+```
+
+We set a burn-in of 1000 and keep the rest for the diagnostics that follow.
+
+```{python}
+burn = 1000
+good = chains_good[:, burn:, :]
+poor = chains_poor[:, burn:, :]
+```
+
+## Autocorrelation, thinning, and effective sample size
+
+Successive MCMC draws are correlated by construction, because each state is a small
+perturbation of the previous one. The **autocorrelation function** measures how quickly
+that dependence dies out as the lag grows. We compute it directly.
+
+```{python}
+def acf(x, max_lag):
+    x = x - x.mean()
+    n = len(x)
+    var = np.dot(x, x) / n
+    out = np.empty(max_lag + 1)
+    for k in range(max_lag + 1):
+        out[k] = np.dot(x[:n - k], x[k:]) / n / var
+    return out
+```
+
+When mixing is good the autocorrelation drops to near zero within a handful of lags; when
+it is poor it stays high for dozens of lags, meaning each new draw carries almost no fresh
+information.
+
+```{python}
+max_lag = 60
+acf_good = acf(good[0, :, 0], max_lag)
+acf_poor = acf(poor[0, :, 0], max_lag)
+
+fig, ax = plt.subplots()
+ax.stem(range(max_lag + 1), acf_good, linefmt="C0-", markerfmt="C0o",
+        basefmt=" ", label="good mixing")
+ax.plot(range(max_lag + 1), acf_poor, "C1.-", label="poor mixing")
+ax.axhline(0, color="black", lw=0.8)
+ax.set_xlabel("lag")
+ax.set_ylabel("autocorrelation")
+ax.set_title("Autocorrelation decays fast only when mixing is good")
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+A correlated chain of length $n$ contains less information than $n$ independent draws.
+The **effective sample size** translates the chain into an equivalent number of
+independent draws,
+$$
+\text{ESS} \;=\; \frac{n}{1 + 2\sum_{k=1}^{\infty}\rho_k},
+$$
+where $\rho_k$ is the lag-$k$ autocorrelation. In practice the tail of the empirical
+autocorrelation is noisy, so we truncate the sum using Geyer's initial positive sequence
+rule: sum consecutive pairs of autocorrelations and stop as soon as a pair sum turns
+negative.
+
+```{python}
+def ess(x):
+    n = len(x)
+    a = acf(x, n - 1)
+    s = 0.0
+    for k in range(1, n - 1, 2):
+        pair = a[k] + a[k + 1]
+        if pair < 0:
+            break
+        s += pair
+    return n / (1.0 + 2.0 * s)
+
+print(f"draws per chain after burn-in: {good.shape[1]}")
+print(f"ESS, good mixing: {ess(good[0, :, 0]):.0f}")
+print(f"ESS, poor mixing: {ess(poor[0, :, 0]):.0f}")
+```
+
+The gap is dramatic. The well-tuned chain converts thousands of raw draws into a
+respectable effective sample, while the poorly tuned chain is worth only a handful of
+independent draws despite the same length. This is the honest count to report: a posterior
+mean estimated from an effective sample of six is essentially worthless.
+
+A related practice is **thinning**, keeping only every $m$-th draw to reduce storage and
+the visual impression of correlation. Thinning does not improve the effective sample size
+per unit of computation and is mostly a matter of memory management; the modern advice is
+to thin only when storage forces it, and otherwise to keep all draws and report the ESS.
+
+## Multiple chains and the Gelman-Rubin R-hat
+
+The effective sample size diagnoses a single chain but cannot detect a chain that has
+mixed nicely within a region while missing the rest of the posterior. For that we compare
+chains. The **potential scale reduction factor** $\hat{R}$ contrasts the variation
+*between* chains with the variation *within* chains. If the chains have converged to the
+same distribution, the between-chain spread should be no larger than the within-chain
+spread and $\hat{R}$ should be close to one. Values noticeably above one signal that the
+chains have not yet agreed.
+
+With $m$ chains of length $n$, let $W$ be the average within-chain variance and $B$ the
+between-chain variance scaled by $n$. The estimated marginal variance is a weighted
+average of the two, and $\hat{R}$ is the square root of its ratio to $W$:
+$$
+\hat{R} \;=\; \sqrt{\frac{\frac{n-1}{n}W + \frac{1}{n}B}{W}}.
+$$
+
+```{python}
+def rhat(samples):           # samples: (m chains, n draws) for one parameter
+    m, n = samples.shape
+    chain_means = samples.mean(axis=1)
+    chain_vars = samples.var(axis=1, ddof=1)
+    W = chain_vars.mean()
+    B = n * chain_means.var(ddof=1)
+    var_hat = (n - 1) / n * W + B / n
+    return np.sqrt(var_hat / W)
+
+print(f"R-hat, good mixing: {rhat(good[:, :, 0]):.3f}")
+print(f"R-hat, poor mixing: {rhat(poor[:, :, 0]):.3f}")
+```
+
+The well-tuned chains give an $\hat{R}$ essentially equal to one, while the poorly tuned
+chains give a value well above the common warning threshold of 1.01. A large $\hat{R}$ is
+a clear instruction not to use the output: the chains have not converged to a common
+distribution. The diagnostic is most powerful precisely because the chains start from
+dispersed points, so any failure to converge shows up as disagreement.
+
+## Practical advice on diagnosing non-convergence
+
+A workable routine combines the pieces above. Run at least four chains from
+overdispersed starts. Look at the trace plots first; healthy traces are stationary, fuzzy
+bands that overlap. Compute $\hat{R}$ for every parameter and treat anything above about
+1.01 as a failure to converge. Compute the effective sample size and aim for at least a
+few hundred per quantity of interest, more if you need precise tail estimates. When the
+diagnostics are poor, the usual remedies are to run longer, to tune the proposal so the
+acceptance rate is moderate, to reparameterise the model so the posterior is less
+correlated, or to switch to a better sampler such as Hamiltonian Monte Carlo. The one
+thing never to do is to report results from a chain that has failed its diagnostics.
+
+## Takeaways
+
+Convergence is not automatic and must be checked. Discard a burn-in to remove the
+influence of the starting point. Autocorrelation inflates the apparent sample size, so
+report the effective sample size rather than the raw number of draws. Run multiple chains
+from dispersed starts and require $\hat{R}$ near one before trusting any summary.
+Together the trace plot, the effective sample size, and $\hat{R}$ form a simple checklist
+that catches the great majority of sampler failures before they become wrong conclusions.
+
+::: {.exercises}
+**Exercises**
+
+1. Vary the correlation $\rho$ of the target from 0.5 to 0.99 with a fixed good step
+   size and plot how the effective sample size of $x_1$ degrades as the ridge gets
+   narrower.
+2. For the poorly mixing chains, extend the run to 40000 iterations and recompute
+   $\hat{R}$ and the effective sample size. How long must the chain be before $\hat{R}$
+   drops below 1.01?
+3. Implement a thinned version of the good chain keeping every 10th draw and confirm that
+   the effective sample size per *retained* draw rises while the total effective sample
+   size does not exceed that of the full chain.
+4. Add a second poorly identified target, a Normal with two well-separated modes, and
+   show that $\hat{R}$ can detect chains that each get stuck in a different mode even when
+   every individual chain looks well mixed.
+:::
+
+## References
+
+Chan et al., *Bayesian Econometric Methods* (2nd ed.), ch. on MCMC diagnostics. Gelman
+et al., *Bayesian Data Analysis* (3rd ed.), ch. 11. Lambert, *A Student's Guide to
+Bayesian Statistics*, ch. 14-15. Koop, *Bayesian Econometrics*, ch. 4.

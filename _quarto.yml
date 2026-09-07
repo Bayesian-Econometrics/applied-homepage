@@ -1,21 +1,49 @@
 project:
   type: website
   output-dir: _site
+  render:
+    - "*.qmd"
+    - "lecture-notes/*.qmd"
+    - "lecture-slides/*.qmd"
 
 website:
-  title: "Kurstitel"
+  title: "Applied Bayesian Econometrics"
+  description: "Master-level course on Bayesian inference for economics and finance, University of Freiburg."
+  site-url: "https://bayesian-econometrics.github.io/applied-bayesian-econometrics-homepage/"
+  page-navigation: true
   navbar:
+    background: primary
+    logo: theme/freiburg_logo.svg
+    logo-alt: "University of Freiburg"
+    title: "Applied Bayesian Econometrics"
     left:
-      - text: home
-        file: index.qmd
-      - text: lecture plan
-        file: lecture-plan.qmd
-      - text: exercises
-        file: exercises/index.qmd
+      - text: "Home"
+        href: index.qmd
+      - text: "Syllabus"
+        href: syllabus.qmd
+      - text: "Schedule"
+        href: schedule.qmd
+      - text: "Lecture notes"
+        href: lecture-notes/index.qmd
+      - text: "Literature"
+        href: literature.qmd
+      - text: "Assessment"
+        href: assessment.qmd
+      - text: "Slides"
+        href: slides.qmd
+  page-footer:
+    left: "Applied Bayesian Econometrics &middot; University of Freiburg"
+    center: "Prof. Dr. Roxana Halbleib &middot; Dr. Christoph Frey"
+    right: "Statistik und Ökonometrie"
 
 format:
   html:
+    theme:
+      - cosmo
+      - theme/freiburg_web.scss
     toc: true
-
-execute:
-  freeze: auto
+    toc-depth: 3
+    code-copy: true
+    smooth-scroll: true
+    grid:
+      body-width: 900px

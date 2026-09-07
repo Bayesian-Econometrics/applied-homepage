@@ -1,0 +1,230 @@
+---
+title: "Introduction and the Bayesian paradigm"
+subtitle: "Lecture 1"
+---
+
+## Where we are going
+
+This course is about reasoning under uncertainty when the data are limited, noisy,
+and high-dimensional, which is the normal situation in economics and finance. The
+Bayesian approach gives us one consistent rule for doing that: treat every unknown
+as a random quantity, write down what we believe before seeing the data, and update
+that belief with the evidence. The result is a full probability distribution over
+the unknowns rather than a single number with an asterisk.
+
+In this first lecture we fix notation, state Bayes' theorem, and work through the
+simplest non-trivial model end to end in Python. Everything later in the course, the
+Gibbs sampler, Metropolis-Hastings, BVARs, stochastic volatility, is a way to compute
+the same object we introduce here: the posterior distribution.
+
+We import the small set of libraries used throughout the notes. The code uses only
+`numpy`, `scipy`, `pandas`, and `matplotlib`, and we fix a seed so results are
+reproducible.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The Bayesian paradigm
+
+Let $\theta$ denote the unknown parameters of a model and $y$ the observed data.
+Bayesian inference combines three ingredients:
+
+- the **prior** $p(\theta)$, what we believe about $\theta$ before seeing data;
+- the **likelihood** $p(y \mid \theta)$, how probable the data are for each value of $\theta$;
+- the **posterior** $p(\theta \mid y)$, our updated belief after seeing the data.
+
+They are tied together by Bayes' theorem:
+
+$$
+p(\theta \mid y) \;=\; \frac{p(y \mid \theta)\,p(\theta)}{p(y)}
+\;\propto\; p(y \mid \theta)\,p(\theta).
+$$
+
+The denominator $p(y) = \int p(y \mid \theta)\,p(\theta)\,d\theta$ does not depend on
+$\theta$; it only rescales the numerator so the posterior integrates to one. Most of
+the computational effort in Bayesian work goes into handling that integral, either
+avoiding it (conjugacy) or sampling around it (MCMC).
+
+The contrast with the frequentist view is worth stating once, plainly.
+
+| | Frequentist | Bayesian |
+|---|---|---|
+| Parameter | fixed, unknown | random, uncertain |
+| Probability | long-run frequency | degree of belief |
+| Main output | point estimate + confidence interval | posterior distribution |
+| Uncertainty | sampling variability | the posterior itself |
+
+Neither view is "correct" in the abstract. The Bayesian framing is convenient when
+we have genuine prior information, when we want to talk directly about the
+probability that a parameter lies in a range, and when models are too large to
+estimate without regularisation.
+
+## A worked example: estimating a probability
+
+The cleanest first example is inferring a success probability $\theta$ from a count
+of successes. Think of the share of months a trading rule beats its benchmark, or the
+fraction of firms that default. We observe $y$ successes in $n$ independent trials.
+
+The likelihood is binomial,
+$$
+y \mid \theta \sim \text{Binomial}(n, \theta),
+$$
+and a convenient prior is the Beta distribution,
+$$
+\theta \sim \text{Beta}(a, b).
+$$
+The Beta prior is **conjugate** to the binomial likelihood, meaning the posterior is
+again a Beta distribution with updated parameters:
+$$
+\theta \mid y \sim \text{Beta}(a + y,\; b + n - y).
+$$
+
+This is the rare case where we can write the posterior in closed form. Let us set up
+the numbers: a weakly informative $\text{Beta}(2, 2)$ prior, and data of 8 successes
+in 12 trials.
+
+```{python}
+a, b = 2, 2          # Beta(a, b) prior
+y, n = 8, 12         # observed successes and trials
+
+prior = stats.beta(a, b)
+posterior = stats.beta(a + y, b + n - y)
+
+mle = y / n
+post_mean = posterior.mean()
+print(f"MLE (data only):      {mle:.3f}")
+print(f"Posterior mean:       {post_mean:.3f}")
+print(f"Prior mean:           {prior.mean():.3f}")
+```
+
+The posterior mean sits between the prior mean (0.5) and the data-only estimate
+(0.667). That is the whole idea: the posterior is a compromise between what we
+believed and what we saw, weighted by how strong each is.
+
+Plotting the three densities makes the update concrete.
+
+```{python}
+theta = np.linspace(0, 1, 400)
+fig, ax = plt.subplots()
+ax.plot(theta, prior.pdf(theta), "--", label="prior  Beta(2,2)")
+ax.plot(theta, posterior.pdf(theta), label=f"posterior  Beta({a+y},{b+n-y})")
+ax.axvline(mle, color="grey", lw=1, label=f"MLE = {mle:.2f}")
+ax.set_xlabel(r"$\theta$")
+ax.set_ylabel("density")
+ax.legend()
+ax.set_title("Prior, data, and posterior for a success probability")
+plt.tight_layout()
+plt.show()
+```
+
+### Credible intervals
+
+Because we have the full posterior, we can answer questions the frequentist interval
+cannot answer directly. A 95% **credible interval** is any range containing 95% of the
+posterior mass; the equal-tailed version uses the 2.5% and 97.5% quantiles.
+
+```{python}
+lo, hi = posterior.ppf([0.025, 0.975])
+prob_above_half = 1 - posterior.cdf(0.5)
+print(f"95% credible interval: [{lo:.3f}, {hi:.3f}]")
+print(f"P(theta > 0.5 | data): {prob_above_half:.3f}")
+```
+
+The second line is a sentence the Bayesian framework lets us say literally: given the
+data and prior, the probability that the success rate exceeds one half is about that
+value. There is no equivalent statement for a frequentist confidence interval.
+
+## Beliefs update sequentially
+
+Bayesian updating is sequential and order-independent: yesterday's posterior is
+today's prior. If the data arrive one batch at a time, we can fold them in one by one
+and reach the same posterior as if we had used all of them at once. The next block
+simulates a stream of Bernoulli outcomes and shows the posterior tightening as
+evidence accumulates.
+
+```{python}
+true_theta = 0.7
+draws = rng.binomial(1, true_theta, size=200)
+
+checkpoints = [0, 5, 20, 50, 200]
+fig, ax = plt.subplots()
+for k in checkpoints:
+    s = draws[:k].sum()
+    post_k = stats.beta(a + s, b + k - s)
+    ax.plot(theta, post_k.pdf(theta), label=f"n = {k}")
+ax.axvline(true_theta, color="black", lw=1, ls=":", label="true value")
+ax.set_xlabel(r"$\theta$")
+ax.set_ylabel("posterior density")
+ax.legend()
+ax.set_title("The posterior concentrates as data accumulate")
+plt.tight_layout()
+plt.show()
+```
+
+With no data the posterior equals the prior. As $n$ grows it concentrates around the
+true value and the prior's influence fades. This is the Bernstein-von Mises idea in
+miniature: with enough data the prior stops mattering, and the Bayesian and
+frequentist answers converge. The Bayesian machinery earns its keep precisely when
+data are scarce or the model is large, which is where the rest of the course lives.
+
+## Why we will need more than this
+
+Conjugate models are the exception. As soon as the prior and likelihood do not pair
+neatly, the posterior has no closed form and the normalising integral $p(y)$ is
+intractable. The response is not to give up on the Bayesian answer but to approximate
+it by drawing samples from the posterior. Given samples $\theta^{(1)}, \dots,
+\theta^{(S)}$ we can estimate any posterior quantity by averaging, for example the
+posterior mean as $\frac{1}{S}\sum_s \theta^{(s)}$. Building algorithms that produce
+those samples, Monte Carlo, Gibbs sampling, Metropolis-Hastings, is the subject of the
+next several lectures.
+
+To preview the logic, here is a crude Monte Carlo estimate of the posterior mean from
+the worked example, using direct draws from the known Beta posterior. Later we will
+generate such draws when the posterior is *not* known in closed form.
+
+```{python}
+samples = posterior.rvs(size=20000, random_state=rng)
+print(f"Analytic posterior mean:   {posterior.mean():.4f}")
+print(f"Monte Carlo estimate:      {samples.mean():.4f}")
+print(f"Monte Carlo 95% interval:  "
+      f"[{np.quantile(samples, 0.025):.3f}, {np.quantile(samples, 0.975):.3f}]")
+```
+
+The sample-based answers match the analytic ones, which is the sanity check every
+sampler must pass before we trust it on a harder model.
+
+## Takeaways
+
+Bayesian inference turns a prior and a likelihood into a posterior, and the posterior
+carries the full uncertainty about the unknowns. In conjugate models we can write it
+down; in general we approximate it by sampling. The posterior lets us make direct
+probability statements and concentrates on the truth as data accumulate. From here we
+build the computational tools that make the approach work for realistic models in
+macroeconomics, finance, and microeconomics.
+
+::: {.exercises}
+**Exercises**
+
+1. Redo the worked example with a strongly informative prior, $\text{Beta}(20, 20)$,
+   and the same data (8 of 12). How does the posterior mean change, and why?
+2. Show numerically that updating on the 200 Bernoulli draws in two halves (first 100,
+   then the next 100) gives the same posterior as updating on all 200 at once.
+3. For the success-probability model, plot how the width of the 95% credible interval
+   shrinks as $n$ grows from 10 to 1000 (hold the success rate fixed at 0.7).
+4. Explain in two or three sentences why the statement "there is a 95% probability that
+   $\theta$ lies in [a, b]" is valid for a credible interval but not for a frequentist
+   confidence interval.
+:::
+
+## References
+
+Gelman et al., *Bayesian Data Analysis* (3rd ed.), ch. 1-2. Lambert, *A Student's
+Guide to Bayesian Statistics*, ch. 1-5. Koop, *Bayesian Econometrics*, ch. 1.

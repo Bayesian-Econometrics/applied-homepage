@@ -1,0 +1,273 @@
+/*-- scss:defaults --*/
+
+// Freiburg reveal.js theme (adapted from the "clean" KU theme)
+// Corporate colours of the University of Freiburg:
+//   uni-blau #004a99  |  uni-rot #c1002a
+
+$jet:     #2c2c2c;
+$accent:  #5a6472;          // muted slate grey
+$accent2: #c1002a;          // uni-rot (alerts, emphasis)
+$fr-blue: #004a99;          // uni-blau (headings, links)
+$fr-blue-light: #344a9a;
+$right-arrow: "\2192";
+
+// fonts
+@import url('https://fonts.googleapis.com/css?family=Roboto:200,200i,300,300i,350,350i,400,400i&display=swap');
+
+$font-family-sans-serif: "Roboto", sans-serif !default;
+$presentation-heading-font: "Roboto", sans-serif !default;
+
+$presentation-heading-color: $fr-blue !default;
+$presentation-heading-font-weight: lighter;
+$presentation-font-size-root: 32px;
+
+// colors
+$body-color: $jet !default;
+$link-color: $fr-blue !default;
+$selection-bg: #cfe0f2 !default;
+
+
+/*-- scss:rules --*/
+
+.reveal a {
+  line-height: 1.5em;
+}
+
+.reveal p {
+  font-weight: lighter;
+  margin-top: 1.25em;
+}
+
+// title and headings
+
+#title-slide {
+  text-align: left;
+
+  .title {
+    color: $fr-blue;
+    font-size: 1.4em;
+    font-weight: lighter;
+  }
+
+  .subtitle {
+    color: $accent2;
+    font-style: italic;
+    margin-top: 0em;
+    font-weight: lighter;
+  }
+
+  .institute,
+  .quarto-title-affiliation,
+  .quarto-title-author-email {
+    font-style: italic;
+  }
+
+  .author,
+  .quarto-title-author-name {
+    color: $body-color;
+  }
+
+  .quarto-title-authors {
+    display: flex;
+    justify-content: left;
+
+    .quarto-title-author {
+      padding-left: 0em;
+      padding-right: 0em;
+      width: 100%;
+    }
+  }
+}
+
+.reveal h2 {
+  font-weight: lighter;
+  font-size: 1.4em;
+  color: $fr-blue;
+}
+
+.reveal h3 {
+  color: $accent;
+  font-style: italic;
+  font-weight: lighter;
+  font-size: 0.95em;
+}
+
+.reveal h4 {
+  color: $accent2;
+  font-weight: normal;
+  margin-top: 1.25em;
+}
+
+// alerts etc.
+
+.alert {
+  color: $accent2;
+}
+
+.fg {
+  color: var(--col, $jet);
+}
+
+.bg {
+  background-color: var(--col, #fff);
+  padding: 0.1em;
+  border-radius: 5px;
+  display: inline-block;
+}
+
+// lists
+
+.reveal ul {
+  font-weight: lighter;
+  padding-left: 16px;
+
+  li::marker {
+    color: mix($fr-blue, white, 60%);
+  }
+}
+
+.reveal ul ul {
+  list-style: none;
+
+  li:before {
+    content: $right-arrow;
+    color: mix($fr-blue, white, 50%);
+    display: inline-block;
+    width: 1em;
+    margin-left: -1em;
+    margin-right: 0.5em;
+  }
+}
+
+.reveal ol {
+  font-weight: lighter;
+  padding-left: 16px;
+
+  li::marker {
+    color: $fr-blue;
+  }
+}
+
+// Move "hamburger" menu button to bottom left
+
+.reveal .slide-menu-button {
+  position: fixed;
+  bottom: 8px;
+  left: 8px;
+  top: auto;
+  right: auto;
+  display: flex;
+  pointer-events: none;
+}
+
+.reveal .slide-menu-button > * {
+  pointer-events: auto;
+}
+
+.reveal .slide-chalkboard-buttons {
+  position: fixed;
+  top: 12px;
+  right: 24px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.reveal .slide-chalkboard-buttons > * {
+  pointer-events: auto;
+}
+
+// Beamer-style button link environment
+
+.button {
+  display: inline-block;
+  padding: 6px 12px;
+  margin-bottom: 0;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.42857143;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: middle;
+  cursor: pointer;
+  background-color: $fr-blue;
+  border: 1px solid $fr-blue;
+  color: #fff !important;
+  text-decoration: none;
+  border-radius: 4px;
+  transition: all 0.2s ease-in-out;
+}
+
+.button:hover {
+  background-color: $accent2;
+  border-color: $accent2;
+}
+
+.button::before {
+  content: "\25B6";
+  margin-right: 5px;
+}
+
+.mermaid {
+  font-family: 'Roboto', sans-serif;
+}
+
+// tables
+
+.reveal table {
+  margin: auto;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 0.8em;
+}
+
+.reveal table th,
+.reveal table td {
+  border: none;
+  padding: .23em;
+  text-align: left;
+  font-weight: lighter;
+}
+
+.reveal table thead th,
+.reveal .slides table tr:last-child td,
+.reveal .slides table {
+  border-bottom: 2px solid #D3D3D3;
+}
+
+.reveal table thead th {
+  font-weight: bold;
+}
+
+.reveal table caption {
+  color: $accent;
+  font-variant: small-caps;
+}
+
+.references {
+  font-size: 0.5em;
+  font-weight: lighter;
+}
+
+.cite {
+  font-size: 0.5em;
+  font-weight: lighter;
+  color: $accent;
+}
+
+// column-width helpers
+
+.reveal .columns3070 > div.column:first-child { width: 30%; }
+.reveal .columns3070 div.column:not(:first-child) { width: 70%; }
+.reveal .columns7030 > div.column:first-child { width: 70%; }
+.reveal .columns7030 div.column:not(:first-child) { width: 30%; }
+.reveal .columns4060 > div.column:first-child { width: 40%; }
+.reveal .columns4060 div.column:not(:first-child) { width: 60%; }
+.reveal .columns6040 > div.column:first-child { width: 60%; }
+.reveal .columns6040 div.column:not(:first-child) { width: 40%; }
+
+@media (min-width: 1200px) {
+  .reveal .slides section > h2 { font-size: 3.2rem; }
+  .reveal .slides section > h3 { font-size: 1.8rem; }
+}

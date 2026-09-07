@@ -1,0 +1,23 @@
+title: "Applied Bayesian Econometrics"
+author:
+  - name: Prof. Dr. Roxana Halbleib
+    affiliations: University of Freiburg
+  - name: Dr. Christoph Frey
+    affiliations: University of Freiburg
+date: today
+date-format: "[Spring] YYYY"
+format:
+  revealjs:
+    theme: ../theme/freiburg_clean.scss
+    pdf-separate-fragments: false
+    slide-number: true
+    lightbox: true
+    logo: ../theme/freiburg_logo.svg
+    smaller: true
+    html-math-method:
+      method: mathjax
+    embed-resources: true
+    self-contained-math: true
+execute:
+  echo: true
+  freeze: auto

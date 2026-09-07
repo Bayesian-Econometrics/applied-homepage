@@ -1,0 +1,34 @@
+---
+title: "Literature"
+subtitle: "Reading list"
+---
+
+Further references will be given throughout the course. All course material,
+updates, and relevant information are available on **ILIAS**.
+
+## Introductory textbooks
+
+- Chan, Joshua, et al. *Bayesian Econometric Methods*. Cambridge University Press, 2019.
+- Gelman, Andrew, et al. *Bayesian Data Analysis*. Chapman and Hall/CRC, 2013.
+- Geweke, John. *Contemporary Bayesian Econometrics and Statistics*. John Wiley & Sons, 2005.
+- Koop, Gary M. *Bayesian Econometrics*. Wiley, 2003.
+- Lambert, Ben. *A Student's Guide to Bayesian Statistics*. Sage Publishing, 2018.
+
+## Core papers
+
+- Avramov, Doron, and Guofu Zhou. "Bayesian portfolio analysis." *Annual Review of Financial Economics* 2.1 (2010): 25–47.
+- Giannone, Domenico, Michele Lenza, and Giorgio E. Primiceri. "Economic predictions with big data: The illusion of sparsity." *Econometrica* 89.5 (2021): 2409–2437.
+- Hill, Jennifer L. "Bayesian nonparametric modeling for causal inference." *Journal of Computational and Graphical Statistics* 20.1 (2011): 217–240.
+- Primiceri, Giorgio E. "Time varying structural vector autoregressions and monetary policy." *The Review of Economic Studies* 72.3 (2005): 821–852.
+
+## How the reading maps to the course
+
+The textbooks cover the foundations and computation blocks. Chan et al. and Koop
+are the closest fit for the econometric framing; Gelman et al. (BDA) is the
+reference for general Bayesian modelling and diagnostics; Lambert is the gentlest
+entry point if the material is new to you.
+
+The core papers anchor the applications block: Primiceri (2005) for time-varying
+VARs and state-space models, Giannone et al. (2021) for shrinkage in
+high-dimensional forecasting, Avramov and Zhou (2010) for Bayesian portfolio
+choice, and Hill (2011) for Bayesian causal inference.

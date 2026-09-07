@@ -1,0 +1,25 @@
+---
+title: "Slides"
+subtitle: "Lecture decks"
+---
+
+Slides are released here as each lecture is finalised. They open as full-screen
+reveal.js presentations; press <kbd>S</kbd> for speaker notes, <kbd>F</kbd> for
+fullscreen, and <kbd>M</kbd> or the menu button (bottom left) to navigate.
+
+## Block I — Foundations
+
+- [01 — Introduction and the Bayesian paradigm](lecture-slides/01-introduction.qmd)
+
+## Coming up
+
+Additional decks for the computation and applications blocks will appear here
+during the term, matching the [schedule](schedule.qmd):
+
+- 02 — Bayes' theorem, priors, and the posterior
+- 03 — Monte Carlo and the Gibbs sampler
+- 04 — Metropolis-Hastings and diagnostics
+- 05 — Shrinkage and the Minnesota prior
+- 06 — BVARs and state-space models
+- 07 — Stochastic volatility and portfolio choice
+- 08 — Bayesian machine learning for causal inference

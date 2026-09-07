@@ -1,0 +1,32 @@
+---
+title: "Assessment"
+subtitle: "Exam and grading"
+---
+
+## Examination
+
+The module is assessed by a **written final exam of 90 minutes**.
+
+Permitted aids in the exam:
+
+- a non-programmable calculator,
+- a hard copy of a German–English dictionary (book form), and
+- a one-sided A4 hand-written cheat sheet.
+
+## Grading
+
+The final grade is based **100% on the written exam**.
+
+## How to prepare
+
+The exam tests both the theory and your ability to reason about Bayesian methods,
+not your ability to run code under time pressure. The most reliable preparation is
+to work through every exercise yourself during the term rather than reading the
+solutions. Use the one-page cheat sheet as a forcing function: condensing the
+material onto a single side is itself a good revision exercise.
+
+::: {.callout-note}
+The examination requirements follow the examination regulations of your
+programme. Check ILIAS and your programme's module handbook for the binding
+version.
+:::
