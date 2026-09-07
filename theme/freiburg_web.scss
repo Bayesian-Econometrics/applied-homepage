@@ -122,3 +122,15 @@ h3 .header-section-number { color: $grey; font-weight: 300; }
 
 // Chapter listing cards
 .quarto-listing .card { border-top: 3px solid $fr-blue; }
+
+// Figures from code cells: cap the display size and keep them inside the column.
+// The PNGs are rendered at high dpi, so their declared width (about 1375px)
+// exceeds the 900px body. Scaling down here needs no re-render.
+.cell-output-display img,
+.cell figure img,
+figure img {
+  display: block;
+  max-width: min(100%, 640px);
+  height: auto;
+  margin-inline: auto;
+}
