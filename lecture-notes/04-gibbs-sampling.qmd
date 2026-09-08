@@ -44,6 +44,62 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 
 ## The Bayesian linear regression model
 
+### First remove the matrix notation
+
+Suppose quarterly growth observations follow $y_i\mid\mu,\lambda\sim
+\mathcal N(\mu,1/\lambda)$ independently. We are uncertain about both typical
+growth $\mu$ and precision $\lambda$. Following UPM Class 3, use independent
+priors $\mu\sim\mathcal N(m_0,1/c_0)$ and
+$\lambda\sim\operatorname{Gamma}(a_0,b_0)$, with shape $a_0$ and rate $b_0$.
+In this subsection $c_0$ denotes prior precision for the mean; the regression
+model below uses its own inverse-Gamma parameters.
+
+The joint posterior kernel is
+
+$$
+p(\mu,\lambda\mid y)\propto
+\lambda^{a_0+n/2-1}
+\exp\left[-\frac{c_0}{2}(\mu-m_0)^2
+-\lambda\left(b_0+\frac12\sum_i(y_i-\mu)^2\right)\right].
+$$
+
+Hold $\lambda$ fixed. The terms in $\mu$ are a quadratic, just as in Lecture 2:
+
+$$
+\mu\mid\lambda,y\sim\mathcal N\left(
+\frac{c_0m_0+n\lambda\bar y}{c_0+n\lambda},\frac{1}{c_0+n\lambda}\right).
+$$
+
+Hold $\mu$ fixed instead. The power of $\lambda$ and its exponential identify
+a Gamma kernel:
+
+$$
+\lambda\mid\mu,y\sim\operatorname{Gamma}\left(
+a_0+\frac n2,b_0+\frac12\sum_i(y_i-\mu)^2\right).
+$$
+
+A mean far from the observations produces large residuals and tends to lower
+the next precision draw. That lower precision makes the next mean draw more
+uncertain. Gibbs sampling preserves this feedback by conditioning on the
+**current draw**, rather than fixing the other parameter at an estimate.
+
+### Why conditional updates preserve the joint posterior
+
+Write the target as $\pi(\mu,\lambda)$. If the current pair has this joint
+distribution, redraw $\mu'$ from $\pi(\mu'\mid\lambda)$. The resulting density is
+
+$$
+\int\pi(\mu,\lambda)\pi(\mu'\mid\lambda)d\mu
+=\pi(\lambda)\pi(\mu'\mid\lambda)=\pi(\mu',\lambda).
+$$
+
+Updating $\lambda$ also preserves the joint distribution. This establishes
+invariance, not convergence from an arbitrary starting point; convergence also
+requires that the chain can explore the target appropriately. Lecture 7 checks
+whether finite runs provide usable numerical estimates.
+
+### Generalise the unknown mean to regression coefficients
+
 We work with the standard linear model
 
 $$
@@ -54,7 +110,7 @@ $$
 
 where $y$ is $n \times 1$, $X$ is $n \times k$, $\beta$ is the $k \times 1$ coefficient
 vector, and $\sigma^2$ is the error variance. The two unknowns are $\beta$ and
-$\sigma^2$. We place a conjugate **Normal prior** on the coefficients and an
+$\sigma^2$. We place a conditionally conjugate **Normal prior** on the coefficients and an
 **inverse-Gamma prior** on the variance, treated as independent a priori:
 
 $$
@@ -63,10 +119,57 @@ $$
 \sigma^2 \sim \text{Inverse-Gamma}(c_0, d_0).
 $$
 
-The joint posterior $p(\beta, \sigma^2 \mid y)$ is not a distribution we can sample
-from directly, but each full conditional is.
+This independent prior is often called **semi-conjugate**: both full conditionals
+are standard distributions, while the joint posterior is not Normal–inverse-Gamma.
+Do not confuse it with $\beta\mid\sigma^2\sim\mathcal N(b_0,\sigma^2B_0)$,
+whose coefficient prior variance scales with the error variance.
 
 ## The full conditionals
+
+### Derive both from one joint kernel
+
+Define the inverse-Gamma convention explicitly:
+$p(\sigma^2)\propto(\sigma^2)^{-(c_0+1)}e^{-d_0/\sigma^2}$,
+$\sigma^2>0$. Combining likelihood and independent priors gives
+
+$$
+p(\beta,\sigma^2\mid y)\propto
+(\sigma^2)^{-(c_0+n/2+1)}
+\exp\left[-\frac{d_0+\tfrac12(y-X\beta)^\top(y-X\beta)}{\sigma^2}
+-\frac12(\beta-b_0)^\top B_0^{-1}(\beta-b_0)\right].
+$$
+
+For the coefficient update, hold $\sigma^2$ fixed and expand the two quadratics:
+
+$$
+\log p(\beta\mid\sigma^2,y)
+=C-\frac12\left[\beta^\top A\beta-2\beta^\top d\right],\qquad
+A=B_0^{-1}+\frac{X^\top X}{\sigma^2},\quad
+d=B_0^{-1}b_0+\frac{X^\top y}{\sigma^2}.
+$$
+
+The matrix version of completing the square is
+
+$$
+\beta^\top A\beta-2\beta^\top d
+=(\beta-A^{-1}d)^\top A(\beta-A^{-1}d)-d^\top A^{-1}d.
+$$
+
+Thus the covariance is $A^{-1}$ and the mean is $A^{-1}d$. Positive definite
+$B_0$ makes $A$ positive definite even if $X$ has dependent columns.
+
+For the variance update, hold $\beta$ fixed. Its independent prior is now a
+constant, so the remaining terms are
+
+$$
+p(\sigma^2\mid\beta,y)\propto
+(\sigma^2)^{-(c_0+n/2+1)}
+\exp\left[-\frac{d_0+\tfrac12\operatorname{RSS}(\beta)}{\sigma^2}\right].
+$$
+
+Read off the inverse-Gamma shape and scale. There is **no $k/2$ addition** here:
+that term would arise from a variance-scaled coefficient prior, which we have
+not used. A factor constant in $\beta$ need not be constant in $\sigma^2$.
 
 **Coefficients given the variance.** With $\sigma^2$ fixed the likelihood is Gaussian
 in $\beta$, and combined with the Gaussian prior the full conditional is again Gaussian:
