@@ -5,21 +5,26 @@ subtitle: "Lecture 1"
 
 ## Where we are going
 
-This course is about reasoning under uncertainty when the data are limited, noisy,
-and high-dimensional, which is the normal situation in economics and finance. The
-Bayesian approach gives us one consistent rule for doing that: treat every unknown
-as a random quantity, write down what we believe before seeing the data, and update
-that belief with the evidence. The result is a full probability distribution over
-the unknowns rather than a single number with an asterisk.
+Every empirical question in economics and finance is a question about a quantity we
+cannot see. What is the probability that this borrower defaults? By how much does a
+policy rate change move output? What is the expected return on this portfolio? We
+never observe those quantities. We observe data that were generated with them, and the
+data are limited, noisy, and usually far too few relative to the number of things we
+would like to know.
 
-In this first lecture we fix notation, state Bayes' theorem, and work through the
-simplest non-trivial model end to end in Python. Everything later in the course, the
-Gibbs sampler, Metropolis-Hastings, BVARs, stochastic volatility, is a way to compute
-the same object we introduce here: the posterior distribution.
+The Bayesian answer to that situation is a single rule. Write down what you believe
+before seeing the data, write down how probable the data are for each possible value of
+the unknown, and combine the two by the laws of probability. What comes out is not a
+number but a distribution: the full set of values the unknown could take, weighted by
+how plausible they are once the evidence is in. Everything else in this course, the
+Gibbs sampler, Metropolis-Hastings, Bayesian VARs, stochastic volatility, is machinery
+for computing that distribution when the algebra stops working.
 
-We import the small set of libraries used throughout the notes. The code uses only
-`numpy`, `scipy`, `pandas`, and `matplotlib`, and we fix a seed so results are
-reproducible.
+This first lecture builds the rule from the ground up. We start with probability for
+events, where the whole idea can be checked by counting, and only then move to
+parameters. We derive our first posterior distribution by hand, see that the Bayesian
+answer is a weighted average of what we believed and what we saw, and end with
+prediction and with the observation that Bayesian updating never has to start over.
 
 ```{python}
 import numpy as np
@@ -27,197 +32,281 @@ import pandas as pd
 from scipy import stats
 import matplotlib.pyplot as plt
 
+from scipy.special import betaln, gammaln
+
 rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
-## The Bayesian paradigm
+## Probability, one rule at a time
 
-### Start with a question about information
+Bayes' theorem is not a separate principle. It follows in two lines from rules that are
+uncontroversial, so it is worth assembling them once.
 
-Suppose 2% of firms default in a year. A warning signal occurs for 80% of
-defaulting firms, but also for 10% of firms that do not default. If a firm triggers
-the signal, is its default probability 80%? The 80% conditions on default; our
-question conditions on the signal. These are different groups of firms.
-
-Let $D$ denote default and $S$ the signal. Among 10,000 firms we expect 200
-defaults, of which 160 trigger the signal, and 9,800 non-defaults, of which 980
-trigger it. Thus
+Events $B_1, \dots, B_k$ form a **partition** of the sample space if they are mutually
+exclusive and together exhaust every possibility. Exactly one of them happens. For any
+event $A$ we can then split $A$ according to which $B_i$ occurred,
 
 $$
-\Pr(D\mid S)=\frac{160}{160+980}\approx 0.140.
+P(A) = P(A \cap B_1) + P(A \cap B_2) + \dots + P(A \cap B_k).
 $$
 
-The signal raises the default probability from 2% to about 14%. It is informative,
-but its interpretation depends on the starting default rate.
-
-### Derive Bayes' rule from the joint probability
-
-The multiplication rule gives the same joint event in two ways:
+The **conditional probability** of $A$ given $B$ is the share of $B$ in which $A$ also
+happens,
 
 $$
-\Pr(D,S)=\Pr(S\mid D)\Pr(D)=\Pr(D\mid S)\Pr(S).
+P(A \mid B) = \frac{P(A \cap B)}{P(B)},
 $$
 
-Divide by $\Pr(S)>0$. To calculate that denominator, partition firms into
-defaulting and non-defaulting firms:
+which rearranged is the multiplication law $P(A \cap B) = P(A \mid B) P(B)$. Substituting
+that into the partition identity gives the **law of total probability**,
 
 $$
-\Pr(D\mid S)=
-\frac{\Pr(S\mid D)\Pr(D)}
-{\Pr(S\mid D)\Pr(D)+\Pr(S\mid D^c)\Pr(D^c)}.
+P(A) = \sum_{j=1}^{k} P(A \mid B_j) P(B_j),
 $$
 
-The same argument works with densities and integrals for an unknown continuous
-parameter. Bayesian inference therefore uses ordinary conditional probability;
-the modelling choice is to represent uncertainty about parameters by a distribution.
-A default probability can be fixed in the world while being uncertain to us.
+and its continuous counterpart $f(x) = \int f(x \mid y) f(y)\, dy$, which will reappear
+in this course as the marginal likelihood and as the predictive distribution.
 
-::: {.callout-tip}
-## Check your intuition
-Keep the signal's detection and false-alarm rates fixed. If defaults become rarer,
-does a flagged firm's default probability rise or fall? It falls: more of the
-flagged firms come from the much larger non-defaulting group.
-:::
-
-Let $\theta$ denote the unknown parameters of a model and $y$ the observed data.
-Bayesian inference combines three ingredients:
-
-- the **prior** $p(\theta)$, what we believe about $\theta$ before seeing data;
-- the **likelihood** $p(y \mid \theta)$, how probable the data are for each value of $\theta$;
-- the **posterior** $p(\theta \mid y)$, our updated belief after seeing the data.
-
-They are tied together by Bayes' theorem:
+Now put the multiplication law together with total probability. Writing the intersection
+$A \cap B_i$ in the two possible orders, $P(A \mid B_i) P(B_i) = P(B_i \mid A) P(A)$, and
+replacing $P(A)$ by the sum above yields **Bayes' theorem** for events,
 
 $$
-p(\theta \mid y) \;=\; \frac{p(y \mid \theta)\,p(\theta)}{p(y)}
-\;\propto\; p(y \mid \theta)\,p(\theta).
+P(B_i \mid A) = \frac{P(A \mid B_i)\, P(B_i)}{\sum_{j=1}^{k} P(A \mid B_j)\, P(B_j)}.
 $$
 
-Read left to right, this is a rule for revising beliefs: start with the prior, multiply by
-the evidence, renormalise. The denominator $p(y) = \int p(y \mid \theta)\,p(\theta)\,d\theta$ does not depend on
-$\theta$; it only rescales the numerator so the posterior integrates to one. Most of
-the computational effort in Bayesian work goes into handling that integral, either
-avoiding it (conjugacy) or sampling around it (MCMC).
+Read the pieces. The $P(B_i)$ are what we believed about the competing explanations
+before the evidence. The $P(A \mid B_i)$ say how well each explanation accounts for the
+evidence actually seen. The denominator is a normalising constant that makes the answers
+add to one. Nothing more happens in Bayesian statistics than this, applied to
+increasingly awkward objects.
 
-The contrast with the frequentist view is worth stating once, plainly.
+### A puzzle that punishes intuition
 
-| | Frequentist | Bayesian |
-|---|---|---|
-| Parameter | fixed, unknown | random, uncertain |
-| Probability | long-run frequency | degree of belief |
-| Main output | point estimate + confidence interval | posterior distribution |
-| Uncertainty | sampling variability | the posterior itself |
+The classic test of whether one has understood the formula is the Monty Hall problem.
+There are three doors, a prize behind one of them, and goats behind the other two. You
+pick door 1. The host, who knows where the prize is, opens a different door that has a
+goat behind it, say door 2, and offers you the chance to switch to door 3. Should you?
 
-Neither view is "correct" in the abstract. The Bayesian framing is convenient when
-we have genuine prior information, when we want to talk directly about the
-probability that a parameter lies in a range, and when models are too large to
-estimate without regularisation.
+Most people say it cannot matter, because two doors remain. Bayes' theorem says
+otherwise. Let $A$, $B$, $C$ be the events that the prize is behind door 1, 2, 3, each
+with prior probability $1/3$. The evidence is that the host opened door 2. The
+likelihoods of that evidence differ across the three explanations, and this is the entire
+trick:
 
-## A worked example: estimating a probability
-
-The cleanest first example is inferring a success probability $\theta$ from a count of
-successes, such as the share of months a trading rule beats its benchmark. We observe $y$
-successes in $n$ independent trials, so the likelihood is binomial, and a convenient prior
-is the Beta distribution. The Beta prior is **conjugate** to the binomial likelihood,
-meaning the posterior is again a Beta distribution with updated parameters:
-
-The likelihood is binomial,
 $$
-y \mid \theta \sim \text{Binomial}(n, \theta),
+P(\text{opens } 2 \mid A) = \tfrac{1}{2}, \qquad
+P(\text{opens } 2 \mid B) = 0, \qquad
+P(\text{opens } 2 \mid C) = 1 .
 $$
-and a convenient prior is the Beta distribution,
+
+If the prize is behind your door, the host may open either remaining door and picks door
+2 half the time. If it is behind door 2 he cannot open it. If it is behind door 3 he has
+no choice but to open door 2. Total probability gives
+$P(\text{opens } 2) = \tfrac{1}{2}\cdot\tfrac{1}{3} + 0 \cdot \tfrac{1}{3} + 1 \cdot
+\tfrac{1}{3} = \tfrac{1}{2}$, and therefore
+
 $$
-\theta \sim \text{Beta}(a, b).
+P(A \mid \text{opens } 2) = \frac{\tfrac{1}{2} \cdot \tfrac{1}{3}}{\tfrac{1}{2}}
+= \frac{1}{3}, \qquad P(C \mid \text{opens } 2) = \frac{2}{3}.
 $$
-The Beta prior is **conjugate** to the binomial likelihood, meaning the posterior is
-again a Beta distribution with updated parameters:
+
+Switching doubles the chance of winning. The host's action was informative not because it
+eliminated a door but because he was constrained by knowing the answer.
+
+Since a derivation one does not believe is worth simulating, the next block plays the
+game many times and counts. Each round draws the prize location and the player's choice,
+lets the host open a goat door he is allowed to open, and records whether staying or
+switching would have won.
+
+```{python}
+n_games = 200_000
+prize = rng.integers(0, 3, n_games)          # door hiding the prize
+choice = rng.integers(0, 3, n_games)         # player's first pick
+
+# the host opens a door that is neither the player's pick nor the prize
+doors = np.array([0, 1, 2])
+allowed = (doors[None, :] != choice[:, None]) & (doors[None, :] != prize[:, None])
+opened = (allowed * rng.random((n_games, 3))).argmax(axis=1)
+
+switch_to = 3 - choice - opened              # the remaining door
+print(f"win by staying:   {(choice == prize).mean():.4f}")
+print(f"win by switching: {(switch_to == prize).mean():.4f}")
+```
+
+Staying wins about a third of the time and switching about two thirds, which is what the
+posterior said. The point of the exercise is not the puzzle but the habit: we will write
+down a posterior, then check it against a simulation that makes no use of the algebra.
+
+## From events to parameters
+
+So far the unknown was which of three doors hid a prize. In econometrics the unknown is
+a continuous parameter and the same rule applies with densities in place of
+probabilities. Let $\theta$ be the parameter and ${\bf x}$ the data. The **likelihood**
+$l(\theta \mid {\bf x}) = f({\bf x} \mid \theta)$ says how probable the observed data are
+for each candidate value of $\theta$; the **prior** $f(\theta)$ says what we believed
+about $\theta$ beforehand. Bayes' theorem gives the **posterior**
+
+$$
+f(\theta \mid {\bf x}) = \frac{f({\bf x} \mid \theta) f(\theta)}{f({\bf x})}
+\;\propto\; l(\theta \mid {\bf x})\, f(\theta),
+$$
+
+where the denominator $f({\bf x}) = \int f({\bf x} \mid \theta) f(\theta) d\theta$ does
+not involve $\theta$ and only rescales the result. The proportionality is how one works
+in practice, and it is worth committing to memory in words: the posterior is the
+likelihood times the prior, renormalised.
+
+This is a genuinely different object from the classical one. In classical inference
+$\theta$ is a fixed unknown constant, probability refers to the long-run frequency of
+data we did not observe, and uncertainty is expressed through the sampling variability of
+an estimator. In Bayesian inference $\theta$ is treated as a random variable, probability
+expresses a state of belief, and uncertainty is the posterior itself. The practical
+difference shows up in what we are allowed to say: a Bayesian may state the probability
+that a parameter lies in an interval, a frequentist may not.
+
+### The same data, two answers
+
+Take a concrete case small enough to follow by hand. A coin has $P(\text{head}) =
+\theta$. We toss it twelve times and see nine heads. The classical analysis reports the
+maximum likelihood estimate $\hat\theta = 9/12 = 0.75$, an approximate confidence
+interval, and a $p$-value for $H_0: \theta = 0.5$ against $\theta > 0.5$,
+
+$$
+p = \sum_{k=9}^{12} \binom{12}{k} 0.5^{12} .
+$$
+
+There is a subtlety here that motivates much of the Bayesian position, and it is easy to
+miss. Suppose the experiment had instead been "toss until the third tail appears", and
+the third tail appeared on the twelfth toss. The data are identical, nine heads and three
+tails in twelve tosses, but the sample space is not: the number of tosses is now random
+and the count of tails is fixed. The $p$-value changes with it, because it sums
+probabilities over data we never saw. The block below computes both.
+
+```{python}
+n, y = 12, 9                       # tosses and heads
+
+k = np.arange(y, n + 1)            # binomial design: 9 or more heads in 12 tosses
+p_binom = stats.binom.pmf(k, n, 0.5).sum()
+
+# negative binomial design: the 3rd tail occurs on toss 12, i.e. 9 or more heads first
+j = np.arange(y, 60)
+p_negbin = stats.nbinom.pmf(j, 3, 0.5).sum()
+
+print(f"p-value, fixed number of tosses:  {p_binom:.4f}")
+print(f"p-value, fixed number of tails:   {p_negbin:.4f}")
+```
+
+At the conventional five percent threshold the first design does not reject and the
+second does, on exactly the same observed sequence. The likelihood function is identical
+in both cases, so a procedure that depends only on the likelihood and the prior, as the
+Bayesian one does, gives the same answer either way. Whether one regards that as a
+decisive argument is a matter of taste, but it is a real difference and not a
+technicality.
+
+## Deriving the first posterior
+
+Now we do the Bayesian calculation for the coin, in full, because this derivation is the
+template for every conjugate model in the course.
+
+The likelihood for $y$ heads in $n$ tosses is binomial,
+
+$$
+l(\theta \mid y) = \binom{n}{y} \theta^{y} (1 - \theta)^{n-y}.
+$$
+
+For the prior we want a density on the unit interval that can be centred at one half and
+can be made more or less concentrated. The **beta distribution** does this: $\theta \sim
+\text{Beta}(a, b)$ has density
+
+$$
+f(\theta) = \frac{1}{B(a,b)} \theta^{a-1} (1-\theta)^{b-1}, \qquad 0 < \theta < 1,
+$$
+
+with mean $a/(a+b)$, so $a = b$ centres it at one half and larger $a + b$ makes it
+tighter. Multiply the two and drop every factor that does not contain $\theta$:
+
+$$
+f(\theta \mid y) \;\propto\; \underbrace{\theta^{y}(1-\theta)^{n-y}}_{\text{likelihood}}
+\times \underbrace{\theta^{a-1}(1-\theta)^{b-1}}_{\text{prior}}
+= \theta^{(a + y) - 1} (1-\theta)^{(b + n - y) - 1}.
+$$
+
+The last expression is the kernel of a beta density with parameters $a + y$ and
+$b + n - y$. Since a density is determined by its kernel, no integration is needed to
+identify the normalising constant: we recognise the shape and read off
+
 $$
 \theta \mid y \sim \text{Beta}(a + y,\; b + n - y).
 $$
 
-This is the rare case where we can write the posterior in closed form. Let us set up
-the numbers: a weakly informative $\text{Beta}(2, 2)$ prior, and data of 8 successes
-in 12 trials.
+This is what **conjugacy** means. The prior and the posterior belong to the same family,
+so updating is arithmetic on the parameters: add the successes to $a$ and the failures to
+$b$. With a $\text{Beta}(5,5)$ prior and our nine heads in twelve tosses the posterior is
+$\text{Beta}(14, 8)$.
+
+The interpretation of $a$ and $b$ follows from the same arithmetic. They enter exactly as
+$y$ and $n - y$ do, so the prior acts like a previous experiment with $a$ imagined
+successes and $b$ imagined failures. A $\text{Beta}(5,5)$ prior is worth ten
+pseudo-observations; against twelve real ones it will carry real weight.
+
+### The posterior mean is a weighted average
+
+The mechanism becomes clearest in the posterior mean. Writing $n_0 = a + b$ for the prior
+sample size and $\theta_0 = a / n_0$ for the prior mean,
+
+$$
+E[\theta \mid y] = \frac{a + y}{a + b + n}
+= \frac{n_0}{n_0 + n} \cdot \frac{a}{n_0} + \frac{n}{n_0 + n} \cdot \frac{y}{n}
+= w\, \theta_0 + (1 - w)\, \hat\theta,
+\qquad w = \frac{n_0}{n_0 + n}.
+$$
+
+The Bayesian estimate is a weighted average of the prior mean and the maximum likelihood
+estimate, with weights given by the relative amount of information in each. For our
+numbers $w = 10/22$, so the posterior mean is $\tfrac{10}{22} \cdot 0.5 + \tfrac{12}{22}
+\cdot 0.75 = 14/22 \approx 0.636$, sitting between the prior's $0.5$ and the data's
+$0.75$ and closer to the data because twelve beats ten.
+
+Two limits are worth naming because they recur throughout the course. As $n \to \infty$
+the weight $w \to 0$ and the posterior mean converges to the classical estimate: with
+enough data the prior stops mattering. As $n_0 \to 0$ the prior becomes flat and the
+posterior mean is the classical estimate immediately. The Bayesian machinery earns its
+keep in between, which in economics and finance is nearly always where we are.
+
+The next block draws the three ingredients on one set of axes and prints the summaries
+the derivation predicts, so the algebra and the picture can be checked against each
+other.
 
 ```{python}
-a, b = 2, 2          # Beta(a, b) prior
-y, n = 8, 12         # observed successes and trials
-
-prior = stats.beta(a, b)
-posterior = stats.beta(a + y, b + n - y)
+a, b = 5, 5                                    # Beta(a, b) prior
+post = stats.beta(a + y, b + n - y)            # Beta(14, 8)
+grid = np.linspace(0, 1, 400)
 
 mle = y / n
-print(f"MLE (data only):      {mle:.3f}")
-print(f"Posterior mean:       {posterior.mean():.3f}")
-print(f"Prior mean:           {prior.mean():.3f}")
-```
+w = (a + b) / (a + b + n)
 
-The posterior mean sits between the prior mean (0.5) and the data-only estimate
-(0.667). That is the whole idea: the posterior is a compromise between what we
-believed and what we saw, weighted by how strong each is.
-
-Plotting the three densities makes the update concrete.
-
-```{python}
-theta = np.linspace(0, 1, 400)
 fig, ax = plt.subplots()
-ax.plot(theta, prior.pdf(theta), "--", label="prior  Beta(2,2)")
-ax.plot(theta, posterior.pdf(theta), label=f"posterior  Beta({a+y},{b+n-y})")
+ax.plot(grid, stats.beta(a, b).pdf(grid), ":", label="prior  Beta(5,5)")
+ax.plot(grid, stats.binom.pmf(y, n, grid) / np.trapezoid(stats.binom.pmf(y, n, grid), grid),
+        "--", label="scaled likelihood")
+ax.plot(grid, post.pdf(grid), label="posterior  Beta(14,8)")
 ax.axvline(mle, color="grey", lw=1, label=f"MLE = {mle:.2f}")
-ax.set_xlabel(r"$\theta$")
-ax.set_ylabel("density")
-ax.legend()
-ax.set_title("Prior, data, and posterior for a success probability")
-plt.tight_layout()
-plt.show()
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.legend(fontsize=9)
+ax.set_title("The posterior sits between the prior and the likelihood")
+plt.tight_layout(); plt.show()
+
+print(f"prior mean {a/(a+b):.3f}, MLE {mle:.3f}, weight on prior w = {w:.3f}")
+print(f"posterior mean {post.mean():.3f}  (= w*0.5 + (1-w)*0.75 = {w*0.5 + (1-w)*mle:.3f})")
+print(f"P(theta > 0.5 | data) = {1 - post.cdf(0.5):.3f}")
 ```
 
-The prior is a gentle hump centred on one half; the posterior is visibly narrower and
-shifted towards the data. The likelihood has done the work, but it was not allowed to
-dictate the answer alone.
-
-### Credible intervals
-
-Because we have the full posterior, we can answer questions the frequentist interval
-cannot answer directly. A 95% **credible interval** is any range containing 95% of the
-posterior mass; the equal-tailed version uses the 2.5% and 97.5% quantiles.
-
-```{python}
-lo, hi = posterior.ppf([0.025, 0.975])
-print(f"95% credible interval: [{lo:.3f}, {hi:.3f}]")
-print(f"P(theta > 0.5 | data): {1 - posterior.cdf(0.5):.3f}")
-```
-
-The second line is a sentence the Bayesian framework lets us say literally: given the data
-and prior, the probability that the success rate exceeds one half is about 0.85. There is
-no equivalent statement for a confidence interval.
-
-### The posterior on a discrete grid
-
-Closed forms are pleasant but they are not what makes the approach general. The most
-elementary general recipe is to lay a **grid** over the parameter space, evaluate prior
-times likelihood at every point, and normalise by the sum of those values instead of by
-an integral. The next chunk does that on 1001 points in $[0, 1]$ and compares the result
-with the analytic Beta posterior.
-
-```{python}
-theta_grid = np.linspace(0, 1, 1001)
-unnorm = stats.beta(a, b).pdf(theta_grid) * stats.binom.pmf(y, n, theta_grid)
-post_grid = unnorm / unnorm.sum()
-
-grid_mean = np.sum(theta_grid * post_grid)
-grid_sd = np.sqrt(np.sum(post_grid * (theta_grid - grid_mean) ** 2))
-print(f"Grid     mean / sd:  {grid_mean:.4f} / {grid_sd:.4f}")
-print(f"Analytic mean / sd:  {posterior.mean():.4f} / {posterior.std():.4f}")
-```
-
-The grid reproduces the analytic posterior to four decimals, confirming that the discrete
-sum does the same job as the normalising integral $p(y)$. The catch is dimension: with
-1001 points per parameter, five unknowns already need $1001^5 \approx 10^{15}$ evaluations,
-and a realistic VAR has hundreds. Grids are a useful check in one or two dimensions and
-hopeless beyond, which is why later lectures turn to Monte Carlo.
+The solid posterior curve lies between the dotted prior and the dashed likelihood, the
+printed weighted average reproduces the posterior mean exactly, and the probability that
+the coin favours heads is about $0.905$. That last number is a sentence the Bayesian
+framework licenses literally, and no confidence interval can deliver it.
 
 ## A closer look at the prior
 
@@ -237,43 +326,106 @@ A small taxonomy helps. The labels overlap, but they capture different intention
 | Noninformative / Jeffreys | let the data dominate, invariance | $p(\theta) \propto \sqrt{I(\theta)}$ |
 
 Conjugacy is a convenience, not a virtue: it makes the algebra close but only matches real
-beliefs if its shape happens to. The $\text{Beta}(2, 2)$ used above is both conjugate and
-weakly informative, which is why it was a defensible default. A weakly informative prior
-is usually the better starting point in applied work, because it stabilises estimates
-without pretending to knowledge we do not have.
+beliefs if its shape happens to. The $\text{Beta}(5, 5)$ used above is both conjugate and
+weakly informative, which is why it was a defensible default for a coin. A weakly
+informative prior is usually the better starting point in applied work, because it
+stabilises estimates without pretending to knowledge we do not have.
+
+### What conjugacy buys, and how to elicit a prior
+
+The arithmetic of the beta-binomial update has a consequence worth stating separately,
+because it is what makes conjugate priors usable in front of a non-statistician. Since
+$a$ and $b$ enter the posterior exactly as the observed successes and failures do, the
+prior is *equivalent to a previous experiment* with $a$ heads and $b$ tails. That gives a
+scale for prior strength that anyone can reason about, and it turns prior elicitation into
+questions about observable things rather than about density parameters.
+
+One cannot ask an expert for $a$ and $b$. One can ask two questions whose answers pin them
+down. In a hundred tosses of this coin, how many heads would you expect? That fixes the
+prior mean $a/(a+b)$. How many tosses is your experience with coins worth? That fixes the
+prior sample size $a + b$. An expert who answers fifty and five hundred has specified a
+$\text{Beta}(250, 250)$ prior without ever hearing the word beta.
+
+The elicitation is not finished at that point. The honest final step is to feed the
+implications back and check that the expert believes them, because a prior that sounds
+reasonable in the parameter space can be absurd in the data space.
+
+```{python}
+a_e, b_e = 250, 250                # elicited prior
+m_e = 100                          # hypothetical future tosses
+k_e = np.arange(m_e + 1)
+
+log_c = gammaln(m_e + 1) - gammaln(k_e + 1) - gammaln(m_e - k_e + 1)
+pp = np.exp(log_c + betaln(a_e + k_e, b_e + m_e - k_e) - betaln(a_e, b_e))
+cdf = pp.cumsum()
+lo_e, hi_e = k_e[np.searchsorted(cdf, 0.05)], k_e[np.searchsorted(cdf, 0.95)]
+print(f"Beta(250,250) implies a 90% range of {lo_e} to {hi_e} heads in 100 tosses")
+```
+
+An expert who accepts that range has a coherent prior; one who says "no, anything between
+thirty and seventy is quite possible" has just told us the prior sample size is far too
+large, and we revise it. Note also that if a single beta cannot represent the belief, a
+**mixture** of betas can, and mixtures of conjugate priors are still conjugate, so the
+convenience survives.
 
 ### Improper priors and the Jeffreys prior
 
-A noninformative prior such as $p(\theta) \propto 1$ on the real line, or $p(\sigma) \propto
-1/\sigma$ on the positive line, does not integrate to one. These are **improper priors**.
-They are often harmless, because the likelihood makes the posterior proper and they read
-as the limit of a very diffuse proper prior, but for some models the posterior is improper
-too and then nothing downstream means anything: check propriety rather than assume it.
+A noninformative prior such as $p(\theta) \propto 1$ on the real line, or
+$p(\sigma) \propto 1/\sigma$ on the positive line, does not integrate to one. These are
+**improper priors**. They are often harmless, because the likelihood makes the posterior
+proper and they read as the limit of a very diffuse proper prior, but for some models the
+posterior is improper too and then nothing downstream means anything: check propriety
+rather than assume it.
+
+In conjugate problems the objective prior often has a natural form. For the binomial,
+**Haldane's prior** is
+
+$$
+f(\theta) \propto \frac{1}{\theta(1-\theta)},
+$$
+
+which is the $a, b \to 0$ limit of the beta family. Multiplying by the binomial likelihood
+gives $f(\theta \mid {\bf x}) \propto \theta^{y-1}(1-\theta)^{n-y-1}$, a proper
+$\text{Beta}(y, n-y)$ distribution, so the impropriety of the prior does no harm as long
+as $0 < y < n$. It does harm at the boundary. If we observe all heads or all tails, one of
+the beta parameters is zero and the posterior does not integrate: the improper prior has
+produced an improper posterior, and every number computed downstream is meaningless. The
+check is one line.
+
+```{python}
+for y_obs in (9, 12):              # 9 heads (interior) and 12 heads (boundary)
+    a_h, b_h = y_obs, n - y_obs
+    ok = (a_h > 0) and (b_h > 0)
+    print(f"y = {y_obs:2d}: Haldane posterior Beta({a_h}, {b_h})  "
+          f"{'proper' if ok else 'IMPROPER, integrates to infinity'}")
+```
+
+This is the practical reason to be suspicious of default priors rather than merely aware
+of them. With a simulation-based method the sampler would have returned numbers in the
+boundary case too, and nothing in the output would have announced that the target was not
+a distribution.
 
 The **Jeffreys prior** is the standard recipe for a default noninformative prior with a
-defensible justification, defined as $p(\theta) \propto \sqrt{I(\theta)}$ with $I(\theta)$ the
-Fisher information. Its appeal is invariance: it transforms correctly under
+defensible justification, defined as $p(\theta) \propto \sqrt{I(\theta)}$ with
+$I(\theta)$ the Fisher information. Its appeal is invariance: it transforms correctly under
 reparameterisation, so the analysis does not depend on whether we parameterise by a
-probability or its log-odds. For a binomial probability it is $\text{Beta}(1/2, 1/2)$,
-plotted below against the flat $\text{Beta}(1, 1)$.
+probability or its log-odds. For a binomial probability it works out to
+$\text{Beta}(1/2, 1/2)$, plotted below against the flat $\text{Beta}(1, 1)$.
 
 ```{python}
 theta_open = np.linspace(0.001, 0.999, 400)
+
 fig, ax = plt.subplots()
 ax.plot(theta_open, stats.beta(1, 1).pdf(theta_open), "--", label="flat  Beta(1,1)")
 ax.plot(theta_open, stats.beta(0.5, 0.5).pdf(theta_open), label="Jeffreys  Beta(0.5,0.5)")
-ax.set_xlabel(r"$\theta$")
-ax.set_ylabel("density")
-ax.set_ylim(0, 4)
-ax.legend()
-ax.set_title("Two noninformative priors for a probability")
-plt.tight_layout()
-plt.show()
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.set_ylim(0, 4)
+ax.legend(); ax.set_title("Two noninformative priors for a probability")
+plt.tight_layout(); plt.show()
 ```
 
 The flat prior is uniform; the Jeffreys prior piles mass near zero and one. Neither is
-truly free of assumptions, which is exactly the point: "noninformative" is a relative
-term, and the flatness of a prior is not preserved under reparameterisation.
+truly free of assumptions, which is exactly the point: "noninformative" is a relative term,
+and the flatness of a prior is not preserved under reparameterisation.
 
 ### The prior predictive distribution
 
@@ -282,130 +434,339 @@ more useful check is to ask what data the prior expects, by integrating the like
 against the prior,
 
 $$
-p(y) \;=\; \int p(y \mid \theta)\, p(\theta)\, d\theta.
+p(y) \;=\; \int p(y \mid \theta)\, p(\theta)\, d\theta .
 $$
 
-This is the **prior predictive distribution**, the same constant $p(y)$ as above, now read
-as a forecast of the data implied by the prior alone. If it puts most of its mass on data
-we would consider impossible, the prior is telling us something is wrong before we have
-fitted anything. Sampling from it is easy: draw $\theta$ from the prior, then $y$ from the
-likelihood, as below under a weak $\text{Beta}(2, 2)$ and a biased $\text{Beta}(8, 2)$ prior.
+This is the **prior predictive distribution**, the same normalising constant as in Bayes'
+theorem, now read as a forecast of the data implied by the prior alone. If it puts most of
+its mass on data we would consider impossible, the prior is telling us something is wrong
+before we have fitted anything. Sampling from it is immediate: draw $\theta$ from the
+prior, then $y$ from the likelihood.
 
 ```{python}
-n_trials, n_sim = 20, 20000
+n_trials, n_sim = 20, 20_000
 
-def prior_predictive_counts(a, b):
-    theta_draws = stats.beta(a, b).rvs(n_sim, random_state=rng)
+def prior_predictive_counts(a_p, b_p):
+    theta_draws = stats.beta(a_p, b_p).rvs(n_sim, random_state=rng)
     return rng.binomial(n_trials, theta_draws)
 
 bins = np.arange(0, n_trials + 2) - 0.5
 fig, ax = plt.subplots()
-ax.hist(prior_predictive_counts(2, 2), bins=bins, density=True, alpha=0.6,
-        label="prior Beta(2,2)")
+ax.hist(prior_predictive_counts(5, 5), bins=bins, density=True, alpha=0.6,
+        label="prior Beta(5,5)")
 ax.hist(prior_predictive_counts(8, 2), bins=bins, density=True, alpha=0.6,
         label="prior Beta(8,2)")
-ax.set_xlabel("successes out of 20")
-ax.set_ylabel("prior predictive probability")
-ax.legend()
-ax.set_title("Prior predictive distributions imply different expected data")
-plt.tight_layout()
-plt.show()
+ax.set_xlabel("heads out of 20"); ax.set_ylabel("prior predictive probability")
+ax.legend(); ax.set_title("Different priors expect different data")
+plt.tight_layout(); plt.show()
 ```
 
-The weak prior spreads the predicted count across the whole range, while the biased prior
-concentrates it in the upper half. If a domain expert told us "we almost never see more
-than 12 successes," the second prior would already be suspect. This is the cheapest and
-most underused form of prior checking.
+The weakly informative prior spreads the predicted count around ten, while the biased
+prior concentrates it in the upper half. If a domain expert told us that more than twelve
+heads is practically unheard of, the second prior would already be suspect. This is the
+cheapest and most underused form of prior checking.
 
-## Beliefs update sequentially
+### A second conjugate model: rare events
 
-Bayesian updating is sequential and order-independent: yesterday's posterior is
-today's prior. If the data arrive one batch at a time, we can fold them in one by one
-and reach the same posterior as if we had used all of them at once. The next block
-simulates a stream of Bernoulli outcomes and shows the posterior tightening as
-evidence accumulates.
+The coin is a convenient first example but a misleading one, because economics and finance
+care at least as much about counts of rare events: defaults in a loan book, operational
+loss events, jumps in a price series. The natural model is a Poisson process, and the
+conjugate machinery works the same way, which is the point of doing it twice.
+
+Suppose $n$ events are observed over an exposure of length $x$, so the likelihood for the
+intensity $\theta$ is proportional to
+
+$$
+l(\theta \mid {\bf x}) \propto \theta^{n} e^{-x\theta}.
+$$
+
+A **gamma prior** $\theta \sim \text{Gamma}(a, b)$ has density proportional to
+$\theta^{a-1} e^{-b\theta}$. Multiplying and collecting exponents,
+
+$$
+f(\theta \mid {\bf x}) \propto \theta^{n} e^{-x\theta} \cdot
+\theta^{a-1} e^{-b\theta} = \theta^{(a+n)-1} e^{-(b+x)\theta},
+$$
+
+which is the kernel of a $\text{Gamma}(a + n, b + x)$ density. Again we recognised the
+shape instead of integrating. The update rule reads as plainly as the beta one: add the
+event count to the shape and the exposure to the rate, so $a$ is a prior number of events
+and $b$ a prior exposure. Letting $a, b \to 0$ gives the improper objective prior
+$f(\theta) \propto 1/\theta$.
+
+```{python}
+a_g, b_g = 2.0, 500.0              # prior: 2 events in 500 firm-years
+n_ev, exposure = 7, 800            # observed: 7 defaults in 800 firm-years
+
+post_g = stats.gamma(a_g + n_ev, scale=1 / (b_g + exposure))
+theta_g = np.linspace(0, 0.03, 400)
+
+fig, ax = plt.subplots()
+ax.plot(theta_g, stats.gamma(a_g, scale=1 / b_g).pdf(theta_g), ":", label="prior")
+ax.plot(theta_g, post_g.pdf(theta_g), label="posterior")
+ax.axvline(n_ev / exposure, color="grey", lw=1, label="MLE = 7/800")
+ax.set_xlabel(r"default intensity $\theta$"); ax.set_ylabel("density")
+ax.legend(); ax.set_title("Poisson-gamma updating for a rare event")
+plt.tight_layout(); plt.show()
+
+print(f"prior mean {a_g/b_g:.5f}   MLE {n_ev/exposure:.5f}   "
+      f"posterior mean {post_g.mean():.5f}")
+print(f"95% credible interval [{post_g.ppf(0.025):.5f}, {post_g.ppf(0.975):.5f}]")
+```
+
+The posterior mean again lands between the prior mean and the maximum likelihood estimate,
+and it is again a weighted average, now with weights $b/(b+x)$ and $x/(b+x)$ set by prior
+exposure against observed exposure. The same three lines of algebra will reappear for the
+normal model in Lecture 2 and for every conditional distribution inside the samplers of
+Lectures 4 and 5.
+
+### When conjugacy is unavailable
+
+Conjugate priors exist for the exponential family, which covers the normal, binomial,
+Poisson and multinomial models, and this is where the tidy examples come from.
+
+| Likelihood | Conjugate prior | Posterior |
+|---|---|---|
+| Binomial, $\theta$ | Beta$(a, b)$ | Beta$(a + y,\; b + n - y)$ |
+| Poisson, intensity $\theta$ | Gamma$(a, b)$ | Gamma$(a + n,\; b + x)$ |
+| Normal, mean $\mu$, known variance | Normal | Normal |
+| Normal, precision $\tau$, known mean | Gamma | Gamma |
+| Normal regression, $(\beta, \sigma^2)$ | Normal-inverse-gamma | Normal-inverse-gamma |
+
+Outside the exponential family the tidiness disappears. Take a sample from a Cauchy
+distribution, $f(x \mid \theta) = \left[\pi(1 + (x-\theta)^2)\right]^{-1}$, whose
+likelihood is
+
+$$
+l(\theta \mid {\bf x}) \propto \prod_{i=1}^{n} \frac{1}{1 + (x_i - \theta)^2}.
+$$
+
+No standard prior multiplies into this to give a recognisable family, and the product has
+several local maxima for small samples. There is no conjugate prior to be found, and the
+problem is not the multiplication but the normalisation: to report anything we need
+
+$$
+f({\bf x}) = \int f({\bf x} \mid \theta) f(\theta) \, d\theta,
+$$
+
+an integral with no closed form. Everything from Lecture 3 onwards is a strategy for
+handling that integral, either by approximating it or by sampling in a way that never
+requires it.
+
+## The posterior without algebra
+
+Conjugacy gave us the answer in closed form, which is a luxury. It is worth seeing once
+that the closed form is a convenience rather than a necessity, because from Lecture 3
+onwards we will not have it.
+
+Bayes' theorem says the posterior is proportional to likelihood times prior. If we simply
+evaluate that product on a fine grid of $\theta$ values and divide by its sum, we have the
+posterior, with the integral in the denominator replaced by a sum. This is the exercise
+for this week's session, and it is the crudest member of the family of methods that
+occupies the middle third of the course.
+
+```{python}
+theta_grid = np.linspace(0, 1, 501)
+unnorm = stats.binom.pmf(y, n, theta_grid) * stats.beta(a, b).pdf(theta_grid)
+dens = unnorm / np.trapezoid(unnorm, theta_grid)      # normalise numerically
+
+grid_mean = np.trapezoid(theta_grid * dens, theta_grid)
+grid_prob = np.trapezoid(dens[theta_grid >= 0.5], theta_grid[theta_grid >= 0.5])
+print(f"grid posterior mean        {grid_mean:.4f}   exact {post.mean():.4f}")
+print(f"grid P(theta > 0.5 | data) {grid_prob:.4f}   exact {1 - post.cdf(0.5):.4f}")
+print(f"largest absolute error in the density: {np.abs(dens - post.pdf(theta_grid)).max():.2e}")
+```
+
+The grid reproduces the analytic posterior to four decimal places. That is reassuring but
+also misleading: the method works here because $\theta$ is one-dimensional and bounded. A
+grid with 500 points per dimension needs $500^{10}$ evaluations for ten parameters, which
+is why the course moves from grids to sampling rather than to finer grids.
+
+## Summarising and predicting
+
+A posterior is the complete answer, but readers want a number and a range. For a point
+estimate we can report the posterior mean, median or mode, and Lecture 2 shows that each
+of these is optimal under a particular loss function. For a range we report a **credible
+interval**, an interval $[\underline\theta, \overline\theta]$ with
+$P(\underline\theta < \theta < \overline\theta \mid {\bf x}) = 0.95$; the shortest such
+interval is the **highest posterior density** interval.
+
+The interpretation is the part to be careful about. The Bayesian interval is a statement
+about $\theta$ given the data we have: there is a ninety-five percent probability that
+$\theta$ lies inside it. The classical interval is a statement about the procedure: in
+repeated samples, ninety-five percent of the intervals it constructs would contain the
+fixed true value. The second statement says nothing about the particular interval in
+front of you, which is why it is so often misquoted as the first.
+
+The interval itself is one line once the posterior is a named distribution, and the
+probability statement that goes with it is the one a confidence interval cannot make.
+
+```{python}
+lo, hi = post.ppf([0.025, 0.975])
+print(f"95% equal-tailed credible interval: [{lo:.3f}, {hi:.3f}]")
+print(f"posterior mean {post.mean():.3f}, median {post.median():.3f}, "
+      f"mode {(a + y - 1) / (a + b + n - 2):.3f}")
+```
+
+Mean, median and mode differ because the posterior is mildly skewed, by enough to matter
+for a borderline decision. Which one to report is a question about the cost of being
+wrong, and Lecture 2 answers it with a loss function rather than a convention.
+
+Prediction follows the same integration logic as the marginal likelihood. For a future
+observation $Y$ that is conditionally independent of the past given $\theta$,
+
+$$
+f(y \mid {\bf x}) = \int f(y \mid \theta)\, f(\theta \mid {\bf x})\, d\theta,
+$$
+
+so we average the sampling distribution over the posterior rather than plugging in an
+estimate. For the coin with $m$ further tosses this integral has a closed form. Writing
+$a^* = a + y$ and $b^* = b + n - y$ for the posterior parameters,
+
+$$
+P(Y = k \mid {\bf x}) = \int_0^1 \binom{m}{k} \theta^{k}(1-\theta)^{m-k}
+\frac{\theta^{a^*-1}(1-\theta)^{b^*-1}}{B(a^*, b^*)} d\theta
+= \binom{m}{k} \frac{B(a^* + k,\; b^* + m - k)}{B(a^*, b^*)},
+$$
+
+where the middle step is nothing but the beta integral again: the integrand is a beta
+kernel with parameters $a^* + k$ and $b^* + m - k$, so it integrates to
+$B(a^* + k, b^* + m - k)$. This is the **beta-binomial** distribution. The classical
+alternative, $\text{Binomial}(m, \hat\theta)$, conditions on one value of $\theta$ as if
+it were known.
+
+```{python}
+m = 10                                   # further tosses
+k = np.arange(m + 1)
+a_s, b_s = a + y, b + n - y              # posterior parameters
+
+log_choose = gammaln(m + 1) - gammaln(k + 1) - gammaln(m - k + 1)
+pred = np.exp(log_choose + betaln(a_s + k, b_s + m - k) - betaln(a_s, b_s))
+plug_in = stats.binom(m, post.mean()).pmf(k)
+
+fig, ax = plt.subplots()
+ax.bar(k - 0.18, pred, width=0.36, label="Bayesian predictive")
+ax.bar(k + 0.18, plug_in, width=0.36, label="plug-in Binomial(10, 0.636)")
+ax.set_xlabel("heads in 10 further tosses"); ax.set_ylabel("probability")
+ax.legend(); ax.set_title("Parameter uncertainty widens the forecast")
+plt.tight_layout(); plt.show()
+
+print(f"predictive sd {np.sqrt((pred*(k-(pred*k).sum())**2).sum()):.3f}  "
+      f"plug-in sd {np.sqrt((plug_in*(k-(plug_in*k).sum())**2).sum()):.3f}")
+```
+
+Both distributions are centred in the same place, but the predictive one is visibly wider.
+The extra spread is our remaining uncertainty about $\theta$, carried through into the
+forecast instead of being discarded. Ignoring it is the standard route to prediction
+intervals that are too narrow, and it is a mistake with a price attached in risk
+management.
+
+## Updating never starts over
+
+One last property falls straight out of the algebra and matters more in practice than it
+first appears. Suppose we now observe six heads in those ten further tosses. Treating the
+current posterior $\text{Beta}(14, 8)$ as the prior and multiplying by the new binomial
+likelihood,
+
+$$
+f(\theta \mid {\bf x}, {\bf y}) \;\propto\; \theta^{6}(1-\theta)^{4} \times
+\theta^{14-1}(1-\theta)^{8-1} = \theta^{20-1}(1-\theta)^{12-1},
+$$
+
+so $\theta \mid {\bf x}, {\bf y} \sim \text{Beta}(20, 12)$. Pooling all twenty-two tosses
+against the original $\text{Beta}(5,5)$ prior gives $\text{Beta}(5 + 15, 5 + 7) =
+\text{Beta}(20, 12)$, the same thing. Yesterday's posterior is today's prior, and the
+order in which the data arrive is irrelevant. In a large-data setting this is what makes
+sequential and parallel processing coherent rather than an approximation.
+
+The same property is easier to believe as a picture. The block below streams two hundred
+Bernoulli outcomes from a coin with $\theta = 0.7$ and redraws the posterior after the
+first $k$ of them.
 
 ```{python}
 true_theta = 0.7
 draws = rng.binomial(1, true_theta, size=200)
 
 fig, ax = plt.subplots()
-for k in [0, 5, 20, 50, 200]:
-    s = draws[:k].sum()
-    ax.plot(theta, stats.beta(a + s, b + k - s).pdf(theta), label=f"n = {k}")
+for k_obs in [0, 5, 20, 50, 200]:
+    s = draws[:k_obs].sum()
+    ax.plot(grid, stats.beta(a + s, b + k_obs - s).pdf(grid), label=f"n = {k_obs}")
 ax.axvline(true_theta, color="black", lw=1, ls=":", label="true value")
-ax.set_xlabel(r"$\theta$")
-ax.set_ylabel("posterior density")
-ax.legend()
-ax.set_title("The posterior concentrates as data accumulate")
-plt.tight_layout()
-plt.show()
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("posterior density")
+ax.legend(fontsize=9); ax.set_title("The posterior concentrates as data accumulate")
+plt.tight_layout(); plt.show()
 ```
 
-With no data the posterior equals the prior. As $n$ grows it concentrates around the
-true value and the prior's influence fades. This is the Bernstein-von Mises idea in
-miniature: with enough data the prior stops mattering, and the Bayesian and
-frequentist answers converge. The Bayesian machinery earns its keep precisely when
+With no data the posterior is the prior. As $n$ grows it tightens around the true value and
+the prior's influence fades, which is the Bernstein-von Mises idea in miniature: with
+enough data the Bayesian and classical answers converge. The machinery earns its keep when
 data are scarce or the model is large, which is where the rest of the course lives.
 
 ## Why we will need more than this
 
-Conjugate models are the exception. As soon as the prior and likelihood do not pair
-neatly, the posterior has no closed form and the normalising integral $p(y)$ is
-intractable. The response is not to give up on the Bayesian answer but to approximate
-it by drawing samples from the posterior. Given samples $\theta^{(1)}, \dots,
-\theta^{(S)}$ we can estimate any posterior quantity by averaging, for example the
-posterior mean as $\frac{1}{S}\sum_s \theta^{(s)}$. Building algorithms that produce
-those samples, Monte Carlo, Gibbs sampling, Metropolis-Hastings, is the subject of the
-next several lectures.
-
-To preview the logic, here is a crude Monte Carlo estimate of the posterior mean from
-the worked example, using direct draws from the known Beta posterior. Later we will
-generate such draws when the posterior is *not* known in closed form.
+Conjugate models are the exception, not the rule. As soon as the prior and the likelihood
+do not pair neatly, the posterior has no closed form and the normalising integral is
+intractable. The response is not to abandon the Bayesian answer but to approximate it by
+drawing samples from the posterior: given $\theta^{(1)}, \dots, \theta^{(S)}$ we estimate
+any posterior quantity by averaging, for instance the mean as
+$\frac{1}{S}\sum_s \theta^{(s)}$. Building the algorithms that produce such samples,
+Monte Carlo, Gibbs sampling, Metropolis-Hastings, occupies the next several lectures. The
+logic can be previewed here, where we happen to know the posterior and can draw from it
+directly.
 
 ```{python}
-samples = posterior.rvs(size=20000, random_state=rng)
-print(f"Analytic posterior mean:   {posterior.mean():.4f}")
-print(f"Monte Carlo estimate:      {samples.mean():.4f}")
-print(f"Monte Carlo 95% interval:  "
-      f"[{np.quantile(samples, 0.025):.3f}, {np.quantile(samples, 0.975):.3f}]")
+samples = post.rvs(size=20_000, random_state=rng)
+print(f"analytic posterior mean {post.mean():.4f}   Monte Carlo {samples.mean():.4f}")
+print(f"analytic 95% interval   [{post.ppf(0.025):.3f}, {post.ppf(0.975):.3f}]")
+print(f"Monte Carlo 95%         [{np.quantile(samples, 0.025):.3f}, "
+      f"{np.quantile(samples, 0.975):.3f}]")
 ```
 
-The sample-based answers match the analytic ones, which is the sanity check every sampler
-must pass before we trust it on a harder model. Formula, grid, and sample all describe the
-same posterior; they differ only in how they cope with the normalising constant, and
-therefore in how far they scale.
+The sample-based answers match the analytic ones, which is the check every sampler must
+pass before we trust it on a harder model. Formula, grid and sample all describe the same
+posterior. They differ only in how they cope with the normalising constant, and therefore
+in how far they scale.
 
 ## Takeaways
 
-Bayesian inference turns a prior and a likelihood into a posterior, and the posterior
-carries the full uncertainty about the unknowns. The prior is a modelling choice to be
-stated and checked, not an embarrassment to be hidden, and the prior predictive
-distribution is the quickest way to see what it implies. In conjugate models we can write
-the posterior down, in low dimensions we can grid it, and in general we sample from it.
-From here we build the computational tools that make the approach work for realistic
-models in macroeconomics, finance, and microeconomics.
+Bayes' theorem is a consequence of conditional probability and the law of total
+probability, and it applies unchanged whether the unknown is a door or a parameter. The
+posterior is the likelihood times the prior, renormalised, and in conjugate models the
+renormalisation is free because we recognise the kernel. The Bayesian point estimate is a
+weighted average of prior and data, with weights set by how much information each carries,
+which is why the prior fades as the sample grows. Prediction integrates over the posterior
+instead of conditioning on an estimate, and updating is sequential. From Lecture 3 the
+closed forms disappear and we will compute these same objects by simulation.
 
 ::: {.exercises}
 **Exercises**
 
-1. Redo the worked example with a strongly informative prior, $\text{Beta}(20, 20)$, and
-   the same data (8 of 12). How does the posterior mean change, and why?
-2. Show numerically that updating on the 200 Bernoulli draws in two halves (first 100,
-   then the next 100) gives the same posterior as updating on all 200 at once.
-3. Recompute the grid posterior with 11, 101, and 1001 points and record the error in the
-   posterior mean relative to the analytic value. How many evaluations would the same
-   resolution need for five parameters, and what does that imply for a VAR?
-4. Plot the prior predictive success count under the Jeffreys $\text{Beta}(0.5, 0.5)$ prior
-   with $n = 20$ and compare it with $\text{Beta}(2, 2)$. Then explain why an improper prior
-   can still yield a proper posterior, and name a model where you would check this.
-5. Explain in two or three sentences why the statement "there is a 95% probability that
-   $\theta$ lies in [a, b]" is valid for a credible interval but not for a frequentist
-   confidence interval.
+1. Repeat the coin analysis with a $\text{Beta}(1,1)$ prior and with a
+   $\text{Beta}(50,50)$ prior. Report the posterior mean in each case and check it against
+   the weighted-average formula $w\theta_0 + (1-w)\hat\theta$. At what prior sample size
+   does the conclusion $P(\theta > 0.5 \mid {\bf x}) > 0.9$ break down?
+2. Derive the beta-binomial predictive probability $P(Y = k \mid {\bf x})$ yourself,
+   showing the step where the beta kernel is integrated out. Then verify your expression
+   numerically against a simulation that draws $\theta$ from the posterior and $Y$ from
+   the binomial.
+3. A screening rule flags firms as likely to default. It flags 90% of firms that do
+   default and 20% of those that do not, and 3% of firms default. Using Bayes' theorem for
+   events, compute the probability that a flagged firm actually defaults, and explain in
+   one sentence why the answer is so much lower than 90%.
+4. Naive Bayesian classification by hand. Six emails are labelled: spam, "send us your
+   password"; ham, "send us your review"; ham, "password review"; spam, "review us"; spam,
+   "send your password"; spam, "send us your account". Estimate $P(\text{spam})$ and the
+   word probabilities from these counts, then classify the new message "review us now",
+   treating the words as conditionally independent given the class. Which single word
+   drives the answer?
+5. Extend the grid calculation to two parameters by putting a grid on the mean and the
+   variance of a normal sample. Count the number of density evaluations you need for a
+   grid of 200 points per dimension, and then for five parameters, and explain in one
+   sentence why grids are not the answer.
 :::
 
 ## References
 
-Koop, *Bayesian Econometrics* (2003), ch. 1-2. Zellner, *An Introduction to Bayesian
-Inference in Econometrics* (1971), ch. 1-2. Gelman et al., *Bayesian Data Analysis*
-(3rd ed.), ch. 1-3. Lambert, *A Student's Guide to Bayesian Statistics*, ch. 1-9.
+Koop, *Bayesian Econometrics*, ch. 1. Zellner, *An Introduction to Bayesian Inference in
+Econometrics*, ch. 1-2. Gelman et al., *Bayesian Data Analysis* (3rd ed.), ch. 1-2.
+Lambert, *A Student's Guide to Bayesian Statistics*, ch. 1-5.
