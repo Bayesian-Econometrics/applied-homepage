@@ -68,3 +68,25 @@ The core papers anchor the applications block: Primiceri (2005) for time-varying
 VARs and state-space models, Giannone et al. (2021) for shrinkage in
 high-dimensional forecasting, Avramov and Zhou (2010) for Bayesian portfolio
 choice, and Hill (2011) for Bayesian causal inference.
+
+## How the supplementary material supports the lectures
+
+The weekly sequence and assigned readings remain those in the [schedule](schedule.qmd).
+The following supplementary sources develop the intuition and intermediate algebra used
+in the notes. The Python exercises translate these ideas into the scheduled applications.
+
+| Weeks | Supplementary source | Use in this course |
+|:--|:--|:--|
+| 1–2 | Audronė Virbickaitė and Martina Zaharieva, supplied UPM Classes 1–2 and Case 2 | Conditional probability, sequential updating, conjugate kernels, prior elicitation and predictive integration |
+| 3–5 | Supplied UPM Class 3 and Cases 3–5 | Integration, importance weights, Gibbs conditionals, Metropolis ratios, latent variables and logistic regression |
+| 2, 6, 9, 11 | Supplied UPM Class 5 | Regression priors, regularisation, model evidence and variable selection |
+| 14, optional extension | Supplied UPM Class 4 | Variational approximation and its contrast with posterior sampling |
+| 2, 4, 8, 10 | Greenberg (2008), *Introduction to Bayesian Econometrics* | Regression algebra (4.1–4.3), MCMC (7), regression sampling (8.1), TVP (10.3), treatment and endogeneity (11.1–11.2) |
+| 3–5, 9, 12 | Geweke (2005), *Contemporary Bayesian Econometrics and Statistics* | Posterior simulation (4), Metropolis-within-Gibbs (4.6.2), model comparison and checks (8) |
+| 6–9 | Luc Bauwens, supplied *Bayesian Econometrics* lecture notes (6 April 2013); Sylvia Frühwirth-Schnatter, supplied lecture slides | Multivariate regression and VARs, prediction, and state-space reasoning |
+| 13, supplementary derivation | Frey and Pohlmeier (2026), supplied *Bayesian Shrinkage Regressions for the Global Minimum Variance Portfolio*, Section 2.2 | Reference-portfolio regression identity and the interpretation of shrinkage as allocation regularisation |
+
+UPM is the label of the supplied teaching-material collection. Later applications—BVAR
+identification, causal BART, stochastic volatility and Gaussian processes—use the
+specialist literature assigned to those weeks. The source PDFs are reading material;
+the site provides adapted explanations and derivations rather than reproducing the books.

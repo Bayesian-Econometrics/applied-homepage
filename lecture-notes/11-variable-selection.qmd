@@ -3,6 +3,13 @@ title: "Variable selection and big data"
 subtitle: "Lecture 11"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 11 exercise session](../exercise-sessions/11-variable-selection.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## From macroeconomic shrinkage to the factor zoo
 
 Lectures 8 to 10 built a toolkit for high-dimensional macroeconometrics, where a zero-mean Normal prior turns out to
@@ -105,11 +112,51 @@ Occam's razor term favouring exclusion when $\beta_j$ is small, while the expone
 $\beta_j^2$: once a draw is large relative to the spike width it overwhelms the penalty and the indicator switches on.
 The sampler thus walks through model space one coordinate at a time.
 
+### Derive the inclusion probability as posterior odds
+
+Write $\gamma_j\in\{0,1\}$ for a factor's indicator and let its coefficient
+prior have standard deviation $s_0$ in the spike and $s_1>s_0$ in the slab.
+Conditional on the current $\beta_j$, Bayes' rule gives
+
+$$
+\frac{\Pr(\gamma_j=1\mid\beta_j,\text{rest})}
+{\Pr(\gamma_j=0\mid\beta_j,\text{rest})}
+=\frac{\pi}{1-\pi}\frac{s_0}{s_1}
+\exp\left[\frac{\beta_j^2}{2}(s_0^{-2}-s_1^{-2})\right].
+$$
+
+Taking logs turns multiplication into addition. The log-odds consist of prior
+inclusion odds, a penalty for the slab's wider spread, and evidence from the
+coefficient's magnitude. Applying the logistic function yields a Bernoulli
+probability. The likelihood does not appear explicitly here because it already
+influenced the current coefficient draw.
+
+This is a mixture-prior update like UPM's mixture-Beta example, with a latent
+indicator deciding which prior component applies. Averaging indicators gives
+posterior inclusion probabilities, not frequentist significance levels.
+Because both components are continuous Normals, coefficients are almost surely
+nonzero even in the spike; “excluded” means strongly shrunk in this SSVS model.
+
+### Correlated predictors change the interpretation
+
+If two factors are nearly interchangeable, draws may use either one. Each can
+have a moderate individual PIP while the probability that at least one is
+included is high. Estimate that union directly from the joint indicator draws:
+$S^{-1}\sum_s\mathbf1\{\gamma_j^{(s)}+\gamma_k^{(s)}>0\}$.
+Summing the two PIPs double-counts draws containing both.
+
+Selecting every variable with PIP above one half creates a median-probability
+model. Its predictive optimality requires special conditions; it is not a
+universal rule for correlated finance factors. The exercise compares it with
+prediction averaged over the sampled models, retaining selection uncertainty.
+
 ## A simulated cross-section of candidate factors
 
 We simulate $p = 25$ standardised candidate factors with $n = 300$ observations for estimation and 300 held back. Four
 genuinely price returns; three have zero coefficients but are correlated with a true factor, mildly in two cases and
 as a near-duplicate in the third; the rest are independent noise.
+
+**Reading the computation.** The design deliberately contains proxies for true factors. This makes it possible for several coefficient patterns to predict similarly well, which a single selected model can conceal.
 
 ```{python}
 n_train, n_test, p = 300, 300, 25
@@ -142,6 +189,8 @@ barely support.
 The coefficient draw uses a Cholesky factor of the posterior precision rather than an explicit inverse: if $L L^\top =
 B_1^{-1}$, solving $L^\top z = \eta$ for a standard Normal $\eta$ gives a draw with covariance $B_1$. The indicator
 block is vectorised, the $p$ indicators being conditionally independent given $\beta$.
+
+**Reading the computation.** Coefficient draws use the current spike/slab variances. Indicator draws then compare the two prior component densities at those coefficients, and the variance update uses the current regression residuals.
 
 ```{python}
 tau, c_slab, pi_prior = 0.025, 40.0, 0.2      # spike sd, slab factor, prior inclusion
@@ -179,6 +228,8 @@ sample mean of the indicator draws; it integrates over every model the sampler v
 model** collects the factors with PIP at least one half, often a better predictive choice than the most probable
 model. Since marginal PIPs cannot show whether two factors are substitutes, we also tabulate joint inclusion for each
 true factor and its decoy.
+
+**Reading the computation.** PIPs average indicator draws; coefficient means average both spike and slab states. Thresholding PIPs produces a selected model, whereas the full draw collection retains uncertainty about the selection.
 
 ```{python}
 pip = gamma_post.mean(axis=0)
@@ -222,6 +273,8 @@ posterior mean is the ridge estimator $(X^\top X + \lambda I)^{-1}X^\top y$ with
 Lecture 6. We sweep the tightness and compare out-of-sample predictive $R^2$ with the SSVS prediction, the
 median-probability model refitted by least squares, and OLS.
 
+**Reading the computation.** Dense shrinkage and sparse selection are compared on the same held-out observations. A model can identify the generating labels poorly yet predict well when proxies carry similar information.
+
 ```{python}
 def pred_r2(b_hat):
     err, ref = y_te - X_te @ b_hat, y_te - y.mean()
@@ -243,6 +296,8 @@ print(pd.Series({"SSVS (model averaged)": pred_r2(post_mean),
 
 Sparse selection wins here, but narrowly, and ridge spreads roughly five times as much absolute weight over the noise
 factors. The figure puts the two posteriors side by side.
+
+**Reading the computation.** The colours identify truth only because the data were simulated. In real data, a moderate PIP may reflect competition among correlated factors rather than absence of useful signal.
 
 ```{python}
 colours = {"true factor": "C0", "correlated decoy": "C3", "noise": "0.6"}
@@ -301,21 +356,14 @@ and spike densities at the current draw. Inclusion probabilities and the median-
 posterior but become unstable when candidates are near-duplicates, and out-of-sample performance separates sparse from
 dense priors only weakly, so sparsity is a prior belief rather than a finding.
 
-::: {.exercises}
-**Exercises**
 
-1. Derive the indicator full conditional: show that $\Pr(\gamma_j = 1 \mid \beta_j) = O_j/(1 + O_j)$ with
-   $O_j$ as in the text, and explain why it is free of $y$ and $\sigma^2$ once $\beta_j$ is known.
-2. Rerun the sampler with $c = 10$ and then $c = 200$, holding $\tau$ fixed. Report how the inclusion
-   probabilities respond, and relate the pattern to the $1/c$ Occam term in the odds ratio.
-3. Replace the fixed $\pi$ with a hierarchical $\pi \sim \text{Beta}(1, 1)$, adding the draw $\pi \mid \gamma
-   \sim \text{Beta}\big(1 + \sum_j \gamma_j, 1 + p - \sum_j \gamma_j\big)$, and say why this aids
-   multiplicity control.
-4. Simulate a dense truth on the same design matrix, all 25 coefficients non-zero and rescaled to the
-   same signal variance, and rerun both procedures. Does the predictive ranking reverse?
-5. Reduce the estimation sample to $n = 80$ and rerun both comparisons. Discuss which procedure degrades
-   faster and whether the out-of-sample ranking survives.
-:::
+
+## Reading guide and sources
+
+UPM Class 5 and Frühwirth-Schnatter, Bayesian Computing, Part V, for variable selection and model-space uncertainty. The scheduled finance readings provide the factor-selection context.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

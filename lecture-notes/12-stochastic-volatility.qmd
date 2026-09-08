@@ -3,6 +3,13 @@ title: "Stochastic volatility"
 subtitle: "Lecture 12"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 12 exercise session](../exercise-sessions/12-stochastic-volatility.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Volatility as a latent state
 
 Asset returns are not homoskedastic. Quiet weeks and turbulent weeks arrive in clusters,
@@ -56,6 +63,8 @@ $3\exp\big(\sigma_h^2/(1-\phi^2)\big)$, so the model delivers fat tails with no
 non-Gaussian ingredient, while $\mathbb{E}[r_t \mid h_t] = 0$ keeps returns unpredictable
 in level. The chunk below simulates $700$ observations, three years of daily data.
 
+**Reading the computation.** The stationary initial draw and AR transition generate persistent log variance. Exponentiating half the state turns log variance into return standard deviation; exponentiating the full state gives variance.
+
 ```{python}
 T = 700
 mu_true, phi_true, sig_true = -9.0, 0.95, 0.30
@@ -100,6 +109,27 @@ $\prod_t p(r_t \mid h_t)\, p(h_{1:T} \mid \theta)\, p(\theta)$. Averaging over t
 gives the marginal posterior of $\theta$ without ever evaluating the integral, and
 averaging over $\theta$ gives the posterior of the volatility path itself.
 
+### Read the observation density as evidence about risk
+
+The return density has log kernel $-h_t/2-r_t^2e^{-h_t}/2$. Its derivative is
+$[-1+r_t^2e^{-h_t}]/2$. A large squared return pushes the preferred variance
+upward, while the $-h_t/2$ term prevents unlimited variance inflation.
+The return sign does not appear: the basic model treats equally sized positive
+and negative returns alike. Leverage effects require an extended model.
+
+The transition equation supplies a second source of evidence: neighbouring
+states favour persistent volatility. Expanding both transition squares yields
+a quadratic with coefficient $(1+\phi^2)/\sigma_h^2$ and linear coefficient
+$[\alpha(1-\phi)+\phi(h_{t-1}+h_{t+1})]/\sigma_h^2$.
+Their ratio is the conditional mean below. The observation density then
+reweights that Normal conditional; it is exactly the same conditional-versus-
+marginal distinction encountered in the Gibbs lecture.
+
+Before implementing any sampler, write its initial-state model too. A stationary
+initial density depends on $(\alpha,\phi,\sigma_h^2)$ and must enter parameter
+updates as well as the first state update. Ignoring that factor in only one
+block produces incompatible conditionals.
+
 ## The full conditional of a single log-volatility
 
 The workhorse construction, due to Jacquier, Polson and Rossi, updates the path one date
@@ -138,31 +168,109 @@ further observation makes the sweep fast: since the conditional of $h_t$ involve
 neighbours, odd-dated states are conditionally independent given the even-dated ones, so
 the sweep runs as two vectorised half-sweeps rather than $T$ scalar steps.
 
+## The JPR accept-reject/Metropolis construction
+
+The Gaussian proposal above introduces single-state updating. For the JPR lab,
+work with variance $s_t=e^{h_t}$ instead. Its conditional density, **with respect
+to $ds_t$**, has kernel
+
+$$
+p(s_t\mid\mathrm{rest})\propto s_t^{-3/2}
+\exp\left[-\frac{r_t^2}{2s_t}-\frac{(\log s_t-m_t)^2}{2v_t}\right].
+$$
+
+The extra $s_t^{-1}$ relative to the log-state density is a Jacobian. To build
+a convenient blanket, match the mean and variance of $\operatorname{Lognormal}(m_t,v_t)$
+with $IG(a_L,b_L)$. Since a lognormal has relative variance $e^{v_t}-1$, while
+an inverse-Gamma has relative variance $1/(a_L-2)$,
+
+$$
+a_L=2+\frac1{e^{v_t}-1},\qquad
+b_L=(a_L-1)e^{m_t+v_t/2}.
+$$
+
+Multiplication by the return-likelihood kernel gives the blanket
+$q=IG(a_L+1/2,b_L+r_t^2/2)$. This is a proposal, not an assertion that the
+conditional posterior is inverse-Gamma.
+
+The JPR construction first retains a proposal from $q$ with probability
+$\min\{1,p(s)/(cq(s))\}$. Its resulting density is proportional to
+$f(s)=\min\{p(s),cq(s)\}$. A subsequent independence-MH correction uses
+$p(s')f(s)/(p(s)f(s'))$. We choose $c$ by matching the two kernels at $s=e^{m_t}$;
+it need not be a global upper bound because the second correction remains.
+The code implements this construction using the explicitly derived moment match.
+See [Jacquier, Polson and Rossi, algorithm discussion, Section 2.1.3](https://people.bu.edu/jacquier/papers/jpr.je2004.pdf).
+
 ## Drawing the state-equation parameters
 
-Conditional on the path, the state equation is an ordinary Gaussian autoregression, so the
-parameter blocks are the conjugate ones of Bayesian linear regression. Stack $h_2, \dots,
-h_T$ into $y$ and the rows $(1, h_{t-1})$ into $Z$, let $\gamma = (\alpha, \phi)^\top$, and
-take priors $\gamma \sim \mathcal{N}(g_0, G_0)$, $\sigma_h^2 \sim \text{IG}(c_0, d_0)$:
+Write $\gamma=(\alpha,\phi)^\top$ and give it an independent Normal prior
+truncated to $|\phi|<1$. The transitions yield a Gaussian proposal with
 
 $$
-\gamma \mid \sigma_h^2, h \sim \mathcal{N}\!\Big(G_1\big(G_0^{-1} g_0 +
-\tfrac{Z^\top y}{\sigma_h^2}\big),\; G_1\Big),
-\quad G_1 = \Big(G_0^{-1} + \tfrac{Z^\top Z}{\sigma_h^2}\Big)^{-1},
-$$
-$$
-\sigma_h^2 \mid \gamma, h \sim \text{Inverse-Gamma}\!\left(
-c_0 + \tfrac{T-1}{2}, \; d_0 + \tfrac{1}{2}\,(y - Z\gamma)^\top (y - Z\gamma)\right),
+G_1=(G_0^{-1}+Z^\top Z/\sigma_h^2)^{-1},\qquad
+g_1=G_1(G_0^{-1}g_0+Z^\top y/\sigma_h^2).
 $$
 
-and $\mu$ is recovered as $\alpha/(1-\phi)$. Draws violating $|\phi| < 1$ are rejected,
-which imposes stationarity through the prior. We keep the prior on $\gamma$ vague but give
-$\sigma_h^2$ a moderately informative prior centred near $\sigma_h = 0.2$, because the
-data carry little information about the volatility of volatility and a flat prior lets the
-sampler drift towards implausibly jagged paths. The complete sampler follows: two
-Metropolis half-sweeps, then the two conjugate parameter draws.
+The stationary initial state also contributes
+$h_1\sim N(\alpha/(1-\phi),\sigma_h^2/(1-\phi^2))$.
+Draw a stationary candidate from the Gaussian proposal and accept it by the
+ratio of initial-state densities. The transition likelihood and coefficient
+prior cancel from this independence-MH ratio. Then the variance conditional is
+
+$$
+\sigma_h^2\mid\gamma,h\sim IG\left(c_0+T/2,
+d_0+\frac12\left[\|y-Z\gamma\|^2+
+(1-\phi^2)\left(h_1-\frac\alpha{1-\phi}\right)^2\right]\right).
+$$
+
+The initial state adds one quadratic and one half to the shape. Including it in
+every relevant update makes all blocks target the same joint posterior. The code
+keeps the two odd/even state groups because states in either group are conditionally
+independent given the other group.
+
+**Reading the computation.** The JPR helper evaluates variance densities at log-variance values and retains the Jacobian convention. Its two acceptance stages are followed by parameter updates that include the stationary initial-state density.
 
 ```{python}
+from scipy.special import gammaln
+
+def log_variance_target(log_s: np.ndarray, r2: np.ndarray,
+                        mean: np.ndarray, variance: np.ndarray) -> np.ndarray:
+    """Conditional variance density evaluated at log(s), with respect to ds."""
+    return -1.5*log_s-r2*np.exp(-log_s)/2-(log_s-mean)**2/(2*variance)
+
+def log_ig_at_log(log_s: np.ndarray, shape: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    """Inverse-Gamma log density with respect to ds, evaluated at log(s)."""
+    return shape*np.log(scale)-gammaln(shape)-(shape+1)*log_s-scale*np.exp(-log_s)
+
+def jpr_update(old: np.ndarray, r2: np.ndarray, mean: np.ndarray,
+               variance: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, int]:
+    """JPR accept-reject/MH update using a moment-matched inverse-Gamma blanket."""
+    a_ln = 2+1/np.expm1(variance)
+    b_ln = (a_ln-1)*np.exp(mean+variance/2)
+    shape, scale = a_ln+.5, b_ln+r2/2
+    log_c = (log_variance_target(mean,r2,mean,variance)
+             -log_ig_at_log(mean,shape,scale))
+    proposal = old.copy()
+    pending = np.arange(len(old))
+    while len(pending):
+        candidate = -np.log(rng.gamma(shape[pending],1/scale[pending]))
+        lp = log_variance_target(candidate,r2[pending],mean[pending],variance[pending])
+        lq = log_ig_at_log(candidate,shape[pending],scale[pending])
+        keep = np.log(rng.random(len(pending))) < np.minimum(0,lp-log_c[pending]-lq)
+        proposal[pending[keep]] = candidate[keep]
+        pending = pending[~keep]
+    old_p = log_variance_target(old,r2,mean,variance)
+    new_p = log_variance_target(proposal,r2,mean,variance)
+    old_f = np.minimum(old_p,log_c+log_ig_at_log(old,shape,scale))
+    new_f = np.minimum(new_p,log_c+log_ig_at_log(proposal,shape,scale))
+    accept = np.log(rng.random(len(old))) < new_p-old_p+old_f-new_f
+    return np.where(accept,proposal,old), int(accept.sum())
+
+def initial_log_density(h0: float, alpha: float, phi: float, s2: float) -> float:
+    """Stationary initial-state density, omitting a parameter-independent constant."""
+    return float(.5*np.log(1-phi**2)-.5*np.log(s2)
+                 -(1-phi**2)*(h0-alpha/(1-phi))**2/(2*s2))
+
 g0, G0 = np.array([0.0, 0.9]), np.diag([10.0, 0.25])
 G0_inv = np.linalg.inv(G0)
 c0, d0 = 6.0, 0.20                       # prior mean of sigma_h^2 equals 0.04
@@ -180,23 +288,23 @@ for it in range(n_iter):
         m[1:-1] = (alpha * (1 - phi) + phi * (h[:-2] + h[2:])) / (1 + phi**2)
         v[1:-1] = s2 / (1 + phi**2)
         m[0], m[-1] = mu * (1 - phi) + phi * h[1], alpha + phi * h[-2]
-        h_new, h_old = m[grp] + np.sqrt(v[grp]) * rng.standard_normal(grp.size), h[grp]
-        log_a = -0.5 * (h_new - h_old) \
-            - 0.5 * r2[grp] * (np.exp(-h_new) - np.exp(-h_old))
-        ok = np.log(rng.random(grp.size)) < log_a
-        h[grp] = np.where(ok, h_new, h_old)
-        acc += ok.sum(); n_prop += grp.size
+        h[grp], accepted = jpr_update(h[grp], r2[grp], m[grp], v[grp], rng)
+        acc += accepted
+        n_prop += grp.size
     Z, y = np.column_stack([np.ones(T - 1), h[:-1]]), h[1:]
     G1 = np.linalg.inv(G0_inv + Z.T @ Z / s2)
     L = np.linalg.cholesky(G1)
     g1 = G1 @ (G0_inv @ g0 + Z.T @ y / s2)
-    for _ in range(100):                 # reject non-stationary candidates
+    cand = g1 + L @ rng.standard_normal(2)
+    while abs(cand[1]) >= 1:
         cand = g1 + L @ rng.standard_normal(2)
-        if abs(cand[1]) < 1:
-            alpha, phi = cand
-            break
+    log_ratio = (initial_log_density(h[0], cand[0], cand[1], s2)
+                 - initial_log_density(h[0], alpha, phi, s2))
+    if np.log(rng.random()) < log_ratio:
+        alpha, phi = cand
     e = y - Z @ np.array([alpha, phi])
-    s2 = 1.0 / rng.gamma(c0 + (T - 1) / 2, 1.0 / (d0 + 0.5 * e @ e))
+    initial_ss = (1-phi**2)*(h[0]-alpha/(1-phi))**2
+    s2 = 1.0 / rng.gamma(c0 + T/2, 1.0 / (d0 + 0.5*(e @ e + initial_ss)))
     if it >= burn:
         par_draws[it - burn] = [alpha / (1 - phi), phi, np.sqrt(s2)]
         h_draws[it - burn] = h
@@ -204,16 +312,18 @@ for it in range(n_iter):
 print(f"kept {par_draws.shape[0]} draws, acceptance rate {acc / n_prop:.3f}")
 ```
 
-The acceptance rate is high, confirming that the state equation is an informative
-proposal: most candidate log-volatilities are compatible with the return observed on that
-date, so the Metropolis step only corrects a modest reweighting. That is not by itself
-evidence of good mixing, which we check next.
+The reported rate concerns the final Metropolis correction; the internal
+accept-reject step also has a computational cost. Neither a high rate nor a
+completed run establishes mixing. Inspect the state path and parameter chains
+and compare independent runs, especially for persistence.
 
 ## Posterior estimates of the state equation
 
 We summarise the marginal posteriors against the simulated values, adding an inefficiency
 factor: the ratio of the variance of the chain's sample mean to the variance under
 independent sampling, estimated as $1 + 2\sum_\ell \rho_\ell$ from the autocorrelations.
+
+**Reading the computation.** Posterior means and intervals summarise parameter uncertainty, while the estimated inefficiency measures numerical dependence. The finite-lag estimator is only a rough diagnostic and should be compared across chains.
 
 ```{python}
 def inefficiency(x, lag_max=250):
@@ -230,9 +340,7 @@ print(pd.DataFrame({
 }, index=["mu", "phi", "sigma_h"]).round(3))
 ```
 
-All three true values lie comfortably inside their ninety per cent credible intervals and
-the posterior mean of $\sigma_h$ is close to the simulated value. The inefficiency factors
-are large, however: the path and the state-equation parameters are strongly dependent in
+Compare each interval with its generating value; a credible interval need not contain that value in every simulated sample. Inspect the inefficiency estimates alongside independent runs: the path and the state-equation parameters are strongly dependent in
 the posterior, and a sampler that shifts one date at a time moves through that dependence
 slowly, so the nominal draw count overstates precision by roughly that factor and five
 thousand draws deliver only tens of effectively independent ones.
@@ -242,6 +350,8 @@ thousand draws deliver only tens of effectively independent ones.
 The chief output is not the parameter vector but the volatility path. For each retained
 draw we convert the log variance into a standard deviation, then take pointwise means and
 quantiles to obtain a credible band to compare with the truth.
+
+**Reading the computation.** Transform each state draw before summarising volatility. The mean of exp(h/2) generally differs from exp(mean(h)/2), because exponentiation is nonlinear.
 
 ```{python}
 vol_draws = np.exp(h_draws / 2)
@@ -274,6 +384,8 @@ widest where volatility is high, because the log makes uncertainty multiplicativ
 
 The parameter that matters most for forecasting is $\phi$, and it is the one the data
 identify least sharply. The next chunk plots the joint posterior of $\phi$ and $\sigma_h$.
+
+**Reading the computation.** The joint plot reveals dependence between persistence and state innovation scale. Narrow-looking marginals can conceal a slowly explored ridge, so inspect both the joint geometry and iteration order.
 
 ```{python}
 fig, ax = plt.subplots()
@@ -312,40 +424,27 @@ logs of the measurement equation gives $\log r_t^2 = h_t + \log u_t^2$, which is
 $h_t$ but has a left-skewed $\log \chi^2_1$ error with mean $-1.27$ and variance $\pi^2/2
 \approx 4.93$; they approximate that density by a fixed seven-component mixture of normals
 with known weights, means and variances. Conditional on an indicator selecting the
-component at each date the model is an exact linear Gaussian state-space model, so the
+component at each date the approximating model is linear Gaussian, so the
 entire path is drawn in one forward-filter backward-sample step with the indicators as one
 more Gibbs block, and a small offset inside the logarithm guards against returns near
-zero. Because the path is updated jointly, inefficiency factors fall by one or two orders
-of magnitude at essentially the same cost per sweep, which is why this approach is what
-practitioners use once a volatility component sits inside a larger model.
+zero. Joint path updates can substantially improve mixing relative to single-date updates. The gain depends on the dataset, parameterisation and implementation. The finite Normal mixture approximates the log-chi-squared density; exact inference for the original model requires accounting for that approximation, for example by an appropriate correction.
 
 ## Takeaways
 
 Because the log variance enters the measurement equation nonlinearly, the likelihood is a
 $T$-dimensional integral with no closed form, and inference proceeds by sampling the path
 jointly with the parameters. The single-move sampler does this with one Metropolis step
-per date, proposing from the state equation and correcting with the measurement density,
-alternating with conjugate draws of the autoregressive parameters. The volatility path is
+per date. The implemented JPR construction uses an inverse-Gamma accept-reject proposal followed by an MH correction. The state-equation coefficient proposal also receives an MH correction for the stationary initial state, while the innovation variance has an inverse-Gamma full conditional. The volatility path is
 recovered accurately up to a wide band, while persistence stays weakly identified.
 
-::: {.exercises}
-**Exercises**
 
-1. Rerun the sampler with $\phi = 0.99$ and with $\phi = 0.85$, holding $\sigma_h$ fixed,
-   and explain why the near-unit-root case gives the larger inefficiency factor.
-2. Replace the informative inverse-gamma prior on $\sigma_h^2$ by a nearly flat one, for
-   instance $c_0 = d_0 = 0.01$, and describe what happens to the posterior of $\phi$ and
-   to the smoothness of the estimated volatility path.
-3. Change the Metropolis step to a random-walk proposal $h_t^{\text{new}} = h_t + \tau
-   \varepsilon$, tune $\tau$ to an acceptance rate near one third, and compare the
-   inefficiency factor of a mid-sample $h_t$ with that of the sampler above.
-4. Compute the posterior predictive distribution of $h_{T+1}, \dots, h_{T+20}$ by
-   iterating the state equation forward for every retained draw and plot the forecast fan.
-   How much of the uncertainty is parameter rather than shock uncertainty?
-5. Derive the mean and variance of $\log u_t^2$ for $u_t \sim \mathcal{N}(0,1)$, verify
-   them by simulation, and use the variance to argue why one observation is so
-   uninformative about $h_t$ when $\sigma_h$ is small.
-:::
+
+## Reading guide and sources
+
+Geweke (2005), Section 4.6.2, supplies the Metropolis-within-Gibbs logic. Jacquier, Polson and Rossi (1994) and Kim, Shephard and Chib (1998) supply the SV algorithms; this is not a topic covered directly by the UPM examples.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

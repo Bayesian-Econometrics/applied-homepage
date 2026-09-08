@@ -1,60 +1,36 @@
-# Course homepage
+# Applied Bayesian Econometrics
 
-Quarto-Website als Gerüst für die Kursseite. Noch ohne Inhalte und ohne Styling.
+Quarto course website with 15 lecture chapters and 15 matching Python exercise sessions.
+The fixed sequence, assigned literature and exercise focus are in `schedule.qmd`.
 
-## Einmalig einrichten
+## Local build
 
-1. Neues Repository auf GitHub anlegen, zum Beispiel `course-homepage`, leer und ohne README.
-2. Diesen Ordner hineinschieben:
-
-   ```sh
-   git init -b main
-   git add .
-   git commit -m "Add Quarto site skeleton"
-   git remote add origin git@github.com:<user>/course-homepage.git
-   git push -u origin main
-   ```
-
-3. Im Repository unter Settings, Pages, bei Source `GitHub Actions` wählen. Nicht `Deploy from a branch`.
-4. Unter Actions den Lauf `publish` abwarten. Danach steht die Seite unter
-
-   ```
-   https://<user>.github.io/course-homepage/
-   ```
-
-Jeder weitere Push auf `main` rendert und veröffentlicht automatisch neu.
-
-## Lokal arbeiten
-
-Quarto installieren (https://quarto.org/docs/get-started/), dann:
-
-```sh
-quarto preview   # lokale Vorschau mit Autoreload
-quarto render    # baut nach _site/
-```
-
-`_site/` ist in `.gitignore` und wird nicht committet, das Rendern passiert in der Action.
-
-## Python
-
-`pyproject.toml` ist für die lokale Umgebung vorbereitet:
+Install Quarto, then use the existing project environment:
 
 ```sh
 uv sync
+uv run quarto preview
+uv run quarto render
 ```
 
-Solange keine `.qmd`-Datei Code ausführt, braucht die Action kein Python. Sobald du
-ausführbare Python-Chunks einbaust, muss der Workflow vor `quarto render` zusätzlich
-`astral-sh/setup-uv` und `uv sync` ausführen, und `quarto render` läuft dann über
-`uv run`.
+The output goes to `_site/`. The existing GitHub Actions workflow builds and publishes
+on pushes to `main`; a local render does not publish anything.
 
-Alternative, wenn das Ausführen in CI zu langsam oder zu fragil wird: lokal rendern,
-`execute: freeze: auto` nutzen (ist bereits gesetzt) und den Ordner `_freeze/`
-mitcommitten. Dann führt die Action keinen Code mehr aus, sondern verwendet die
-eingefrorenen Ergebnisse.
+## Teaching material
 
-## Was du anpassen willst
+- `lecture-notes/`: intuition, posterior derivations, interpreted code and reading guides.
+- `exercise-sessions/`: each scheduled lab, a collapsible reference implementation and
+  the chapter's additional practice questions.
+- `lecture-slides/`: the existing introductory deck, expanded with the fixed course
+  sequence, Bayes and Beta-posterior derivations, and the Week 1 exercise.
+- `literature.qmd`: assigned readings and a map of the supplementary UPM and local sources.
 
-- Titel: `website.title` in `_quarto.yml` und die Überschrift in `index.qmd`
-- Navigation: `website.navbar` in `_quarto.yml`
-- Neue Seiten: `.qmd`-Datei anlegen und in der Navbar oder einer Sidebar eintragen
+The Week 10 and Week 14 reference implementations require `pymc` and `pymc-bart`.
+Those dependencies have not been added to the project. These two blocks use
+`eval: false`, so the website displays their source without claiming executed results.
+All other exercise solutions use the existing numerical dependencies.
+
+The pages use `freeze: auto`. Explicitly render a changed chapter to refresh its output;
+the code examples simulate their own data and use fixed seeds. Sampling results remain
+subject to Monte Carlo error. The course notes distinguish reference implementations
+from production inference and document the assumptions required by each application.

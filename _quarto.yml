@@ -5,6 +5,7 @@ project:
     - "*.qmd"
     - "lecture-notes/*.qmd"
     - "lecture-slides/*.qmd"
+    - "exercise-sessions/*.qmd"
 
 website:
   title: "Applied Bayesian Econometrics"
@@ -25,6 +26,8 @@ website:
         href: schedule.qmd
       - text: "Lecture notes"
         href: lecture-notes/index.qmd
+      - text: "Exercises"
+        href: exercise-sessions/index.qmd
       - text: "Literature"
         href: literature.qmd
       - text: "Assessment"

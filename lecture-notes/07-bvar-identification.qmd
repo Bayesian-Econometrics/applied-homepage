@@ -3,6 +3,13 @@ title: "BVARs and identification"
 subtitle: "Lecture 7"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 7 exercise session](../exercise-sessions/07-bvar-identification.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Why VARs need a prior
 
 The vector autoregression is the standard reduced-form model for macroeconomic and financial dynamics,
@@ -53,6 +60,8 @@ all eigenvalues of the companion matrix lie inside the unit circle, which for a 
 $A_1$. The chunk fixes the coefficients, checks stability, simulates the series, builds the stacked
 regressors and reports the sample correlations.
 
+**Reading the computation.** The simulated trivariate system provides known dynamics and innovation covariance. build_xy aligns each response with its observed lags; a one-row shift would change the model.
+
 ```{python}
 m, p, T = 3, 1, 200
 names = ["output", "inflation", "rate"]
@@ -99,16 +108,14 @@ cross lags tighter, variance decaying with the lag and the intercept nearly diff
 overall tightness, $\lambda_2 < 1$ the cross-lag shrinkage and $\sigma_i$ the scale of variable $i$, the
 prior variance on lag $\ell$ of variable $j$ in equation $i$ is $\lambda_1/\ell^2$ when $i = j$ and
 $\lambda_1 \lambda_2 \sigma_i^2 / (\ell^2 \sigma_j^2)$ otherwise, a scale ratio making the prior
-unit-invariant. Conditional on $\Sigma$ the prior is conjugate and each equation's coefficients are
-Normal, with prior mean $b_{0,i}$, precision $\mathrm{diag}(1/V_i)$ and residual variance $\Sigma_{ii}$,
-$$
-\beta_i \mid y, \Sigma \sim \mathcal{N}(\bar b_i,\; \bar V_i),\qquad
-\bar V_i = \left(\frac{X^\top X}{\Sigma_{ii}} + \mathrm{diag}(1/V_i)\right)^{-1},\quad
-\bar b_i = \bar V_i \left(\frac{X^\top y_{\cdot i}}{\Sigma_{ii}} + \mathrm{diag}(1/V_i)\, b_{0,i}\right).
-$$
-This is the multivariate Bayesian ridge: prior precision adds to data precision and the posterior mean is
-a precision-weighted average of prior mean and least-squares fit. The chunk builds the prior, estimates
-$\Sigma$ from the least-squares residuals, and compares the two estimators for the output equation.
+unit-invariant for the lag coefficients. Conditional on a fixed full covariance
+matrix, the joint coefficient posterior is Normal. The derivation below shows
+why cross-equation covariance must enter the update. The code uses column-wise
+vectorisation, so each equation occupies one consecutive block of coefficients.
+The first illustration conditions on the OLS covariance estimate; the later
+Gibbs sampler also learns that covariance.
+
+**Reading the computation.** Vectorising by columns keeps all coefficients of an equation together. The full residual precision creates cross-equation blocks; use the same ordering when reshaping posterior draws.
 
 ```{python}
 lam1, lam2, lam_c = 0.2, 0.5, 100.0     # own tightness, cross factor, intercept variance
@@ -132,15 +139,15 @@ resid = Y - X @ B_ols
 Sigma_hat = resid.T @ resid / (X.shape[0] - k)
 
 def coef_posterior(Sigma):
-    Bbar = np.zeros((k, m)); Vbars = []
-    for i in range(m):
-        prec0 = np.diag(1.0 / V_prior[:, i])
-        Vb = np.linalg.inv(X.T @ X / Sigma[i, i] + prec0)
-        Bbar[:, i] = Vb @ (X.T @ Y[:, i] / Sigma[i, i] + prec0 @ B_prior[:, i])
-        Vbars.append(Vb)
-    return Bbar, Vbars
+    inv_sigma = np.linalg.inv(Sigma)
+    prec0 = np.diag(1.0 / V_prior.ravel(order="F"))
+    Vfull = np.linalg.inv(prec0 + np.kron(inv_sigma, X.T @ X))
+    mean = Vfull @ (prec0 @ B_prior.ravel(order="F")
+                    + (X.T @ Y @ inv_sigma).ravel(order="F"))
+    return mean.reshape(k, m, order="F"), Vfull
 
-Bbar, Vbar_list = coef_posterior(Sigma_hat)
+Bbar, Vfull = coef_posterior(Sigma_hat)
+Vbar_list = [Vfull[i*k:(i+1)*k, i*k:(i+1)*k] for i in range(m)]
 labels = ["const"] + [f"L1.{nm}" for nm in names]
 print(pd.DataFrame({"true": np.r_[c_true[0], A_true[0]], "OLS": B_ols[:, 0], "BVAR": Bbar[:, 0],
                     "post_sd": np.sqrt(np.diag(Vbar_list[0]))}, index=labels).round(3))
@@ -158,12 +165,14 @@ the coefficients are not known exactly and future shocks are random. Both are ca
 Draw a coefficient matrix from its posterior, iterate the VAR forward adding fresh Gaussian shocks with
 covariance $\Sigma$, and repeat; the quantiles of the paths are the predictive credible bands.
 
+**Reading the computation.** One coefficient draw is held fixed for an entire forecast path while fresh shocks arrive each period. These first bands condition on the covariance estimate; later Gibbs draws account for covariance uncertainty.
+
 ```{python}
 H, n_fc = 16, 2000
 chol_S = np.linalg.cholesky(Sigma_hat)
 fcast = np.zeros((n_fc, H, m))
 for d in range(n_fc):
-    Bd = np.column_stack([rng.multivariate_normal(Bbar[:, i], Vbar_list[i]) for i in range(m)])
+    Bd = rng.multivariate_normal(Bbar.ravel(order="F"), Vfull).reshape(k,m,order="F")
     hist = y[-p:][::-1].copy()                     # most recent lags, newest first
     for h in range(H):
         ynew = np.concatenate([[1.0], hist.ravel()]) @ Bd + chol_S @ rng.standard_normal(m)
@@ -190,8 +199,47 @@ plt.show()
 The forecasts settle towards the unconditional mean and the bands fan out with the horizon, widening by
 a quarter to a half between the first step and the sixteenth, as errors compound. The variables are
 handled jointly, so forecasts respect the cross-dependence, and because coefficients were drawn from
-the posterior rather than fixed the bands carry parameter as well as shock uncertainty, which matters
-most when the sample is short.
+the posterior rather than fixed the bands carry coefficient and shock uncertainty.
+They still condition on Sigma_hat; covariance uncertainty is included in the next sampler.
+
+### Derive the joint coefficient update
+
+Let $b=\operatorname{vec}(B)$ stack columns and $z=\operatorname{vec}(Y)$.
+Then $z=(I_m\otimes X)b+u$, with covariance $\Sigma\otimes I_N$.
+An independent Normal prior $b\sim N(b_0,V_0)$ yields
+
+$$
+P_n=V_0^{-1}+\Sigma^{-1}\otimes X^\top X,\qquad
+b_n=P_n^{-1}[V_0^{-1}b_0+(\Sigma^{-1}\otimes X^\top)z].
+$$
+
+Expand the GLS likelihood quadratic and add the prior quadratic; completing
+the square gives $b\mid\Sigma,Y\sim N(b_n,P_n^{-1})$. Off-diagonal entries
+of $\Sigma^{-1}$ couple equations. Separate equation updates using only
+$\Sigma_{ii}$ are exact only for a diagonal covariance under this prior.
+
+For an independent $\Sigma\sim IW(\nu_0,S_0)$ prior, holding $B$ fixed gives
+
+$$
+\Sigma\mid B,Y\sim IW(\nu_0+N,S_0+(Y-XB)^\top(Y-XB)).
+$$
+
+These two conditionals form the BVAR Gibbs sampler used in the exercise. The
+residual sum of products must be evaluated at the current coefficient draw;
+an OLS residual covariance combined with a different shrinkage posterior is
+not the same joint model.
+
+### Why the likelihood does not identify a policy shock
+
+The data identify reduced-form innovations $u_t$ and their covariance. If
+$u_t=C\epsilon_t$ and $\operatorname{Var}(\epsilon_t)=I$, then $CC^\top=\Sigma$.
+For any orthogonal $Q$, $(CQ)(CQ)^\top=\Sigma$. These alternative structural
+decompositions therefore have the same reduced-form likelihood.
+More observations tighten estimates of $\Sigma$ without choosing among rotations.
+Economic restrictions supply the missing information. Sign restrictions usually
+leave a set of admissible responses, so interval width includes identification
+uncertainty as well as parameter uncertainty. A posterior median response need
+not itself correspond to a single admissible structural model.
 
 ## Structural shocks and the identification problem
 
@@ -223,6 +271,8 @@ the second only to the first, so the last shock alone may move everything on imp
 about the timing of decisions and it changes with the ordering. The chunk codes impulse responses and a
 Cholesky impact matrix for a given ordering, then compares the impact effects of the rate shock under two
 orderings.
+
+**Reading the computation.** Multiplying the impact matrix by powers of the lag matrix propagates a structural shock. Reordering a Cholesky factor changes the identifying assumptions, even when the reduced-form covariance is unchanged.
 
 ```{python}
 Hi = 12
@@ -264,18 +314,27 @@ horizons. The algorithm exploits the rotation ambiguity directly: for each poste
 $(B, \Sigma)$, form the Cholesky factor $P$ of $\Sigma$, draw a random orthogonal $Q$ from the QR
 decomposition of a Gaussian matrix, sign-normalised so $Q$ is uniform on the orthogonal group, compute
 the candidate responses $A_1^h P Q$, and keep the draw only if the column of interest matches the imposed
-pattern, trying both signs since $-q$ is a rotation whenever $q$ is. Coefficients come from the Normal
-posterior conditional on each $\Sigma$, itself drawn from an inverse-Wishart posterior under a diffuse
-prior; a full Gibbs sampler is left to the exercises.
+pattern, trying both signs since $-q$ is a rotation whenever $q$ is. Coefficients and covariance come from the two-block Gibbs sampler derived above,
+using the independent prior $\Sigma\sim IW(m+2,I_m)$. Each retained iteration proposes
+one rotation. Keeping all admissible joint draws conditions this prior/posterior model
+on the sign event; searching until every coefficient draw has an admissible rotation
+would imply a different weighting.
+
+**Reading the computation.** The coefficient and covariance updates use current residuals and the same joint prior. A QR rotation preserves covariance; the sign check then selects admissible structural explanations rather than estimating signs from the data.
 
 ```{python}
-n_draws, hz = 4000, 3
-nu_bar, S_bar = X.shape[0] - k, resid.T @ resid
+n_draws, hz, burn_var = 4000, 3, 1000
+nu0, S0 = m + 2, np.eye(m)
+Sigma_d = Sigma_hat.copy()
 accepted = []
-for d in range(n_draws):
-    Sigma_d = stats.invwishart.rvs(df=nu_bar, scale=S_bar, random_state=rng)
+for d in range(n_draws + burn_var):
     Bb, Vb = coef_posterior(Sigma_d)
-    Bd = np.column_stack([rng.multivariate_normal(Bb[:, i], Vb[i]) for i in range(m)])
+    Bd = rng.multivariate_normal(Bb.ravel(order="F"), Vb).reshape(k,m,order="F")
+    current_residual = Y - X @ Bd
+    Sigma_d = stats.invwishart.rvs(df=nu0 + X.shape[0],
+                scale=S0 + current_residual.T @ current_residual, random_state=rng)
+    if d < burn_var:
+        continue
     Qm, Rm = np.linalg.qr(rng.standard_normal((m, m)))
     Qm = Qm * np.sign(np.diag(Rm))                 # uniform on the orthogonal group
     cand = impulse_responses(Bd[1:1 + m, :].T, np.linalg.cholesky(Sigma_d) @ Qm, Hi)
@@ -304,12 +363,12 @@ plt.tight_layout()
 plt.show()
 ```
 
-About an eighth of the candidate rotations survive, still leaving several hundred admissible models. The
-median responses are economically coherent: the rate rises by roughly two thirds of a percentage point on
-impact and returns to zero within three or four periods, while output and inflation fall by about a third
-and recover slowly, inflation more persistently than output. The left panel repeats the recursive result:
-the band contains the rate-first path throughout, but not the rate-last zero on impact, which the
-restriction that output falls excludes outright.
+Read the acceptance fraction as the proportion of proposed joint draws satisfying
+the imposed signs. On the restricted horizons the response bands have the requested
+direction by construction, so those signs are assumptions rather than discoveries.
+Later responses reveal implications of the dynamics under those restrictions.
+Compare their persistence and dispersion rather than expecting a fixed numerical
+acceptance rate or a specific response magnitude.
 
 That width mixes two things. Part is ordinary **estimation uncertainty**, the posterior uncertainty about
 $B$ and $\Sigma$ that widened the forecast bands. The rest is **identification uncertainty**: sign
@@ -329,18 +388,14 @@ because $\Sigma$ leaves $m(m-1)/2$ rotations free: recursive identification remo
 at the price of an ordering-dependent timing assumption, while sign restrictions keep every rotation
 consistent with the assumed signs and return a set of admissible models.
 
-::: {.exercises}
-**Exercises**
 
-1. Re-estimate with a much tighter prior ($\lambda_1 = 0.02$) and a much looser one ($\lambda_1 = 2.0$),
-   reporting how the posterior means and the width of the forecast bands change.
-2. Extend the simulation and estimation to a VAR(2), verifying that `build_xy` and the Minnesota prior
-   handle the extra lag and that the lag-2 coefficients are shrunk harder than the lag-1 coefficients.
-3. Replace the two-block scheme by a Gibbs sampler over $\Sigma$ and $B$, and compare the bands.
-4. Impose one restriction fewer, dropping the requirement that output falls, and report how the accepted
-   share and the width of the bands respond. What does that say about the price of weak assumptions?
-5. Compute recursive output responses under all six orderings; how many lie in the sign-restricted band?
-:::
+
+## Reading guide and sources
+
+Bauwens, Bayesian Econometrics (2013), Chapter 4; Greenberg (2008), Section 9.1, for correlated-equation likelihoods. The scheduled identification reading adds the structural restrictions beyond reduced-form estimation.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

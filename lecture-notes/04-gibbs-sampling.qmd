@@ -3,33 +3,36 @@ title: "Gibbs sampling"
 subtitle: "Lecture 4"
 ---
 
-## Sampling from full conditionals
+::: {.callout-tip}
+## Exercise session
+Practise the derivation and implementation in [Week 4: The workhorse](../exercise-sessions/04-gibbs-sampling.qmd).
+:::
 
-The previous lecture showed that posterior summaries are expectations we can estimate
-by averaging over samples, and that drawing those samples is the hard part. Importance
-sampling needed a good proposal over the whole parameter space at once, which becomes
-impossible as the dimension grows. The Gibbs sampler sidesteps the problem with a
-simple observation: even when the full joint posterior $p(\theta_1, \dots, \theta_k
-\mid y)$ is intractable, the **full conditional** distribution of each block given all
-the others is often a standard distribution we can sample from directly.
 
-The algorithm cycles through the blocks, updating each in turn from its full
-conditional while holding the rest at their current values. For two blocks the sweep is
+## Where the previous lecture left off
 
-$$
-\theta_1^{(t)} \sim p\big(\theta_1 \mid \theta_2^{(t-1)}, y\big),
-\qquad
-\theta_2^{(t)} \sim p\big(\theta_2 \mid \theta_1^{(t)}, y\big),
-$$
+Importance sampling and rejection sampling both work by borrowing a distribution $q$
+that we know how to draw from and correcting for the fact that it is not the target.
+Importance sampling reweights the draws; rejection sampling thins them. Both need $q$ to
+cover $f(\theta \mid {\bf x})$ everywhere the posterior has mass, and ideally with
+heavier tails, or the weights collapse onto a handful of draws and the acceptance rate
+collapses toward zero. That requirement is already awkward to satisfy in one dimension
+and becomes essentially hopeless as the dimension of $\theta$ grows: a proposal that
+covers a $k$-dimensional target well needs to get every marginal and every correlation
+roughly right at once, and the fraction of its draws that land where $f$ actually lives
+shrinks geometrically in $k$. Choosing $q$ was already the hard part of Lecture 3; in
+more than a few dimensions it stops being feasible at all.
 
-and we repeat this for many iterations. The draws form a Markov chain whose stationary
-distribution is exactly the joint posterior, so after an initial transient the chain
-produces (dependent) samples from the target. Gibbs sampling applies whenever every
-full conditional is a known, sampleable distribution. Conjugate priors are the usual
-way to engineer that situation, and the Bayesian linear regression model is the
-canonical example.
-
-We import the usual libraries and fix a seed.
+The Gibbs sampler responds to this by giving up on independent draws from the joint
+distribution altogether. Instead of proposing a whole vector $\theta$ at once, it updates
+one block of $\theta$ at a time, conditional on the current values of every other block.
+Each such move only ever needs a proposal for a low-dimensional, and often
+one-dimensional, conditional distribution, which is a far easier design problem, and in
+the models this course cares about the full conditionals turn out to be standard
+distributions we can sample from exactly. The price is that consecutive draws are no
+longer independent: each one is built from the last. What we gain in exchange is a method
+that scales to hundreds of parameters using only distributions we already know how to
+draw from one at a time.
 
 ```{python}
 import numpy as np
@@ -42,153 +45,346 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
-## The Bayesian linear regression model
+## A model where the joint is hard but the pieces are easy
 
-### First remove the matrix notation
-
-Suppose quarterly growth observations follow $y_i\mid\mu,\lambda\sim
-\mathcal N(\mu,1/\lambda)$ independently. We are uncertain about both typical
-growth $\mu$ and precision $\lambda$. Following UPM Class 3, use independent
-priors $\mu\sim\mathcal N(m_0,1/c_0)$ and
-$\lambda\sim\operatorname{Gamma}(a_0,b_0)$, with shape $a_0$ and rate $b_0$.
-In this subsection $c_0$ denotes prior precision for the mean; the regression
-model below uses its own inverse-Gamma parameters.
-
-The joint posterior kernel is
+The cleanest setting to see why this trade works is the **semi-conjugate normal model**.
+Suppose $x_1, \dots, x_n$ are drawn independently from a normal distribution with unknown
+mean $\mu$ and unknown precision $\tau = 1/\sigma^2$,
 
 $$
-p(\mu,\lambda\mid y)\propto
-\lambda^{a_0+n/2-1}
-\exp\left[-\frac{c_0}{2}(\mu-m_0)^2
--\lambda\left(b_0+\frac12\sum_i(y_i-\mu)^2\right)\right].
+x_i \mid \mu, \tau \sim \mathcal{N}\!\left(\mu, \tfrac{1}{\tau}\right), \qquad i = 1, \dots, n.
 $$
 
-Hold $\lambda$ fixed. The terms in $\mu$ are a quadratic, just as in Lecture 2:
+Both parameters are unknown, so we need priors for both. We choose them independently of
+each other,
 
 $$
-\mu\mid\lambda,y\sim\mathcal N\left(
-\frac{c_0m_0+n\lambda\bar y}{c_0+n\lambda},\frac{1}{c_0+n\lambda}\right).
+\mu \sim \mathcal{N}\!\left(m, \tfrac{1}{c}\right), \qquad
+\tau \sim \text{Gamma}\!\left(\tfrac{a}{2}, \tfrac{b}{2}\right),
 $$
 
-Hold $\mu$ fixed instead. The power of $\lambda$ and its exponential identify
-a Gamma kernel:
+a normal prior on the mean and a gamma prior on the precision, parameterised with the
+$1/2$'s so that the algebra below lines up with the usual normal-gamma notation. This is
+called **semi-conjugate**: each prior is conjugate to the likelihood if we imagine the
+*other* parameter were known, but the pair together is not jointly conjugate, because
+$\mu$'s prior does not know about $\tau$ and vice versa. Multiplying likelihood and
+priors and keeping every term,
 
 $$
-\lambda\mid\mu,y\sim\operatorname{Gamma}\left(
-a_0+\frac n2,b_0+\frac12\sum_i(y_i-\mu)^2\right).
+f(\mu, \tau \mid {\bf x}) \;\propto\;
+\underbrace{\tau^{n/2} \exp\!\left(-\frac{\tau}{2}\sum_{i=1}^n (x_i - \mu)^2\right)}_{\text{likelihood}}
+\times
+\underbrace{\exp\!\left(-\frac{c}{2}(\mu - m)^2\right)}_{\text{prior on } \mu}
+\times
+\underbrace{\tau^{a/2 - 1} \exp\!\left(-\frac{b}{2}\tau\right)}_{\text{prior on } \tau}.
 $$
 
-A mean far from the observations produces large residuals and tends to lower
-the next precision draw. That lower precision makes the next mean draw more
-uncertain. Gibbs sampling preserves this feedback by conditioning on the
-**current draw**, rather than fixing the other parameter at an estimate.
-
-### Why conditional updates preserve the joint posterior
-
-Write the target as $\pi(\mu,\lambda)$. If the current pair has this joint
-distribution, redraw $\mu'$ from $\pi(\mu'\mid\lambda)$. The resulting density is
+The sum of squares splits into a piece that does not involve $\mu$ and a piece that does,
+$\sum_i (x_i - \mu)^2 = (n-1)s^2 + n(\bar{x} - \mu)^2$, where $\bar{x}$ is the sample mean
+and $s^2$ the sample variance. Substituting this and collecting the two powers of $\tau$
+gives the joint posterior kernel
 
 $$
-\int\pi(\mu,\lambda)\pi(\mu'\mid\lambda)d\mu
-=\pi(\lambda)\pi(\mu'\mid\lambda)=\pi(\mu',\lambda).
+f(\mu, \tau \mid {\bf x}) \;\propto\;
+\tau^{\frac{a+n}{2} - 1}
+\exp\!\left(-\frac{c}{2}(\mu - m)^2 - \frac{\tau}{2}\Big[b + (n-1)s^2 + n(\bar{x} - \mu)^2\Big]\right).
 $$
 
-Updating $\lambda$ also preserves the joint distribution. This establishes
-invariance, not convergence from an arbitrary starting point; convergence also
-requires that the chain can explore the target appropriately. Lecture 7 checks
-whether finite runs provide usable numerical estimates.
+This expression is not the kernel of any distribution we have named. $\mu$ and $\tau$
+appear multiplied together inside the exponential, through the $\tau (\bar x - \mu)^2$
+term, so the joint density does not factor and no standard two-dimensional family
+matches it. Integrating it over $\mu$ or $\tau$ to get a marginal, or to get the
+normalising constant, is not something we can do by inspection. If this were the end of
+the story, the semi-conjugate model would be as intractable as the Cauchy example from
+Lecture 1.
 
-### Generalise the unknown mean to regression coefficients
+### The conditional posterior of $\mu$
 
-We work with the standard linear model
-
-$$
-y = X\beta + \varepsilon,
-\qquad
-\varepsilon \sim \mathcal{N}\!\big(0, \sigma^2 I_n\big),
-$$
-
-where $y$ is $n \times 1$, $X$ is $n \times k$, $\beta$ is the $k \times 1$ coefficient
-vector, and $\sigma^2$ is the error variance. The two unknowns are $\beta$ and
-$\sigma^2$. We place a conditionally conjugate **Normal prior** on the coefficients and an
-**inverse-Gamma prior** on the variance, treated as independent a priori:
+It is not the end of the story, because holding one parameter fixed dissolves the
+problem. Fix $\tau$ at its current value and look at the posterior kernel above as a
+function of $\mu$ alone; every factor that does not contain $\mu$, including the entire
+$\tau^{(a+n)/2-1}\exp(-\tau b/2 - \tau(n-1)s^2/2)$ block, is a constant that gets absorbed
+into the proportionality sign:
 
 $$
-\beta \sim \mathcal{N}(b_0, B_0),
-\qquad
-\sigma^2 \sim \text{Inverse-Gamma}(c_0, d_0).
+f(\mu \mid \tau, {\bf x}) \;\propto\;
+\exp\!\left(-\frac{c}{2}(\mu - m)^2 - \frac{n\tau}{2}(\mu - \bar{x})^2\right).
 $$
 
-This independent prior is often called **semi-conjugate**: both full conditionals
-are standard distributions, while the joint posterior is not Normal–inverse-Gamma.
-Do not confuse it with $\beta\mid\sigma^2\sim\mathcal N(b_0,\sigma^2B_0)$,
-whose coefficient prior variance scales with the error variance.
-
-## The full conditionals
-
-### Derive both from one joint kernel
-
-Define the inverse-Gamma convention explicitly:
-$p(\sigma^2)\propto(\sigma^2)^{-(c_0+1)}e^{-d_0/\sigma^2}$,
-$\sigma^2>0$. Combining likelihood and independent priors gives
+Both terms in the exponent are quadratic in $\mu$, so this is a normal kernel in
+disguise, and we uncover it by **completing the square**. Expand both squares and collect
+powers of $\mu$,
 
 $$
-p(\beta,\sigma^2\mid y)\propto
-(\sigma^2)^{-(c_0+n/2+1)}
-\exp\left[-\frac{d_0+\tfrac12(y-X\beta)^\top(y-X\beta)}{\sigma^2}
--\frac12(\beta-b_0)^\top B_0^{-1}(\beta-b_0)\right].
+-\frac{1}{2}\Big[c(\mu-m)^2 + n\tau(\mu-\bar{x})^2\Big]
+= -\frac{1}{2}\Big[(c + n\tau)\mu^2 - 2(cm + n\tau\bar{x})\mu + \big(cm^2 + n\tau\bar{x}^2\big)\Big].
 $$
 
-For the coefficient update, hold $\sigma^2$ fixed and expand the two quadratics:
+The bracket is a quadratic in $\mu$ with leading coefficient $c + n\tau$. Factor that
+coefficient out of the first two terms and add and subtract the square needed to make
+them a perfect square,
 
 $$
-\log p(\beta\mid\sigma^2,y)
-=C-\frac12\left[\beta^\top A\beta-2\beta^\top d\right],\qquad
-A=B_0^{-1}+\frac{X^\top X}{\sigma^2},\quad
-d=B_0^{-1}b_0+\frac{X^\top y}{\sigma^2}.
+-\frac{c+n\tau}{2}\left[\mu^2 - 2\mu \cdot \frac{cm+n\tau\bar{x}}{c+n\tau}\right]
+= -\frac{c+n\tau}{2}\left[\mu - \frac{cm+n\tau\bar{x}}{c+n\tau}\right]^2 + \text{const},
 $$
 
-The matrix version of completing the square is
+where "const" collects everything that does not involve $\mu$ and is absorbed by the
+proportionality sign. What remains is exactly the kernel of a normal density in $\mu$,
+with the quantity in brackets as the mean and the coefficient in front as the precision.
+Reading off the parameters,
 
 $$
-\beta^\top A\beta-2\beta^\top d
-=(\beta-A^{-1}d)^\top A(\beta-A^{-1}d)-d^\top A^{-1}d.
+\mu \mid \tau, {\bf x} \sim \mathcal{N}\!\left(\frac{cm + n\tau\bar{x}}{c + n\tau},\; \frac{1}{c + n\tau}\right).
 $$
 
-Thus the covariance is $A^{-1}$ and the mean is $A^{-1}d$. Positive definite
-$B_0$ makes $A$ positive definite even if $X$ has dependent columns.
+The posterior precision $c + n\tau$ adds the prior precision to the data precision
+$n\tau$, and the posterior mean is a precision-weighted average of the prior mean $m$
+and the sample mean $\bar{x}$: exactly the same weighted-average structure that appeared
+for the coin in Lecture 1, now with precisions in place of pseudo-counts. Notice that
+this conditional depends on $\tau$: a different current value of $\tau$ rescales how much
+weight the data get relative to the prior, which is precisely the coupling that made the
+joint distribution intractable in the first place.
 
-For the variance update, hold $\beta$ fixed. Its independent prior is now a
-constant, so the remaining terms are
+### The conditional posterior of $\tau$
+
+Now fix $\mu$ instead and look at the same kernel as a function of $\tau$. Every factor
+that does not contain $\tau$, here the entire $\exp(-c(\mu-m)^2/2)$ term, drops out of the
+proportionality:
 
 $$
-p(\sigma^2\mid\beta,y)\propto
-(\sigma^2)^{-(c_0+n/2+1)}
-\exp\left[-\frac{d_0+\tfrac12\operatorname{RSS}(\beta)}{\sigma^2}\right].
+f(\tau \mid \mu, {\bf x}) \;\propto\;
+\tau^{\frac{a+n}{2}-1} \exp\!\left(-\frac{\tau}{2}\Big[b + (n-1)s^2 + n(\bar{x}-\mu)^2\Big]\right).
 $$
 
-Read off the inverse-Gamma shape and scale. There is **no $k/2$ addition** here:
-that term would arise from a variance-scaled coefficient prior, which we have
-not used. A factor constant in $\beta$ need not be constant in $\sigma^2$.
+No completing the square is needed here; the exponent is already linear in $\tau$; we
+only have to **collect the exponents** correctly, which we already did when we combined
+the $\tau^{n/2}$ from the likelihood with the $\tau^{a/2-1}$ from the prior into
+$\tau^{(a+n)/2-1}$ above. What is left is precisely the kernel of a gamma density,
+$\tau^{\text{shape}-1}\exp(-\text{rate}\cdot\tau)$, with shape and rate read directly off
+the exponent and the power of $\tau$:
 
-**Coefficients given the variance.** With $\sigma^2$ fixed the likelihood is Gaussian
-in $\beta$, and combined with the Gaussian prior the full conditional is again Gaussian:
+$$
+\tau \mid \mu, {\bf x} \sim \text{Gamma}\!\left(\frac{a+n}{2},\; \frac{b + (n-1)s^2 + n(\bar{x}-\mu)^2}{2}\right).
+$$
+
+The shape parameter gains half the sample size, exactly as in the Poisson-gamma update
+of Lecture 1. The rate parameter gains half the residual sum of squares evaluated at the
+current $\mu$: the further the current $\mu$ sits from $\bar{x}$, the larger that sum of
+squares, the larger the rate, and the smaller $\tau$ tends to be drawn, which is sensible:
+a mean that fits the data badly should be paired with a larger error variance.
+
+Both conditionals are standard distributions, even though the joint posterior we started
+from is not, and this is the entire mechanism the Gibbs sampler exploits. The obstacle
+that stopped us, the cross term $\tau(\bar{x}-\mu)^2$ coupling the two parameters together,
+is precisely what disappears once we condition on one of them.
+
+## The Gibbs sampler as an algorithm
+
+The two conditionals above suggest an obvious scheme, informally: start somewhere,
+alternately update $\mu$ from its conditional given the current $\tau$ and $\tau$ from
+its conditional given the new $\mu$, and repeat. In general, for a parameter vector
+$\theta = (\theta_1, \dots, \theta_k)$ whose full conditionals $f(\theta_i \mid
+\theta_{-i}, {\bf x})$, meaning $\theta_i$ given every other block and the data, are all
+known and sampleable, the **Gibbs sampler** is
+
+> Fix an initial value $\theta^{(0)} = (\theta_1^{(0)}, \dots, \theta_k^{(0)})$. For
+> $t = 1, 2, \dots$, successively draw
+> $$
+> \theta_i^{(t)} \sim f\!\left(\theta_i \mid \theta_1^{(t)}, \dots, \theta_{i-1}^{(t)},
+> \theta_{i+1}^{(t-1)}, \dots, \theta_k^{(t-1)}, {\bf x}\right), \qquad i = 1, \dots, k,
+> $$
+> updating each block using the newest values of the blocks already visited in sweep
+> $t$ and the previous sweep's values for the blocks not yet visited.
+
+For our two-block model this is: draw $\tau^{(t)}$ from $f(\tau \mid \mu^{(t-1)}, {\bf
+x})$, then draw $\mu^{(t)}$ from $f(\mu \mid \tau^{(t)}, {\bf x})$, and repeat. Every
+single draw comes from a distribution we derived in closed form above, so the whole
+sampler is two lines inside a loop.
+
+### Why this leaves the joint distribution invariant
+
+It is not obvious on first sight that chaining together draws from *conditional*
+distributions should ever reproduce the *joint* distribution, so it is worth an argument
+rather than a assertion. Suppose $(\mu^{(t-1)}, \tau^{(t-1)})$ is itself a draw from the
+true joint posterior $f(\mu, \tau \mid {\bf x})$. Draw $\tau^{(t)}$ from $f(\tau \mid
+\mu^{(t-1)}, {\bf x})$: the pair $(\mu^{(t-1)}, \tau^{(t)})$ is then also a draw from the
+joint posterior, because sampling $\mu$ from its marginal and then $\tau$ from $f(\tau
+\mid \mu, {\bf x})$ is, by the definition of a conditional density, exactly how one
+samples from a joint distribution with that marginal and that conditional. Now draw
+$\mu^{(t)}$ from $f(\mu \mid \tau^{(t)}, {\bf x})$ by the same argument with the roles
+reversed: $(\mu^{(t)}, \tau^{(t)})$ is again a draw from the joint posterior. So *if* a
+sweep starts at a joint draw, it ends at a joint draw. The joint posterior is therefore a
+**stationary distribution** of the Markov chain the sampler generates: pushing it through
+one sweep of the transition returns the same distribution.
+
+This is a statement about **detailed balance** in disguise, restricted to what we need
+here. A Markov chain with transition kernel $P$ leaves a distribution $\pi$ stationary
+whenever $\int \pi(\theta) P(\theta \to \theta') \, d\theta = \pi(\theta')$ for every
+$\theta'$; the argument above is exactly this integral, carried out one block at a time
+instead of all at once. We do not need each individual full-conditional update to satisfy
+the stronger, symmetric condition $\pi(\theta)P(\theta\to\theta') =
+\pi(\theta')P(\theta'\to\theta)$ that reversible chains satisfy move by move; it is
+enough that the *composition* of the $k$ conditional updates in one sweep preserves
+$\pi$, which the argument above establishes directly. That is why the derivation above,
+done once per block, is the entire justification: it never used anything about $\mu$ and
+$\tau$ beyond the fact that they are the two coordinates of the posterior we started
+from, so the same argument goes through unchanged for $k$ blocks instead of two.
+
+## Markov chain basics needed to trust the output
+
+Knowing that the joint posterior is *a* stationary distribution of the chain is not yet
+enough; we also need it to be the chain's *unique* long-run behaviour, and we need to
+know how to read a finite run of a chain that only reaches that behaviour in the limit.
+Four ideas do the necessary work.
+
+**Irreducibility** means the chain can reach any region of positive posterior
+probability from any starting point, in a finite number of steps. If the support of
+$\mu$ or $\tau$ were disconnected, or if the conditional draws could get trapped in a
+subregion, the chain would never explore the whole posterior no matter how long we ran
+it. **Aperiodicity** rules out the chain cycling through a fixed set of states in a
+rigid pattern rather than settling down; for a chain with continuous full conditionals,
+as ours are, this is essentially automatic. Together, irreducibility and aperiodicity
+guarantee that the chain has a *unique* stationary distribution and converges to it from
+any starting value, which combined with the invariance argument above tells us that
+unique stationary distribution must be the posterior we constructed the sampler from.
+
+**Stationarity** is the property established above: once the chain's distribution at
+time $t$ is the posterior, it stays the posterior at every later time. The chain does not
+start there, however; it starts at whatever initial value we chose, which typically has
+tiny posterior probability, and the distribution of $\theta^{(t)}$ only converges to the
+posterior as $t \to \infty$. The initial iterations, before that convergence has
+happened, are called the **burn-in**, and we discard them because they carry information
+about the arbitrary starting point rather than about the posterior. There is no exact
+formula for how long is enough; in practice one runs long enough that trace plots look
+stationary and discards a segment comfortably longer than that.
+
+Finally, once the chain has converged, its draws are *dependent*, unlike the independent
+Monte Carlo draws of Lecture 1, because $\theta^{(t)}$ was built directly from
+$\theta^{(t-1)}$. The law of large numbers assumed independence, so it does not directly
+apply; what rescues us is the **ergodic theorem** for Markov chains, which says that for
+an irreducible, aperiodic chain with stationary distribution $\pi$, the sample average of
+any function $g$ along one long run still converges to the posterior expectation,
+
+$$
+\frac{1}{T}\sum_{t=1}^{T} g\!\left(\theta^{(t)}\right) \;\longrightarrow\; E_\pi[g(\theta)]
+\qquad \text{almost surely as } T \to \infty,
+$$
+
+even though the terms being averaged are correlated. This is the theorem that licenses
+everything we do with Gibbs output: posterior means, credible intervals, and marginal
+histograms are all sample averages of some function $g$ along the chain, and the ergodic
+theorem says they converge to the right answer regardless of the dependence, provided we
+let the chain run long enough and have discarded the burn-in.
+
+## Running the sampler and checking it against the truth
+
+We now put the derivation to work. So that we know the right answer, we simulate data
+from the model with a chosen true mean and standard deviation.
+
+```{python}
+truemu, truesigma = 10.0, 2.0
+n = 200
+x = rng.normal(truemu, truesigma, size=n)
+
+xbar, s2 = x.mean(), x.var(ddof=1)
+m, c = 0.0, 0.001            # vague Normal prior on mu
+a, b = 1.0, 1.0               # vague Gamma prior on tau
+print(f"xbar = {xbar:.4f}, s2 = {s2:.4f}  (true mu = {truemu}, true sigma = {truesigma})")
+```
+
+The sample mean and variance are close to the values we simulated from, as they should
+be with $n = 200$; they are also the two numbers, together with $n$, that enter every
+full conditional above, which is why they were worth printing before anything else. The
+Gibbs sampler alternates the two draws derived above, starting $\mu$ at a deliberately
+poor value to make the burn-in visible.
+
+```{python}
+burn, n_iter = 1000, 10_000
+total = burn + n_iter
+mu_draws = np.empty(total)
+tau_draws = np.empty(total)
+
+mu = 40.0                                  # deliberately far from the truth
+for t in range(total):
+    rate_tau = 0.5 * (b + (n - 1) * s2 + n * (mu - xbar) ** 2)
+    tau = rng.gamma(0.5 * (a + n), 1.0 / rate_tau)
+    mu = rng.normal((c * m + n * tau * xbar) / (c + n * tau),
+                    1.0 / np.sqrt(c + n * tau))
+    mu_draws[t], tau_draws[t] = mu, tau
+
+mu_post, tau_post = mu_draws[burn:], tau_draws[burn:]
+sigma_post = 1.0 / np.sqrt(tau_post)
+print(f"kept {mu_post.size} draws after discarding {burn} for burn-in")
+```
+
+Sampling $\tau$ before $\mu$ in each sweep, rather than the other order used in the
+derivation, changes nothing about the argument above: the two full conditionals are
+still exactly what we derived, and either visiting order leaves the joint posterior
+stationary. With very vague priors, $c$ close to zero and $a, b$ close to zero, the
+posterior of $\mu$ should reduce nearly to the textbook result for an unknown-variance
+normal sample: a Student-$t$ distribution centred at $\bar{x}$ with $n - 1$ degrees of
+freedom and scale $s / \sqrt{n}$. That classical result is exactly the closed-form
+answer this problem has when priors are flat enough, so it is the natural benchmark to
+check the sampler against.
+
+```{python}
+t_ref = stats.t(df=n - 1, loc=xbar, scale=np.sqrt(s2 / n))
+grid = np.linspace(mu_post.min(), mu_post.max(), 400)
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
+axes[0].hist(mu_post, bins=40, density=True, alpha=0.7, color="steelblue", label="Gibbs draws")
+axes[0].plot(grid, t_ref.pdf(grid), "r-", lw=2, label="reference $t_{n-1}$")
+axes[0].axvline(truemu, color="black", ls=":", label="true $\\mu$")
+axes[0].set_xlabel(r"$\mu$"); axes[0].legend(fontsize=9)
+axes[1].hist(sigma_post, bins=40, density=True, alpha=0.7, color="darkorange")
+axes[1].axvline(truesigma, color="black", ls=":", label="true $\\sigma$")
+axes[1].set_xlabel(r"$\sigma$"); axes[1].legend(fontsize=9)
+fig.suptitle("Gibbs draws for the semi-conjugate normal model")
+plt.tight_layout(); plt.show()
+
+print(f"posterior mean(mu)    {mu_post.mean():.4f}   reference t mean {t_ref.mean():.4f}")
+print(f"posterior mean(sigma) {sigma_post.mean():.4f}   true sigma {truesigma}")
+```
+
+The histogram of sampled $\mu$ values overlays the reference Student-$t$ curve almost
+exactly, which is the check the whole derivation was building toward: a method that
+never touched the joint normalising constant has reproduced a distribution we can also
+get by a completely different, purely classical route. The posterior mean of $\sigma$
+sits close to the true value of $2$, with the visible remaining spread reflecting that
+$n = 200$ is finite. This is precisely the ergodic theorem in action: a long, dependent
+sequence of draws has produced sample averages that match the target as reliably as an
+independent Monte Carlo sample would.
+
+## From two blocks to many: the regression model
+
+The semi-conjugate normal model has two scalar blocks. Lecture 2 introduced Bayesian
+linear regression, $y = X\beta + \varepsilon$ with $\varepsilon \sim \mathcal{N}(0,
+\sigma^2 I_n)$, as a model whose posterior is available in closed form only for
+particular conjugate priors and only after an integral that gets uglier as $k$ grows.
+The Gibbs sampler turns that same model into a two-block problem exactly like the one
+above, except that one block is now a $k$-dimensional vector instead of a scalar, and it
+is the paired exercise for this week because it is the natural bridge from the toy
+two-parameter case to a model of real applied size.
+
+We place a conjugate **Normal prior** on the coefficients and an **inverse-gamma prior**
+on the variance, independent of each other exactly as $\mu$ and $\tau$ were above,
+
+$$
+\beta \sim \mathcal{N}(b_0, B_0), \qquad \sigma^2 \sim \text{Inverse-Gamma}(c_0, d_0).
+$$
+
+The same two-step logic as before, fixing $\sigma^2$ and completing the square in the
+vector $\beta$, or fixing $\beta$ and collecting the exponents of $\sigma^2$, gives the
+full conditionals
 
 $$
 \beta \mid \sigma^2, y \sim \mathcal{N}(b_1, B_1),
 \qquad
 B_1 = \left( B_0^{-1} + \tfrac{1}{\sigma^2} X^\top X \right)^{-1},
 \qquad
-b_1 = B_1 \left( B_0^{-1} b_0 + \tfrac{1}{\sigma^2} X^\top y \right).
+b_1 = B_1 \left( B_0^{-1} b_0 + \tfrac{1}{\sigma^2} X^\top y \right),
 $$
-
-The posterior precision $B_1^{-1}$ adds the prior precision $B_0^{-1}$ to the data
-precision $\frac{1}{\sigma^2} X^\top X$, and the posterior mean is a precision-weighted
-average of the prior mean and the least-squares fit.
-
-**Variance given the coefficients.** With $\beta$ fixed the residuals $e = y - X\beta$
-are known, and the inverse-Gamma prior is conjugate to the Gaussian likelihood for the
-variance, giving an inverse-Gamma full conditional:
 
 $$
 \sigma^2 \mid \beta, y \sim \text{Inverse-Gamma}\!\left(
@@ -196,215 +392,321 @@ c_0 + \tfrac{n}{2},\;\; d_0 + \tfrac{1}{2}(y - X\beta)^\top (y - X\beta)
 \right).
 $$
 
-The shape parameter gains half the sample size and the scale parameter gains half the
-residual sum of squares. The Gibbs sampler simply alternates between these two draws.
+The posterior precision matrix $B_1^{-1}$ adds the prior precision $B_0^{-1}$ to the data
+precision $\tfrac{1}{\sigma^2}X^\top X$, in exact matrix analogy to $c + n\tau$ above; the
+scale parameter of the inverse-gamma gains half the residual sum of squares, in exact
+analogy to the rate of $\tau$'s conditional. Nothing new happens except that scalars
+become vectors and matrices; the derivation is the same completing-the-square and
+exponent-collecting argument carried out coordinate by coordinate at once.
 
-## Simulating data with known coefficients
-
-So that we know the right answer, we simulate data from the model with chosen true
-coefficients and a chosen error variance. We include an intercept and two regressors.
+So that we know the right answer here too, we simulate a regression with three
+coefficients, including an intercept.
 
 ```{python}
-n, k = 200, 3
-beta_true = np.array([1.5, -2.0, 0.8])     # intercept and two slopes
+n_r, k_r = 200, 3
+beta_true = np.array([1.5, -2.0, 0.8])
 sigma2_true = 1.3
 
-X = np.column_stack([np.ones(n),
-                     rng.normal(size=n),
-                     rng.normal(size=n)])
-y = X @ beta_true + rng.normal(scale=np.sqrt(sigma2_true), size=n)
+X = np.column_stack([np.ones(n_r), rng.normal(size=n_r), rng.normal(size=n_r)])
+y = X @ beta_true + rng.normal(scale=np.sqrt(sigma2_true), size=n_r)
 
-# OLS benchmark for comparison
 beta_ols = np.linalg.solve(X.T @ X, X.T @ y)
-resid_ols = y - X @ beta_ols
-sigma2_ols = resid_ols @ resid_ols / (n - k)
+sigma2_ols = ((y - X @ beta_ols) ** 2).sum() / (n_r - k_r)
 print("true beta :", beta_true)
 print("OLS  beta :", np.round(beta_ols, 3))
 print(f"true sigma2 {sigma2_true:.3f}   OLS sigma2 {sigma2_ols:.3f}")
 ```
 
-## Implementing the Gibbs sampler from scratch
-
-We set weakly informative priors: a wide Normal on $\beta$ centred at zero and a
-diffuse inverse-Gamma on $\sigma^2$. We then alternate the two full-conditional draws
-for a fixed number of iterations, storing every draw. We sample the inverse-Gamma by
-drawing a Gamma variate and taking its reciprocal, since if $G \sim
-\text{Gamma}(\text{shape}, \text{rate})$ then $1/G \sim
-\text{Inverse-Gamma}(\text{shape}, \text{rate})$.
+We set weakly informative priors and alternate the two full-conditional draws, sampling
+the inverse-gamma by drawing a gamma variate and inverting it, since if $G \sim
+\text{Gamma}(\text{shape}, \text{rate})$ then $1/G \sim \text{Inverse-Gamma}(\text{shape},
+\text{rate})$.
 
 ```{python}
-# Priors
-b0 = np.zeros(k)
-B0 = np.eye(k) * 100.0          # wide Normal prior on beta
-B0_inv = np.linalg.inv(B0)
-c0, d0 = 0.01, 0.01             # diffuse inverse-Gamma on sigma^2
+b0, B0_inv = np.zeros(k_r), np.linalg.inv(np.eye(k_r) * 100.0)
+c0, d0 = 0.01, 0.01
+n_iter_r = 4000
+beta_draws, sigma2_draws = np.empty((n_iter_r, k_r)), np.empty(n_iter_r)
 
-# Storage
-n_iter = 4000
-beta_draws = np.empty((n_iter, k))
-sigma2_draws = np.empty(n_iter)
-
-# Initial value for sigma^2
-sigma2 = sigma2_ols
-XtX = X.T @ X
-Xty = X.T @ y
-
-for t in range(n_iter):
-    # 1) beta | sigma^2, y  ~  Normal(b1, B1)
+sigma2, XtX, Xty = sigma2_ols, X.T @ X, X.T @ y
+for t in range(n_iter_r):
     B1 = np.linalg.inv(B0_inv + XtX / sigma2)
     b1 = B1 @ (B0_inv @ b0 + Xty / sigma2)
-    L = np.linalg.cholesky(B1)
-    beta = b1 + L @ rng.standard_normal(k)
+    beta = b1 + np.linalg.cholesky(B1) @ rng.standard_normal(k_r)
 
-    # 2) sigma^2 | beta, y  ~  Inverse-Gamma(shape, scale)
     resid = y - X @ beta
-    shape = c0 + n / 2
-    scale = d0 + 0.5 * (resid @ resid)
-    sigma2 = 1.0 / rng.gamma(shape, 1.0 / scale)
-
-    beta_draws[t] = beta
-    sigma2_draws[t] = sigma2
+    sigma2 = 1.0 / rng.gamma(c0 + n_r / 2, 1.0 / (d0 + 0.5 * (resid @ resid)))
+    beta_draws[t], sigma2_draws[t] = beta, sigma2
 
 print("sampler finished:", beta_draws.shape, sigma2_draws.shape)
 ```
 
-## Burn-in
-
-The chain starts from an arbitrary point and needs a few iterations to reach the region
-of high posterior probability. The early draws reflect the starting value rather than
-the posterior, so we discard an initial **burn-in** segment before computing any
-summaries. Here the sampler mixes quickly, so a modest burn-in is ample; we drop the
-first 1000 draws. A fuller treatment of convergence diagnostics, how to choose burn-in,
-assess mixing, and measure autocorrelation, comes in Lecture 5.
+As before we discard an initial burn-in segment before summarising, this time a shorter
+one because the regression conditionals mix quickly.
 
 ```{python}
-burn = 1000
-beta_post = beta_draws[burn:]
-sigma2_post = sigma2_draws[burn:]
-print(f"kept {beta_post.shape[0]} draws after discarding {burn} for burn-in")
+burn_r = 500
+beta_post, sigma2_post = beta_draws[burn_r:], sigma2_draws[burn_r:]
+
+table = pd.DataFrame({
+    "true": beta_true, "OLS": beta_ols,
+    "post mean": beta_post.mean(axis=0),
+    "2.5%": np.quantile(beta_post, 0.025, axis=0),
+    "97.5%": np.quantile(beta_post, 0.975, axis=0),
+}, index=["beta0", "beta1", "beta2"])
+print(table.round(3))
+print(f"\nsigma2: true {sigma2_true:.3f}  OLS {sigma2_ols:.3f}  "
+      f"post mean {sigma2_post.mean():.3f}")
 ```
 
-## Trace plots
-
-A trace plot shows the sampled value against iteration. A healthy chain looks like a
-stationary, noisy band with no trend or drift, which signals that it is exploring the
-posterior rather than still travelling toward it. We plot the full chains, including the
-burn-in region, with the discarded segment marked.
+The posterior means sit within a few thousandths of the OLS estimates and close to the
+true coefficients, exactly as the vague-prior weighted-average argument predicts: with
+$B_0^{-1}$ nearly zero, the posterior precision is dominated by $X^\top X / \sigma^2$ and
+the posterior mean collapses onto the least-squares fit. What the sampler adds beyond a
+point estimate is the full joint posterior, visualised below for each coefficient.
 
 ```{python}
 labels = [r"$\beta_0$ (intercept)", r"$\beta_1$", r"$\beta_2$"]
-fig, axes = plt.subplots(2, 2, figsize=(10, 6))
-axes = axes.ravel()
-for j in range(k):
-    axes[j].plot(beta_draws[:, j], lw=0.6)
-    axes[j].axhline(beta_true[j], color="black", ls=":", lw=1)
-    axes[j].axvline(burn, color="red", lw=1, alpha=0.6)
-    axes[j].set_title(labels[j])
-    axes[j].set_xlabel("iteration")
-axes[3].plot(sigma2_draws, lw=0.6, color="darkgreen")
-axes[3].axhline(sigma2_true, color="black", ls=":", lw=1)
-axes[3].axvline(burn, color="red", lw=1, alpha=0.6)
-axes[3].set_title(r"$\sigma^2$")
-axes[3].set_xlabel("iteration")
-fig.suptitle("Trace plots (dotted = true value, red line = end of burn-in)")
-plt.tight_layout()
-plt.show()
-```
-
-The chains settle immediately into a stable band centred near the true values, with the
-burn-in region indistinguishable from the rest, confirming that the sampler mixes well
-for this model.
-
-## Posterior summaries and comparison to OLS
-
-With the post-burn-in draws in hand, every posterior summary is a sample average, just
-as in the Monte Carlo lecture. We report posterior means and 95% credible intervals and
-place them next to the OLS estimates and the true values.
-
-```{python}
-post_mean = beta_post.mean(axis=0)
-ci = np.quantile(beta_post, [0.025, 0.975], axis=0)
-
-table = pd.DataFrame({
-    "true": beta_true,
-    "OLS": beta_ols,
-    "post mean": post_mean,
-    "2.5%": ci[0],
-    "97.5%": ci[1],
-}, index=["beta0", "beta1", "beta2"])
-print(table.round(3))
-
-print(f"\nsigma^2:  true {sigma2_true:.3f}   OLS {sigma2_ols:.3f}   "
-      f"post mean {sigma2_post.mean():.3f}   "
-      f"95% CI [{np.quantile(sigma2_post, 0.025):.3f}, "
-      f"{np.quantile(sigma2_post, 0.975):.3f}]")
-```
-
-The posterior means coincide with the OLS estimates to three decimals. This is expected:
-with a very diffuse prior the data dominate, so the Bayesian posterior mean and the
-least-squares estimate agree. The advantage of the Gibbs output is that we also have the
-full posterior, including credible intervals and the joint uncertainty over all
-parameters, obtained by exactly the same machinery that would handle a model where OLS
-does not apply.
-
-## Posterior histograms
-
-Finally we plot the marginal posterior of each coefficient with the true value and the
-OLS estimate overlaid. The histograms are the empirical marginal posteriors built from
-the kept draws.
-
-```{python}
-fig, axes = plt.subplots(1, 3, figsize=(11, 3.6))
-for j in range(k):
-    axes[j].hist(beta_post[:, j], bins=40, density=True,
-                 color="steelblue", alpha=0.85)
-    axes[j].axvline(beta_true[j], color="black", ls=":", lw=1.5,
-                    label="true")
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.4))
+for j in range(k_r):
+    axes[j].hist(beta_post[:, j], bins=40, density=True, color="steelblue", alpha=0.85)
+    axes[j].axvline(beta_true[j], color="black", ls=":", lw=1.5, label="true")
     axes[j].axvline(beta_ols[j], color="red", lw=1.2, label="OLS")
     axes[j].set_title(labels[j])
-    axes[j].set_xlabel("value")
-axes[0].legend()
-fig.suptitle("Marginal posteriors with true and OLS values")
-plt.tight_layout()
-plt.show()
+axes[0].legend(fontsize=8)
+fig.suptitle("Marginal posteriors from the regression Gibbs sampler")
+plt.tight_layout(); plt.show()
 ```
 
-Each posterior is tightly concentrated around the true coefficient, with the OLS
-estimate sitting essentially on top of the posterior mode. The width of each histogram
-is the posterior uncertainty about that coefficient, the quantity that the credible
-intervals summarise.
+Each marginal posterior is tightly concentrated around the corresponding true
+coefficient, with the OLS estimate essentially at the mode. The width of each histogram
+is the posterior uncertainty the credible intervals in the table summarise, obtained here
+from a loop of one Normal draw and one inverse-gamma draw, the same two-line structure as
+the semi-conjugate model above, just with a vector and a matrix in place of two scalars.
+
+## Data augmentation: when a latent variable makes the hard part easy
+
+Not every model comes with conditionally conjugate blocks sitting in plain sight. Often
+the trick is to introduce an extra unobserved quantity, a **latent variable**, that we
+never actually cared about, purely because conditioning on it turns an intractable
+posterior into a collection of easy ones. This idea, **data augmentation**, is exactly
+what powers the smartphone-clustering case study paired with this lecture, and it is
+worth building the same mechanism ourselves on a simulated dataset small enough to see
+what is happening.
+
+Consider $N$ individuals answering $M$ binary questions, and suppose each individual
+belongs to one of $K$ unobserved groups, or **latent classes**, that differ in how likely
+they are to answer each question positively. Writing $x_i = (x_{i1}, \dots, x_{iM})$ for
+individual $i$'s answers and $z_i \in \{1, \dots, K\}$ for their unobserved class, the
+model is
+
+$$
+\Pr(z_i = k) = w_k, \qquad
+\Pr(x_{im} = 1 \mid z_i = k) = \theta_{km},
+$$
+
+with priors $w \sim \text{Dirichlet}(\delta_1, \dots, \delta_K)$ on the class
+probabilities and $\theta_{km} \sim \text{Beta}(\alpha_{km}, \beta_{km})$ independently
+for each class $k$ and question $m$. Marginalising $z_i$ out gives the actual likelihood
+of the observed answers, a $K$-component mixture of products of Bernoullis,
+
+$$
+\Pr(x_i \mid w, \theta) = \sum_{k=1}^{K} w_k \prod_{m=1}^{M} \theta_{km}^{x_{im}} (1-\theta_{km})^{1-x_{im}},
+$$
+
+and this mixture is exactly the kind of joint posterior that resists a direct Gibbs
+treatment: $w$ and $\theta$ are tangled together inside a sum, the same way $\mu$ and
+$\tau$ were tangled inside the exponential of the normal model, except now there is no
+completing-the-square move that untangles them. Augmenting the parameter vector with the
+latent labels $z = (z_1, \dots, z_N)$ removes the sum: *given* $z$, we know exactly which
+class each observation belongs to, and the model separates into $K$ independent
+Beta-Bernoulli and Dirichlet-multinomial updates, each of which we already know how to do
+in closed form.
+
+Conditioning on the data and the other blocks gives three full conditionals, all
+standard. The class label is categorical with probabilities proportional to how well
+each class explains that individual's answers,
+
+$$
+\Pr(z_i = k \mid x_i, w, \theta) \;\propto\; w_k \prod_{m=1}^{M} \theta_{km}^{x_{im}} (1-\theta_{km})^{1-x_{im}},
+$$
+
+the class probabilities are Dirichlet in the counts assigned to each class,
+$w \mid z \sim \text{Dirichlet}(\delta_1 + N_1, \dots, \delta_K + N_K)$ with $N_k$ the
+number of individuals currently labelled $k$, and each feature probability is Beta in the
+answers of individuals currently assigned to that class,
+$\theta_{km} \mid x, z \sim \text{Beta}\big(\alpha_{km} + \sum_i \mathbb{1}(z_i=k)x_{im},\;
+\beta_{km} + \sum_i \mathbb{1}(z_i=k)(1-x_{im})\big)$. We simulate a simplified version of
+the smartphone questionnaire, two classes and six questions, with genuinely different
+usage patterns.
+
+```{python}
+N, M, K = 300, 6, 2
+theta_true = np.array([[0.85, 0.75, 0.20, 0.30, 0.80, 0.15],   # heavy users
+                       [0.20, 0.15, 0.75, 0.70, 0.25, 0.80]])  # light users
+w_true = np.array([0.55, 0.45])
+
+z_true = rng.choice(K, size=N, p=w_true)
+X_bin = rng.binomial(1, theta_true[z_true])
+print(f"simulated {N} respondents, class sizes: {np.bincount(z_true)}")
+```
+
+The Gibbs sampler cycles through the three conditionals above, initialising the labels
+at random so that the chain has to find the two groups on its own rather than being told
+where they are.
+
+```{python}
+delta = np.ones(K)
+alpha_p, beta_p = np.ones((K, M)), np.ones((K, M))
+n_iter_m = 1500
+z = rng.integers(0, K, size=N)
+theta_draws, w_draws = np.empty((n_iter_m, K, M)), np.empty((n_iter_m, K))
+
+for t in range(n_iter_m):
+    Nk = np.array([(z == k).sum() for k in range(K)])
+    ones = np.array([X_bin[z == k].sum(axis=0) if Nk[k] > 0 else np.zeros(M) for k in range(K)])
+    theta = rng.beta(alpha_p + ones, beta_p + Nk[:, None] - ones)
+    w = rng.dirichlet(delta + Nk)
+
+    logp = (np.log(w)[None, :] + X_bin @ np.log(theta).T
+            + (1 - X_bin) @ np.log(1 - theta).T)              # (N, K)
+    probs = np.exp(logp - logp.max(axis=1, keepdims=True))
+    probs /= probs.sum(axis=1, keepdims=True)
+    z = np.array([rng.choice(K, p=probs[i]) for i in range(N)])
+    theta_draws[t], w_draws[t] = theta, w
+```
+
+### The label-switching problem
+
+The likelihood above is completely unchanged if we relabel every class simultaneously,
+swapping "class 1" and "class 2" everywhere at once: the class probabilities permute, the
+$\theta$ rows permute, and $\Pr(x_i \mid w, \theta)$ is identical either way. Nothing in
+the model, the prior, or the sampler breaks this symmetry, so the chain is free to flip
+which physical group it calls "class 1" partway through the run. This is
+**label switching**, and it is a structural feature of every mixture model, not a bug in
+this particular sampler; ignoring it and simply averaging the raw draws of, say,
+$\theta_{1,1}$ can average together numbers that belong to different physical groups and
+produce a meaningless posterior mean. Rather than assert this, we can force it into the
+open: rerun the class-assignment step of the sampler several times, each time starting
+from independently randomised initial labels on the same simulated data, and look only
+at where each short run ends up.
+
+```{python}
+n_chains, n_iter_c = 6, 400
+final_theta0 = np.empty(n_chains)
+for chain in range(n_chains):
+    rng_c = np.random.default_rng(3000 + chain)
+    z_c = rng_c.integers(0, K, size=N)
+    for t in range(n_iter_c):
+        Nk = np.array([(z_c == k).sum() for k in range(K)])
+        ones = np.array([X_bin[z_c == k].sum(axis=0) if Nk[k] > 0 else np.zeros(M) for k in range(K)])
+        theta_c = rng_c.beta(alpha_p + ones, beta_p + Nk[:, None] - ones)
+        w_c = rng_c.dirichlet(delta + Nk)
+        logp = (np.log(w_c)[None, :] + X_bin @ np.log(theta_c).T
+                + (1 - X_bin) @ np.log(1 - theta_c).T)
+        probs = np.exp(logp - logp.max(axis=1, keepdims=True))
+        probs /= probs.sum(axis=1, keepdims=True)
+        z_c = np.array([rng_c.choice(K, p=probs[i]) for i in range(N)])
+    final_theta0[chain] = theta_c[0, 0]
+print("final Pr(question 1 = yes | class 0), six independently started chains:")
+print(np.round(final_theta0, 3))
+```
+
+The six chains split cleanly into two groups: some end with class $0$ near $0.85$,
+matching the heavy users, and others end with class $0$ near $0.15$, matching the light
+users, purely as a function of the random labels each chain happened to start from. The
+data and the model are identical across all six runs; only the arbitrary initial guess
+decided which physical group got called "class 0". This is label switching laid bare,
+and it shows why a posterior mean of $\theta_{0,1}$ computed by pooling chains, or even
+computed within a single chain that happens to cross between the two modes, is not
+automatically meaningful.
+
+We deal with it by a simple relabelling rule: after the chain has run, orient every draw
+so that class $0$ is the one with the higher probability on question 1, swapping the two
+rows of $\theta$ and the two entries of $w$ whenever they come out the other way round.
+Applying the rule to our long main chain from earlier,
+
+```{python}
+burn_m = 300
+theta_post, w_post = theta_draws[burn_m:], w_draws[burn_m:]
+swapped = theta_post[:, 0, 0] < theta_post[:, 1, 0]
+print(f"fraction of kept draws with classes swapped relative to draw 1: {swapped.mean():.3f}")
+
+theta_aligned = theta_post.copy()
+theta_aligned[swapped] = theta_post[swapped][:, ::-1, :]
+w_aligned = w_post.copy()
+w_aligned[swapped] = w_post[swapped][:, ::-1]
+
+print("posterior mean of theta, class 0 (heavy users):", np.round(theta_aligned[:, 0].mean(axis=0), 3))
+print("posterior mean of theta, class 1 (light users):", np.round(theta_aligned[:, 1].mean(axis=0), 3))
+print("true theta, heavy users: ", theta_true[0], "  true theta, light users:", theta_true[1])
+print("posterior mean of w:", np.round(w_aligned.mean(axis=0), 3), "  true w:", w_true)
+```
+
+Within this particular long chain the swapped fraction comes out at zero: the two
+groups here are separated enough, and each hard class assignment reinforces itself
+strongly enough, that this one run never happens to cross between the two equally valid
+labellings in its length. That is not a contradiction of the demonstration above; it is
+the same phenomenon viewed from the other side. Instead of one chain wandering across
+both labellings, we saw six independent short chains split between them, which is
+exactly what "two equally likely labellings" predicts when a single chain is unlikely to
+switch. Either way the lesson is the same: nothing in the model prefers one labelling
+over the other, so the fix, fixing an identifying rule after the run and reorienting
+every draw or every chain by it, is required whenever the symmetry could in principle
+bite, whether or not it happens to show up inside this particular run. Once the main
+chain is reoriented, its posterior means of $\theta$ line up closely with the two true
+usage profiles we simulated from, heavy users answering questions 1, 2, and 5 positively
+and light users answering questions 3, 4, and 6 positively, and the posterior mean of
+$w$ lands close to the class split of 179 and 121 individuals that this particular
+simulated sample happened to realise. The rule used here, pinning the
+orientation to a single feature, is the simplest of several relabelling strategies and
+works whenever one question cleanly separates the classes; with more classes or less
+separated groups one
+instead relabels by matching each draw to a fixed reference partition, but the underlying
+issue and the need to address it before summarising are the same.
+
+## What Gibbs sampling cannot do
+
+Every full conditional in this lecture came out as a distribution we already had a name
+for, a normal, a gamma, a beta, a Dirichlet, and that was never an accident: it happened
+because we specifically chose priors that pair with the likelihood to keep each
+conditional inside a familiar family. Semi-conjugacy and data augmentation both extend
+the reach of that trick considerably, but they do not make it universal. As soon as a
+model has a full conditional that is not a standard distribution, for instance because a
+likelihood is not from the exponential family, or because a prior was chosen for
+substantive reasons rather than mathematical convenience, the Gibbs step for that block
+has no closed-form sampler, and the whole scheme stalls at exactly the point where
+Lecture 1 discovered the Cauchy example had no conjugate prior to be found. The response
+is not to abandon block-by-block updating but to replace the direct draw, for the one
+block that resists it, with an algorithm that only needs to *evaluate* the conditional
+density rather than sample from it exactly. That is what Metropolis-Hastings does, and
+it is the subject of Lecture 5: a general-purpose way to construct a valid Markov chain
+step for an arbitrary target, of which Gibbs sampling will turn out to be a special case.
 
 ## Takeaways
 
-The Gibbs sampler turns an intractable joint posterior into a sequence of tractable
-full-conditional draws, cycling through parameter blocks one at a time. For the Bayesian
-linear regression model with conjugate Normal and inverse-Gamma priors, both full
-conditionals are standard distributions, so the sampler is a short loop of a Normal draw
-and an inverse-Gamma draw. After discarding a burn-in segment, the draws are samples
-from the posterior and every summary is a sample average. With diffuse priors the
-results reproduce OLS while also delivering full posterior uncertainty, and the same
-construction extends to richer models where no closed-form estimator exists.
+The Gibbs sampler replaces one hard problem, sampling a joint posterior directly, with
+several easy ones, sampling each block from its full conditional in turn. In the
+semi-conjugate normal model, completing the square in $\mu$ and collecting the exponents
+of $\tau$ turn an intractable joint kernel into a normal and a gamma full conditional; the
+same mechanism, scaled up to vectors and matrices, drives the regression sampler, and
+extended with a latent class label it drives a mixture sampler as well. The chain this
+produces is not an independent sample, but it is a Markov chain with the posterior as its
+stationary distribution, and irreducibility, aperiodicity and the ergodic theorem are
+exactly what license treating its sample averages, after a burn-in, as if they were
+ordinary Monte Carlo estimates. Mixture models bring their own wrinkle, label switching,
+which has to be resolved by a relabelling rule before any marginal summary is
+meaningful. What Gibbs sampling cannot do is update a block whose conditional is not a
+standard distribution, which is exactly the gap Metropolis-Hastings fills next.
 
-::: {.exercises}
-**Exercises**
 
-1. Replace the diffuse Normal prior with a tight prior, $\beta \sim \mathcal{N}(0,
-   0.1\,I)$, rerun the sampler, and explain how and why the posterior means now differ
-   from the OLS estimates.
-2. Increase the sample size to $n = 2000$ and describe what happens to the width of the
-   posterior credible intervals and to the agreement with OLS.
-3. Modify the sampler to also store and plot the running posterior mean of $\beta_1$
-   against iteration, and use it to argue informally that a burn-in of 1000 is more than
-   enough here.
-4. The full conditional for $\sigma^2$ uses the residual sum of squares at the current
-   $\beta$. Verify analytically that the inverse-Gamma update follows from the Gaussian
-   likelihood and the inverse-Gamma prior.
-5. Add a fourth regressor that is an exact copy of the second (perfect collinearity) and
-   describe what goes wrong in the OLS solution and in the Gibbs sampler.
-:::
+
+## Reading guide and sources
+
+Supplied UPM Class 3 and Case 2 for conditional Normal-model updates, Class 5 for regression, and Case 4 for latent allocation variables. Greenberg (2008), Sections 7.1 and 8.1, connects Gibbs sampling to regression.
+
+The UPM materials are by Audronė Virbickaitė and Martina Zaharieva. The examples are adapted to this course’s notation and fixed weekly sequence.
 
 ## References
 
-Chan et al., *Bayesian Econometric Methods* (2nd ed.), ch. 4. Gelman et al., *Bayesian
-Data Analysis* (3rd ed.), ch. 11 and 14. Koop, *Bayesian Econometrics*, ch. 3-4.
-Lambert, *A Student's Guide to Bayesian Statistics*, ch. 12 and 14.
+Gelfand and Smith (1990). Casella and George (1992).

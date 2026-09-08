@@ -3,6 +3,12 @@ title: "Metropolis-Hastings and NUTS sampling"
 subtitle: "Lecture 5"
 ---
 
+::: {.callout-tip}
+## Exercise session
+Practise the derivation and implementation in [Week 5: HMC versus MH](../exercise-sessions/05-metropolis-hastings-nuts.qmd).
+:::
+
+
 ## When the Gibbs sampler is not enough
 
 The Gibbs sampler of the previous lecture needs one ingredient: the full conditional of each block of
@@ -13,15 +19,21 @@ but neither sampled from nor integrated.
 
 Metropolis-Hastings solves exactly this problem, building a Markov chain whose stationary distribution
 is the target posterior using only the ability to *evaluate* the unnormalised density, so that the
-normalising constant cancels and we never need the intractable integral $p(y)$. A random walk explores
-blindly, though, so we then turn to Hamiltonian Monte Carlo, which follows the gradient of the
-log-posterior, and to the no-U-turn sampler. Judging any of them requires diagnostics, so trace plots,
+normalising constant cancels and we never need the intractable integral $p(y)$. This lecture works
+through acceptance-rejection style algorithms for non-conjugate models, the taxonomy of proposal
+distributions that make Metropolis-Hastings practical, and slice sampling, a tuning-free alternative,
+before moving to Hamiltonian Monte Carlo, which follows the gradient of the log-posterior, and to the
+no-U-turn sampler. A random walk explores blindly, whereas a gradient-guided trajectory follows the
+ridge of the posterior. Judging any of these samplers requires diagnostics, so trace plots,
 autocorrelation, the effective sample size, $\hat R$ and the Monte Carlo standard error are developed
-along the way.
+along the way, and the lecture closes with a real applied case, the Challenger space shuttle disaster,
+where the consequence of trusting a model outside the range of its data was not academic.
 
 We import the usual libraries and fix a seed.
 
 ```{python}
+import time
+
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -36,47 +48,382 @@ Every random quantity below comes from this one generator, so the printed number
 
 ## The Metropolis-Hastings algorithm
 
-Let $\pi(\theta) \propto p(y \mid \theta)\,p(\theta)$ be the target posterior, known only up to $p(y)$.
-We choose a **proposal distribution** $q(\theta' \mid \theta)$ suggesting a candidate given the current
-state, propose $\theta' \sim q(\cdot \mid \theta)$, and accept it with probability
+Let $\pi(\theta) \propto p(y \mid \theta)\,p(\theta)$ be the target posterior, known only up to the
+missing normalising constant $p(y)$. We choose a **proposal distribution** $q(\theta' \mid \theta)$
+suggesting a candidate given the current state, propose $\theta' \sim q(\cdot \mid \theta)$, and accept
+it with probability
 $$
 \alpha(\theta, \theta') \;=\; \min\!\left\{1,\;
 \frac{\pi(\theta')\,q(\theta \mid \theta')}{\pi(\theta)\,q(\theta' \mid \theta)}\right\},
 $$
 staying at $\theta$ otherwise. The target enters only through the ratio $\pi(\theta')/\pi(\theta)$, so
-the unknown constant cancels, and comparisons run on the log scale to avoid overflow. The rule is
-engineered so that the chain satisfies **detailed balance** with respect to $\pi$,
-$$
-\pi(\theta)\,q(\theta' \mid \theta)\,\alpha(\theta, \theta')
-\;=\;
-\pi(\theta')\,q(\theta \mid \theta')\,\alpha(\theta', \theta),
-$$
-which is verified by substituting $\alpha$ into both sides, whereupon one minimum collapses to one. A
-chain in detailed balance with $\pi$ has $\pi$ as a stationary distribution: if the current state is
-distributed as $\pi$, so is the next. With irreducibility the long-run distribution of the draws is then
-the posterior, so *any* sensible proposal eventually works.
+the unknown constant cancels, and comparisons run on the log scale to avoid overflow.
 
-The standard choice is a **random-walk** proposal, $\theta' = \theta + \varepsilon$ with
-$\varepsilon \sim \mathcal{N}(0, s^2 I)$, centred on the current state. It is **symmetric**, so the
-proposal terms cancel and the acceptance probability reduces to $\min\{1, \pi(\theta')/\pi(\theta)\}$;
-that special case is the original **Metropolis** algorithm, and Hastings allows asymmetric proposals.
-The single knob is the step size $s$: tiny steps are accepted but barely move the chain, huge ones land
-in the tails and are rejected, and a useful target is an acceptance rate near 0.2 to 0.4.
+### Deriving the acceptance probability from detailed balance
+
+The formula above is not an arbitrary recipe; it is the unique thing to do once we decide the chain must
+satisfy **detailed balance** with respect to $\pi$. A Markov chain's transition kernel $p(\theta \to
+\theta')$ is in detailed balance with $\pi$ if
+$$
+\pi(\theta)\,p(\theta \to \theta') \;=\; \pi(\theta')\,p(\theta' \to \theta) \qquad \text{for all }
+\theta \neq \theta'.
+$$
+Detailed balance is sufficient (though not necessary) for $\pi$ to be a stationary distribution of the
+chain, because summing both sides over $\theta$ gives $\int \pi(\theta) p(\theta \to \theta')\, d\theta =
+\pi(\theta') \int p(\theta' \to \theta)\, d\theta = \pi(\theta')$, which says exactly that if the current
+draw is distributed as $\pi$, so is the next one. Combined with irreducibility and aperiodicity, the long
+run of the chain then samples from $\pi$.
+
+For Metropolis-Hastings the kernel is the proposal followed by an accept/reject step,
+$p(\theta \to \theta') = q(\theta' \mid \theta)\,\alpha(\theta, \theta')$ for $\theta' \neq \theta$.
+Detailed balance requires
+$$
+\pi(\theta)\,q(\theta' \mid \theta)\,\alpha(\theta, \theta') \;=\;
+\pi(\theta')\,q(\theta \mid \theta')\,\alpha(\theta', \theta).
+$$
+Suppose, without loss of generality, that $\pi(\theta)\,q(\theta' \mid \theta) \geq
+\pi(\theta')\,q(\theta \mid \theta')$, i.e. the move from $\theta$ to $\theta'$ is, before correction,
+more likely than the reverse. Nothing stops us from accepting the reverse move whenever it is proposed,
+so set $\alpha(\theta', \theta) = 1$. Detailed balance then pins down the forward acceptance probability
+uniquely,
+$$
+\alpha(\theta, \theta') \;=\; \frac{\pi(\theta')\,q(\theta \mid \theta')}{\pi(\theta)\,q(\theta' \mid
+\theta)},
+$$
+which is smaller than one exactly because of the case we assumed. Writing both cases together, and
+capping the probability at one for the case we did not assume, gives back
+$\alpha(\theta, \theta') = \min\{1, \pi(\theta')q(\theta\mid\theta') / [\pi(\theta)q(\theta'\mid\theta)]\}$.
+Substituting this $\alpha$ into the detailed balance equation and checking both orderings confirms that
+one of the two minima always collapses to one and the equation holds as an identity, so the construction
+is not merely plausible, it is exact. Any proposal density $q$ that keeps the chain irreducible will do;
+the choice of $q$ only affects how quickly the chain explores $\pi$, never whether it eventually does.
+
+### Symmetric proposals: why the proposal density cancels
+
+The most common choice is a **random-walk** proposal, $\theta' = \theta + \varepsilon$ with
+$\varepsilon \sim \mathcal{N}(0, s^2 I)$, centred on the current state. Because the normal density of
+$\varepsilon$ depends only on $\|\theta' - \theta\|$, it is **symmetric**: $q(\theta' \mid \theta) =
+q(\theta \mid \theta')$, since both sides evaluate the same Gaussian kernel at the same distance. The
+proposal terms in the acceptance ratio are then literally the same number in numerator and denominator,
+$$
+\alpha(\theta, \theta') = \min\!\left\{1,\; \frac{\pi(\theta')\,q(\theta \mid \theta')}
+{\pi(\theta)\,q(\theta' \mid \theta)}\right\}
+= \min\!\left\{1,\; \frac{\pi(\theta')}{\pi(\theta)}\right\},
+$$
+and cancel exactly, leaving an acceptance rule that depends only on how much more or less probable the
+candidate is. That special case is the original **Metropolis** algorithm; Hastings's contribution was to
+allow asymmetric proposals and carry the correction term through, which is what makes the general
+algorithm useful for proposals such as the one on the logit scale used later in this lecture. The single
+knob of the random walk is the step size $s$: tiny steps are accepted almost always but barely move the
+chain, huge ones land in the low-probability tails and are rejected almost always, and a useful target for
+this trade-off is an acceptance rate near 0.2 to 0.4.
+
+### The independence sampler: a ratio of importance weights
+
+A second standard choice drops the dependence on the current state altogether, $q(\theta' \mid \theta) =
+q(\theta')$, a fixed proposal density that does not track $\theta$. This is the **independence sampler**,
+and it is deliberately close in spirit to the importance sampling of Lecture 3. Recall that importance
+sampling estimates a posterior expectation by drawing from $q$ and reweighting by
+$w(\theta) = \pi(\theta)/q(\theta)$. Substituting the independence proposal into the Metropolis-Hastings
+ratio and cancelling the fixed proposal density evaluated at the *other* point in each factor gives
+$$
+\alpha(\theta, \theta') = \min\!\left\{1,\; \frac{\pi(\theta')\,q(\theta)}{\pi(\theta)\,q(\theta')}\right\}
+= \min\!\left\{1,\; \frac{\pi(\theta')/q(\theta')}{\pi(\theta)/q(\theta)}\right\}
+= \min\!\left\{1,\; \frac{w(\theta')}{w(\theta)}\right\}.
+$$
+The acceptance probability is a ratio of importance weights: a candidate is favoured exactly when it is
+underweighted by $q$ relative to $\pi$, compared with how underweighted the current state is. The sampler
+therefore inherits importance sampling's central requirement, that $q$ should have tails at least as
+heavy as $\pi$'s, because a $\theta'$ where $q$ is thin and $\pi$ is not gives a huge weight ratio and the
+chain gets stuck once it lands there, exactly as importance sampling degenerates when one weight dominates
+the sum. Unlike importance sampling, though, the independence sampler produces draws that are genuinely
+from $\pi$ once the chain has run long enough, at the price of the draws being dependent.
+
+### Mixing different Metropolis-Hastings kernels
+
+Nothing in the derivation above required using the *same* proposal at every iteration. Suppose $P_1$ and
+$P_2$ are two Metropolis-Hastings transition kernels, each individually leaving $\pi$ invariant because
+each was built to satisfy detailed balance with $\pi$ on its own. Applying $P_1$ and then $P_2$ within one
+sweep, or choosing between them at random each iteration, still leaves $\pi$ invariant: if the current
+draw is distributed as $\pi$, applying $P_1$ leaves it distributed as $\pi$ by $P_1$'s own invariance, and
+applying $P_2$ to that result leaves it distributed as $\pi$ again by $P_2$'s invariance. Composing two
+kernels that each preserve $\pi$ always preserves $\pi$, whether the composition is fixed, randomised, or
+organised as a within-Gibbs step that cycles a low-dimensional Metropolis-Hastings update through blocks
+of a high-dimensional $\theta$. This is exactly what makes Metropolis-Hastings compatible with the Gibbs
+structure of Lecture 4: a full conditional that is not a standard distribution can be updated by a
+Metropolis-Hastings step nested inside the Gibbs sweep, and the whole hybrid chain still targets the
+correct joint posterior. The freedom to mix kernels this way is one of the two reasons Metropolis-Hastings
+scales to complex models better than a single global proposal; the other is the gradient-based proposal
+of Hamiltonian Monte Carlo developed later in this lecture.
+
+## A non-conjugate binomial model
+
+Lecture 1 solved a coin-tossing problem with nine heads in twelve tosses using a $\text{Beta}(5, 5)$
+prior, chosen precisely because it is conjugate. Replace that prior with a **truncated normal** prior on
+$[0, 1]$, $\theta \sim \mathcal{N}(0.5, 1)$ truncated to the unit interval, a perfectly reasonable belief
+that the coin is close to fair, and conjugacy is gone: the posterior kernel is
+$$
+f(\theta \mid y) \;\propto\; \theta^{y}(1-\theta)^{n-y} \times
+\exp\!\left(-\frac{(\theta - 0.5)^2}{2}\right), \qquad 0 < \theta < 1,
+$$
+and no standard family has this shape, so there is no arithmetic update left to do. This is the smallest
+possible setting in which to see the taxonomy of the previous section at work, because the target is a
+single scalar and we can check every sampler against a numerically computed ground truth. The truncation's
+own normalising constant is a fixed number that does not depend on $\theta$, so it can be folded into the
+proportionality and ignored throughout; only the shape in $\theta$ matters for a Metropolis-Hastings ratio.
+
+The next chunk codes the log-posterior kernel, evaluates it on a fine grid exactly as in Lecture 1's grid
+method, and reports the posterior mean this produces, which serves as the reference every sampler below
+is checked against.
+
+```{python}
+n_bin, y_bin = 12, 9
+mu_p, sigma_p = 0.5, 1.0
+
+def log_post_binom(theta):
+    theta = np.asarray(theta, dtype=float)
+    out = np.full(theta.shape, -np.inf)
+    ok = (theta > 0) & (theta < 1)
+    out[ok] = (y_bin * np.log(theta[ok]) + (n_bin - y_bin) * np.log(1 - theta[ok])
+               + stats.norm.logpdf(theta[ok], mu_p, sigma_p))
+    return out
+
+theta_grid = np.linspace(1e-4, 1 - 1e-4, 4001)
+w_grid = np.exp(log_post_binom(theta_grid) - log_post_binom(theta_grid).max())
+dens_grid = w_grid / np.trapezoid(w_grid, theta_grid)
+true_mean = np.trapezoid(theta_grid * dens_grid, theta_grid)
+print(f"grid posterior mean under the truncated normal prior: {true_mean:.4f}")
+```
+
+The grid mean sits above the $0.636$ we found for the conjugate Beta prior in Lecture 1, closer to the
+$0.75$ maximum likelihood estimate: with $\sigma = 1$ the truncated normal is nearly flat across the whole
+unit interval, a weaker prior than the $\text{Beta}(5,5)$, whose effective sample size of ten pseudo
+observations pulled harder towards one half. Having no closed form does not make the posterior any less
+real, only harder to summarise, which is exactly the gap Metropolis-Hastings fills.
+
+### The independence sampler on the non-conjugate posterior
+
+We use $q(\theta') = \mathcal{U}(0, 1)$, a fixed proposal that does not depend on where the chain currently
+is. Because $q$ is uniform it evaluates to the same constant at every point, so it cancels from the ratio
+of importance weights derived above and the acceptance rule needs only the posterior kernel,
+$\alpha = \min\{1, \pi(\theta')/\pi(\theta)\}$. The proposal has heavier tails than the truncated normal
+posterior only in the loose sense that it reaches everywhere in $(0,1)$ with equal density, which is
+enough here because the target itself lives entirely on that interval.
+
+```{python}
+def independence_sampler(log_post, theta0, n_iter, rng):
+    theta = theta0; lp = log_post(np.array([theta]))[0]
+    chain = np.empty(n_iter); n_accept = 0
+    for t in range(n_iter):
+        prop = rng.uniform()
+        lp_prop = log_post(np.array([prop]))[0]
+        if np.log(rng.uniform()) < lp_prop - lp:
+            theta, lp = prop, lp_prop
+            n_accept += 1
+        chain[t] = theta
+    return chain, n_accept / n_iter
+
+burn_b, iters_b = 1000, 10000
+ind_chain, ind_acc = independence_sampler(log_post_binom, 0.5, burn_b + iters_b, rng)
+ind_post = ind_chain[burn_b:]
+print(f"independence sampler: acceptance {ind_acc:.3f}, "
+      f"posterior mean {ind_post.mean():.4f} (grid: {true_mean:.4f})")
+```
+
+The acceptance rate is moderate and the sampled mean lands close to the grid value, so a proposal that
+ignores the current state entirely is doing fine here, precisely because the uniform proposal is a
+reasonable match for a posterior that is not sharply peaked. In a higher-dimensional or more concentrated
+problem a fixed proposal would rarely land near the bulk of the posterior and the acceptance rate would
+collapse, which is why the independence sampler is used mostly for low-dimensional, well-behaved targets.
+
+### A random walk on the logit scale, with its Jacobian
+
+A random walk directly on $\theta$ risks proposing values outside $(0,1)$. The standard fix is to walk on
+the unconstrained **logit** scale $\eta = \log[\theta/(1-\theta)]$ and map back,
+$\eta' \sim \mathcal{N}(\eta, s^2)$, $\theta' = 1/(1+e^{-\eta'})$. The proposal is symmetric in $\eta$, but
+we still evaluate the posterior in $\theta$, and a change of variables is not free: since
+$\theta = 1/(1+e^{-\eta})$ has $d\theta/d\eta = \theta(1-\theta)$, the induced density of $\eta$ is
+$\pi_\eta(\eta) = \pi_\theta(\theta(\eta))\,\theta(1-\theta)$. The symmetric random walk in $\eta$-space
+gives an acceptance ratio built from $\pi_\eta$, and substituting back yields
+$$
+\alpha = \min\left\{1,\; \frac{\pi_\theta(\theta')\,\theta'(1-\theta')}{\pi_\theta(\theta)\,\theta(1-\theta)}\right\},
+$$
+so the plain posterior ratio picks up an extra factor of $\theta'(1-\theta')/[\theta(1-\theta)]$, the
+Jacobian of the logit transform. Forgetting it is a common bug: the chain would still run, but it would
+target the wrong distribution.
+
+```{python}
+def rw_logit_sampler(log_post, theta0, step, n_iter, rng):
+    theta = theta0; lp = log_post(np.array([theta]))[0]
+    chain = np.empty(n_iter); n_accept = 0
+    for t in range(n_iter):
+        eta = np.log(theta / (1 - theta)) + step * rng.normal()
+        prop = 1.0 / (1.0 + np.exp(-eta))
+        lp_prop = log_post(np.array([prop]))[0]
+        log_ratio = (lp_prop - lp + np.log(prop) + np.log(1 - prop)
+                     - np.log(theta) - np.log(1 - theta))
+        if np.log(rng.uniform()) < log_ratio:
+            theta, lp = prop, lp_prop
+            n_accept += 1
+        chain[t] = theta
+    return chain, n_accept / n_iter
+
+rw_chain, rw_acc = rw_logit_sampler(log_post_binom, 0.5, 1.5, burn_b + iters_b, rng)
+rw_post = rw_chain[burn_b:]
+print(f"logit random walk: acceptance {rw_acc:.3f}, "
+      f"posterior mean {rw_post.mean():.4f} (grid: {true_mean:.4f})")
+```
+
+Both samplers recover the same mean to two decimals, which is the check every sampler must pass before
+its output is trusted, echoing the check Lecture 1 ran between the analytic and grid posteriors.
+
+### Slice sampling: an auxiliary variable and no proposal at all
+
+Both samplers above needed a proposal density to be chosen and tuned. **Slice sampling** removes that
+choice entirely by introducing an auxiliary variable $u$ and sampling uniformly from the region under the
+(unnormalised) target density,
+$$
+\mathcal{A} = \{(\theta, u): 0 \leq u \leq \pi(\theta)\}.
+$$
+If $(\theta, u)$ is uniform on $\mathcal{A}$, the marginal of $\theta$ is exactly proportional to
+$\pi(\theta)$, since integrating the uniform density over $u$ from $0$ to $\pi(\theta)$ returns
+$\pi(\theta)$ itself. The chain alternates two conditional draws, each of which is uniform and therefore
+needs no acceptance step:
+
+1. given $\theta_t$, draw $u_{t+1} \sim \mathcal{U}(0, \pi(\theta_t))$, which is uniform on the vertical
+   slice of $\mathcal{A}$ above $\theta_t$;
+2. given $u_{t+1}$, draw $\theta_{t+1}$ uniformly from the horizontal slice
+   $S = \{\theta : \pi(\theta) > u_{t+1}\}$.
+
+Each step is, by construction, an exact draw from a uniform conditional distribution of the joint density
+on $\mathcal{A}$, and alternating exact conditional draws is precisely the Gibbs sampling logic of Lecture
+4 applied to the two coordinates $(\theta, u)$: each step leaves the joint uniform distribution on
+$\mathcal{A}$ invariant, so their composition does too, and therefore the $\theta$-marginal, which is
+$\pi$, is invariant as well. No proposal density, no acceptance ratio, and nothing to tune beyond how
+step 2 locates the set $S$, which in general is unknown in closed form and is instead found by shrinking a
+bracket: propose a point uniformly in the current bracket, and if it fails to lie in $S$, shrink the
+bracket at the failing point towards the last valid value and try again, using the invariant that the
+previous $\theta_t$ always lies inside $S$ and inside the current bracket.
+
+```{python}
+def slice_sampler_1d(log_post, theta0, n_iter, rng, lo=0.0, hi=1.0):
+    theta = theta0
+    chain = np.empty(n_iter)
+    for t in range(n_iter):
+        log_u = log_post(np.array([theta]))[0] + np.log(rng.uniform())
+        t_min, t_max, old = lo, hi, theta
+        while True:
+            theta = rng.uniform(t_min, t_max)
+            if log_post(np.array([theta]))[0] > log_u:
+                break
+            if theta < old:
+                t_min = theta
+            else:
+                t_max = theta
+        chain[t] = theta
+    return chain
+
+slice_chain = slice_sampler_1d(log_post_binom, 0.5, burn_b + iters_b, rng)
+slice_post = slice_chain[burn_b:]
+print(f"slice sampler: posterior mean {slice_post.mean():.4f} (grid: {true_mean:.4f}), "
+      f"no acceptance rate to report")
+```
+
+There is no acceptance rate to print because there is nothing to reject: every proposed $\theta$ that
+survives the shrinking loop is used. The mean again matches the grid value, and the absence of a tuning
+parameter such as the step size $s$ is the practical selling point of slice sampling whenever a
+one-dimensional (or one-block) update is cheap to shrink towards.
+
+### Mixing kernels in practice
+
+The mixing argument above is not only theoretical. The next chunk builds one chain that alternates an
+independence step and a logit random-walk step at every iteration, and checks that the resulting draws
+still recover the same posterior mean as either kernel used alone.
+
+```{python}
+def mixed_sampler(log_post, theta0, step, n_iter, rng):
+    theta = theta0; lp = log_post(np.array([theta]))[0]
+    chain = np.empty(n_iter); n_accept = 0
+    for t in range(n_iter):
+        if t % 2 == 0:                                  # independence half of the sweep
+            prop = rng.uniform()
+        else:                                            # logit random-walk half
+            eta = np.log(theta / (1 - theta)) + step * rng.normal()
+            prop = 1.0 / (1.0 + np.exp(-eta))
+        lp_prop = log_post(np.array([prop]))[0]
+        log_ratio = lp_prop - lp
+        if t % 2 == 1:
+            log_ratio += np.log(prop) + np.log(1 - prop) - np.log(theta) - np.log(1 - theta)
+        if np.log(rng.uniform()) < log_ratio:
+            theta, lp = prop, lp_prop
+            n_accept += 1
+        chain[t] = theta
+    return chain, n_accept / n_iter
+
+mix_chain, mix_acc = mixed_sampler(log_post_binom, 0.5, 1.5, burn_b + iters_b, rng)
+mix_post = mix_chain[burn_b:]
+print(f"mixed independence/logit-RW chain: overall acceptance {mix_acc:.3f}, "
+      f"posterior mean {mix_post.mean():.4f} (grid: {true_mean:.4f})")
+```
+
+The mixed chain reproduces the same mean as the two pure chains, exactly as the invariance argument
+promised: composing two kernels that each individually preserve the posterior preserves it whichever order
+they run in, so a modeller is free to reach for whichever proposal is convenient for each part of a
+problem rather than forcing one global proposal onto the entire parameter vector.
+
+### Comparing all four samplers
+
+The final chunk overlays the kernel density estimate of each sampler's output against the grid posterior
+and reports posterior means, standard deviations and the effective sample size, using the ESS function
+built later in this lecture's diagnostics section applied here first because the comparison needs it.
+
+```{python}
+def acf(x, max_lag):
+    x = x - x.mean(); n = len(x); var = np.dot(x, x) / n
+    return np.array([np.dot(x[:n - k], x[k:]) / n / var for k in range(max_lag + 1)])
+
+def ess(x):
+    n = len(x); a = acf(x, n - 1); s = 0.0
+    for k in range(1, n - 1, 2):
+        if a[k] + a[k + 1] < 0: break
+        s += a[k] + a[k + 1]
+    return n / (1.0 + 2.0 * s)
+
+methods = {"independence": ind_post, "logit random walk": rw_post,
+           "slice": slice_post, "mixed kernels": mix_post}
+summary_b = pd.DataFrame({name: {"mean": ch.mean(), "sd": ch.std(ddof=1), "ESS": ess(ch)}
+                           for name, ch in methods.items()}).T
+print(summary_b.round(4))
+
+fig, ax = plt.subplots()
+grid_kde = np.linspace(0.2, 1.0, 300)
+for name, ch in methods.items():
+    ax.plot(grid_kde, stats.gaussian_kde(ch)(grid_kde), label=name)
+ax.plot(theta_grid, dens_grid, "k--", lw=1.5, label="grid posterior")
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.legend(fontsize=8)
+ax.set_title("Four samplers targeting the same non-conjugate posterior")
+plt.tight_layout(); plt.show()
+```
+
+All four curves sit on top of the dashed grid posterior, and all four means round to the same $0.71$ to
+two decimals: the samplers disagree only in how efficiently they explore, visible in the effective sample
+size column, not in what they converge to. The slice sampler needs no step size and still
+lands among the more efficient methods here, which is the argument for reaching for it whenever a
+model's conditional update is one-dimensional or otherwise cheap to shrink.
 
 ## A worked example: Bayesian logistic regression
 
-We apply the algorithm to a model with no conjugate structure. The probability of a binary outcome
-$y_i \in \{0, 1\}$ depends on covariates $x_i$ through
-$\Pr(y_i = 1 \mid \beta) = 1/(1 + e^{-x_i'\beta})$, and with an independent $\mathcal{N}(0, \tau^2)$
-prior on each coefficient the log-posterior is, up to a constant,
+We now move from a single scalar to a genuinely multivariate target, applying the algorithm to a model
+with no conjugate structure at all. The probability of a binary outcome $y_i \in \{0, 1\}$ depends on
+covariates $x_i$ through $\Pr(y_i = 1 \mid \beta) = 1/(1 + e^{-x_i'\beta})$, and with an independent
+$\mathcal{N}(0, \tau^2)$ prior on each coefficient the log-posterior is, up to a constant,
 $$
 \log \pi(\beta) \;=\; \sum_{i=1}^{n}\Big[y_i\,x_i'\beta - \log\big(1 + e^{x_i'\beta}\big)\Big]
 \;-\; \frac{1}{2\tau^2}\sum_j \beta_j^2.
 $$
-Evaluating this is trivial, which is all Metropolis-Hastings requires. The chunk simulates data, codes
-the log-posterior with `np.logaddexp(0, eta)` for numerical stability, implements the sampler, and runs
-three chains from a zero start with a too-small, a good and a too-large step, discarding 1000 burn-in
-draws and plotting the traces of $\beta_1$.
+Evaluating this is trivial, which is all Metropolis-Hastings requires; the chunk below simulates data and
+codes the log-posterior with `np.logaddexp(0, eta)` for numerical stability, together with the
+random-walk sampler that we mix with Hamiltonian Monte Carlo later in the lecture.
 
 ```{python}
 n = 300
@@ -103,7 +450,15 @@ def rw_metropolis(log_post, init, step, n_iter, rng):
             n_accept += 1
         chain[t] = current
     return chain, n_accept / n_iter
+```
 
+This is the same symmetric random-walk kernel derived earlier, now applied coordinate-wise across a
+three-dimensional parameter, and the same acceptance rule applies unchanged: the proposal density cancels
+because it is Gaussian and centred on the current state in every coordinate simultaneously. The next
+chunk runs three chains from a zero start with a too-small, a good and a too-large step, discarding 1000
+burn-in draws and plotting the traces of $\beta_1$.
+
+```{python}
 n_iter, burn, init = 5000, 1000, np.zeros(3)
 runs = [(s,) + rw_metropolis(log_posterior, init, s, n_iter, rng) for s in (0.005, 0.15, 1.0)]
 post = runs[1][1][burn:]
@@ -136,31 +491,21 @@ $$
 \text{ESS} \;=\; \frac{n}{1 + 2\sum_{k=1}^{\infty}\rho_k}
 $$
 converts it into an equivalent number of independent draws, where $\rho_k$ is the lag-$k$
-autocorrelation. Its empirical tail is noisy, so we truncate the sum by Geyer's initial positive
-sequence rule, adding consecutive pairs and stopping when a pair sum turns negative. This also gives the
-**Monte Carlo standard error** of a posterior mean, $\text{MCSE} = \hat\sigma/\sqrt{\text{ESS}}$, the
-numerical precision of the figure we report. A single chain cannot reveal one stuck in one region of the
-posterior, so we also compare chains from **dispersed starting points**. The **potential scale reduction
-factor** contrasts variation *between* chains with variation *within*: with $m$ chains of length $n$,
-let $W$ be the average within-chain variance and $B$ the between-chain variance scaled by $n$, so that
+autocorrelation, using the same `acf` and `ess` functions already used on the binomial example above. Its
+empirical tail is noisy, so we truncate the sum by Geyer's initial positive sequence rule, adding
+consecutive pairs and stopping when a pair sum turns negative. This also gives the **Monte Carlo standard
+error** of a posterior mean, $\text{MCSE} = \hat\sigma/\sqrt{\text{ESS}}$, the numerical precision of the
+figure we report. A single chain cannot reveal one stuck in one region of the posterior, so we also
+compare chains from **dispersed starting points**. The **potential scale reduction factor** contrasts
+variation *between* chains with variation *within*: with $m$ chains of length $n$, let $W$ be the average
+within-chain variance and $B$ the between-chain variance scaled by $n$, so that
 $$
 \hat{R} \;=\; \sqrt{\frac{\frac{n-1}{n}W + \frac{1}{n}B}{W}}.
 $$
-Converged chains make the two variances agree, so $\hat R$ is near one. The chunk codes the three
-diagnostics and applies them to the good chain and to four chains launched from separated corners.
+Converged chains make the two variances agree, so $\hat R$ is near one. The chunk applies the three
+diagnostics to the good chain and to four chains launched from separated corners.
 
 ```{python}
-def acf(x, max_lag):
-    x = x - x.mean(); n = len(x); var = np.dot(x, x) / n
-    return np.array([np.dot(x[:n - k], x[k:]) / n / var for k in range(max_lag + 1)])
-
-def ess(x):
-    n = len(x); a = acf(x, n - 1); s = 0.0
-    for k in range(1, n - 1, 2):
-        if a[k] + a[k + 1] < 0: break
-        s += a[k] + a[k + 1]
-    return n / (1.0 + 2.0 * s)
-
 def rhat(samples):                  # samples: (m chains, n draws), one parameter
     m, n = samples.shape
     W = samples.var(axis=1, ddof=1).mean()
@@ -268,22 +613,21 @@ Rather than a fixed number of leapfrog steps, it builds the trajectory adaptivel
 balanced binary tree. Doubling stops once the trajectory begins to turn back on itself, detected from
 the inner product of the momentum at each end with the displacement between the ends: a sign change
 means the particle is heading back, and that U-turn names the sampler. The next state is drawn from the
-whole trajectory by a slice-sampling rule that keeps the transition reversible, and doubling aborts
-early if the energy error grows too large. With dual averaging, which adapts $\epsilon$ during warm-up
-to a target acceptance rate, this leaves nothing to tune, which is why it is the default engine of
-modern probabilistic programming. We do not implement it; it automates the choice of $L$ without
-changing the dynamics.
+whole trajectory by a slice-sampling rule that keeps the transition reversible, the same auxiliary-variable
+idea used earlier in this lecture now applied to selecting a point along a trajectory rather than along the
+real line, and doubling aborts early if the energy error grows too large. With dual averaging, which
+adapts $\epsilon$ during warm-up to a target acceptance rate, this leaves nothing to tune, which is why it
+is the default engine of modern probabilistic programming. We do not implement it; it automates the choice
+of $L$ without changing the dynamics.
 
 ## Comparing the two samplers
 
 Efficiency must be measured per unit of cost, not per iteration, so the comparison times each run and
 counts posterior evaluations: one log density per random-walk iteration against $L+1$ gradients per
-Hamiltonian iteration, here with $\epsilon = 0.15$ and $L = 10$. It reports the smallest effective
+Hamiltonian iteration, here with $\epsilon = 0.15$ and $L = 7$. It reports the smallest effective
 sample size across coefficients per second and per evaluation, plus the two autocorrelations.
 
 ```{python}
-import time
-
 def efficiency(name, run, per_iter):
     t0 = time.perf_counter(); out = run(); secs = time.perf_counter() - t0
     kept = out[0][burn:]
@@ -293,7 +637,7 @@ def efficiency(name, run, per_iter):
 
 mh_post, mh_row = efficiency("RW-MH", lambda: rw_metropolis(log_posterior, init, 0.15, n_iter, rng), 1)
 hmc_post, hmc_row = efficiency("HMC", lambda: hmc(log_posterior, grad_log_posterior, init,
-                                                  0.15, 10, n_iter, rng), 11)
+                                                  0.15, 7, n_iter, rng), 8)
 print(pd.DataFrame([mh_row, hmc_row]).set_index("sampler").round(2))
 print("posterior means:", np.round(mh_post.mean(axis=0), 3), np.round(hmc_post.mean(axis=0), 3))
 fig, ax = plt.subplots()
@@ -307,39 +651,166 @@ plt.tight_layout()
 plt.show()
 ```
 
-The two samplers agree on the posterior means to the second decimal, and the figure shows the
-random-walk autocorrelation persisting for a few dozen lags where the Hamiltonian one dies out within
-about ten. The table prices that gain: Hamiltonian Monte Carlo roughly triples the effective sample size
-per iteration at a far higher acceptance rate, but each iteration costs eleven gradients rather than one
-cheap density evaluation, so per second the random walk holds its own and per thousand posterior
-evaluations it is clearly ahead. Gradients are not free, and a tuned random walk is hard to beat on a
-nearly spherical, three-dimensional posterior. The Hamiltonian reputation comes from scaling: a
-spherical proposal is punished harder the more narrow directions there are, whereas a gradient-guided
-trajectory follows the ridge and pays for dimensions linearly.
+The two samplers agree on the posterior means to within a few hundredths for every coefficient, and the
+figure shows the random-walk autocorrelation persisting for a few dozen lags where the Hamiltonian one
+dies out within about ten. The table prices the trade-off: Hamiltonian Monte Carlo more than doubles the
+effective sample size per iteration at a far higher acceptance rate, but each iteration costs eight
+gradients rather than one cheap density evaluation, so per second, and even per thousand posterior
+evaluations, the random walk is comfortably ahead on this low-dimensional, nearly spherical posterior.
+Gradients are not free, and their overhead has not yet been repaid here. The Hamiltonian reputation comes
+from scaling: a spherical random-walk proposal is punished harder the more narrow directions a posterior
+has, whereas a gradient-guided trajectory follows the ridge and pays for dimensions roughly linearly, so
+the crossover in favour of Hamiltonian Monte Carlo shows up only once dimension or curvature grows, which
+is exactly what the exercises at the end of this lecture ask you to locate.
+
+## Case study: the Challenger disaster
+
+On 28 January 1986 the Space Shuttle Challenger broke apart 73 seconds into flight, killing all seven crew
+members. The proximate cause was the failure of an O-ring seal on the right solid rocket booster, and it is
+now well established that the leading factor in that failure was the unusually low temperature, about
+31 degrees Fahrenheit, at the time of launch. The pre-launch data needed to see this coming existed: 23
+previous shuttle launches had recorded, for each launch, the temperature and whether at least one O-ring
+had failed. The night before the Challenger launch, engineers did examine this record and argued against
+launching in the cold, but the statistical case as presented was weak, in part because the analysis at the
+time used only the launches that had *any* failures and ignored the many warm, failure-free launches that
+would have anchored a proper regression. We build the model those engineers should have had: a Bayesian
+logistic regression of failure on temperature, fit by the random-walk Metropolis-Hastings sampler
+developed above, and we push every posterior draw through to the quantity that mattered on the night, the
+predicted failure probability at 31 degrees. This is why the case is taught: it is a real forecasting
+failure with fatal consequences, not a textbook illustration invented after the fact.
+
+We hard-code the 23 pre-Challenger launch observations, the temperature in Fahrenheit and whether at least
+one O-ring failed, exactly as recorded in the mission history, and fit
+$\logit \Pr(y_i = 1) = \alpha + \beta\, x_i$ with weakly informative $\mathcal{N}(0, 1000)$ priors on both
+coefficients, matching the non-informative choice used in the original engineering analysis. Temperature
+is centred before fitting only to make the random walk mix well; the centring is undone immediately after
+so that $\alpha$ and $\beta$ below are on the original Fahrenheit scale throughout.
+
+```{python}
+temp = np.array([53, 57, 58, 63, 66, 67, 67, 67, 68, 69, 70, 70, 70, 70, 72,
+                  73, 75, 75, 76, 76, 78, 79, 81], dtype=float)
+fail = np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0], dtype=float)
+temp_c = temp - temp.mean()
+tau2_c = 1000.0
+
+def log_post_challenger(par):
+    a, b = par
+    eta = a + b * temp_c
+    return (np.sum(fail * eta - np.logaddexp(0.0, eta))
+             - 0.5 * a**2 / tau2_c - 0.5 * b**2 / tau2_c)
+
+n_iter_c, burn_c = 12000, 2000
+chain_c, acc_c = rw_metropolis(log_post_challenger, np.zeros(2), np.array([1.0, 0.14]),
+                                n_iter_c, rng)
+post_c = chain_c[burn_c:]
+alpha_draws = post_c[:, 0] - post_c[:, 1] * temp.mean()      # undo the centring
+beta_draws = post_c[:, 1]
+print(f"launches: {len(temp)}, failures: {int(fail.sum())}, acceptance rate: {acc_c:.3f}")
+print(f"alpha: mean {alpha_draws.mean():.3f}, sd {alpha_draws.std(ddof=1):.3f}")
+print(f"beta:  mean {beta_draws.mean():.4f}, sd {beta_draws.std(ddof=1):.4f}")
+print(f"P(beta < 0 | data) = {(beta_draws < 0).mean():.3f}")
+```
+
+The slope on temperature is clearly negative and the posterior puts almost all of its mass there, so
+warmer launches are safer: on the log-odds scale each extra degree Fahrenheit changes the log-odds of an
+O-ring failure by $\beta$. The intercept describes the log-odds of failure at zero degrees, far outside
+the data, and is correspondingly imprecise; only the combination $\alpha + \beta x$ at temperatures near
+the observed range is well identified, which is exactly why we push draws through to a specific
+temperature rather than reading $\alpha$ and $\beta$ on their own.
+
+### The tipping point and the failure probability at launch
+
+Two derived quantities carry the applied content of the model. The **tipping point** is the temperature
+at which the predicted failure probability crosses one half, found by setting $\alpha + \beta x = 0$ and
+solving, $x^\ast = -\alpha/\beta$; because $\beta$'s posterior has mass close to zero, the ratio
+$-\alpha/\beta$ has a heavy right and left tail, so the posterior **mean** of $x^\ast$ can be pulled far
+by rare draws with $\beta$ near zero even though the **median** is stable, and a credible interval is the
+honest way to communicate the spread. The second quantity is the posterior of the failure probability
+itself at the actual launch temperature of 31 degrees, $p_{31} = 1/(1 + e^{-(\alpha + 31\beta)})$, obtained
+by pushing every retained draw of $(\alpha, \beta)$ through the logistic function, exactly the posterior
+predictive logic of Lecture 1 applied to a regression instead of a single probability.
+
+```{python}
+tipping = -alpha_draws / beta_draws
+p31 = 1.0 / (1.0 + np.exp(-(alpha_draws + 31 * beta_draws)))
+
+tip_mean, tip_median = tipping.mean(), np.median(tipping)
+tip_ci = np.quantile(tipping, [0.025, 0.975])
+p31_median = np.median(p31)
+p31_ci = np.quantile(p31, [0.025, 0.975])
+
+print(f"tipping point -alpha/beta: mean {tip_mean:.1f} F, median {tip_median:.1f} F, "
+      f"95% interval [{tip_ci[0]:.1f}, {tip_ci[1]:.1f}] F")
+print(f"failure probability at 31 F: median {p31_median:.3f}, "
+      f"95% interval [{p31_ci[0]:.3f}, {p31_ci[1]:.3f}]")
+```
+
+The mean and median of the tipping point differ, exactly as the heavy-tail warning predicted, and the
+median inside its credible interval is the number to quote. The failure probability at 31 degrees is
+concentrated near one and its credible interval sits almost entirely above one half: the model built from
+data that were already on the shelf the night before launch says a failure was close to certain at that
+temperature, using nothing more exotic than logistic regression and the random-walk sampler introduced at
+the start of this lecture.
+
+```{python}
+xg = np.linspace(30, 85, 200)
+P = 1.0 / (1.0 + np.exp(-(alpha_draws[:, None] + beta_draws[:, None] * xg[None, :])))
+med_curve = np.median(P, axis=0)
+lo_curve, hi_curve = np.quantile(P, 0.025, axis=0), np.quantile(P, 0.975, axis=0)
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
+axes[0].fill_between(xg, lo_curve, hi_curve, color="grey", alpha=0.3)
+axes[0].plot(xg, med_curve, color="black")
+axes[0].scatter(temp, fail, color="steelblue", zorder=3)
+axes[0].axvline(31, color="firebrick", ls=":", label="launch temperature, 31 F")
+axes[0].set_xlabel("temperature (F)"); axes[0].set_ylabel("P(O-ring failure)")
+axes[0].set_title("Fitted curve with 95% band"); axes[0].legend(fontsize=8)
+
+sel = (tipping > np.quantile(tipping, 0.01)) & (tipping < np.quantile(tipping, 0.99))
+axes[1].hist(tipping[sel], bins=40, density=True, color="lightgrey", edgecolor="white")
+axes[1].axvline(tip_median, color="black", lw=2, label="median")
+axes[1].axvline(tip_ci[0], color="black", ls=":"); axes[1].axvline(tip_ci[1], color="black", ls=":")
+axes[1].set_xlabel("tipping-point temperature (F)"); axes[1].set_title("Posterior of the tipping point")
+axes[1].legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The left panel shows the fitted curve turning down sharply as temperature falls, with the launch
+temperature of 31 degrees sitting far to the left of every observed launch, so the prediction there rests
+on extrapolation and the credible band widens accordingly; it is nonetheless a wide band around a failure
+probability near one, not around one half. The right panel plots the tipping point on a window trimmed at
+its first and ninety-ninth percentiles, which is guaranteed to contain the printed 95 percent interval,
+because a small fraction of draws with $\beta$ near zero send $-\alpha/\beta$ far into either tail and
+would otherwise stretch the axis until the bulk of the distribution was unreadable; the credible interval
+itself was computed from the complete, untrimmed set of draws.
 
 ## Takeaways
 
 Metropolis-Hastings turns the ability to evaluate an unnormalised posterior into the ability to sample
-from it, with an acceptance ratio built so the chain satisfies detailed balance with the target. No
-sampler may be trusted on its output alone: trace plots, the effective sample size, the Monte Carlo
-standard error and $\hat R$ are the minimum evidence before quoting a summary. Hamiltonian Monte Carlo
-replaces blind proposals by gradient-guided leapfrog trajectories with a Metropolis correction for the
-discretisation error, and the no-U-turn sampler picks the path length by doubling until the trajectory
-turns back, at one gradient per step, a gain growing with the dimension and curvature of the posterior.
+from it, with an acceptance ratio derived, not merely asserted, from the requirement that the chain
+satisfy detailed balance with the target; a symmetric random-walk proposal cancels out of that ratio
+entirely, while an independence proposal turns it into a ratio of importance weights that ties the method
+back to Lecture 3. Different Metropolis-Hastings kernels, and slice sampling's proposal-free alternative,
+can be mixed within a single chain without breaking convergence, which is what lets a Gibbs sampler absorb
+a non-standard full conditional and what let one chain in this lecture alternate an independence step with
+a random walk and still recover the right posterior. No sampler may be trusted on its output alone: trace
+plots, the effective sample size, the Monte Carlo standard error and $\hat R$ are the minimum evidence
+before quoting a summary, whether the target is a single non-conjugate probability or a multivariate
+logistic regression. Hamiltonian Monte Carlo replaces blind proposals by gradient-guided leapfrog
+trajectories with a Metropolis correction for the discretisation error, and the no-U-turn sampler picks
+the path length by doubling until the trajectory turns back, at one gradient per step, a gain growing with
+the dimension and curvature of the posterior. The Challenger case shows what all of this machinery is for:
+a logistic regression fit by the plainest possible sampler, and a heavy-tailed derived quantity summarised
+honestly by its median rather than its mean, would have said plainly that a launch at 31 degrees was
+almost certain to fail.
 
-::: {.exercises}
-**Exercises**
 
-1. Re-run the logistic sampler with a tighter prior, $\tau = 0.5$, and compare posterior means, standard
-   deviations and effective sample sizes with the $\tau = 5$ case. Which coefficients move most, and why?
-2. Scale per-coordinate steps in `rw_metropolis` to pilot standard deviations; report the ESS gain.
-3. Sweep $\epsilon$ at fixed $L = 10$, recording acceptance and effective sample size per gradient, and
-   relate the point where the energy error dominates to the 0.65 to 0.9 guideline.
-4. Fix $\epsilon = 0.15$ and vary $L$ from 1 to 40, plotting effective sample size per gradient against
-   $L$, and explain the shape using the U-turn argument behind the no-U-turn sampler.
-5. Simulate a logistic model with fifteen strongly correlated covariates, tune both samplers on it and
-   rebuild the comparison table. At what dimension does Hamiltonian Monte Carlo overtake per second?
-:::
+
+## Reading guide and sources
+
+Supplied UPM Class 3 for Metropolis updates and transformations, and Case 5 for Challenger logistic regression. Greenberg (2008), Sections 7.2–7.3, develops Metropolis-Hastings and diagnostics. Hoffman and Gelman (2014) supplies the NUTS extension; it is distinct from the fixed-length HMC implementation.
+
+The UPM materials are by Audronė Virbickaitė and Martina Zaharieva. The examples are adapted to this course’s notation and fixed weekly sequence.
 
 ## References
 

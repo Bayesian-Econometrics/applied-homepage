@@ -3,6 +3,13 @@ title: "The linear regression model"
 subtitle: "Lecture 2"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 2 exercise session](../exercise-sessions/02-linear-regression.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Regression with a conjugate prior
 
 The first lecture introduced Bayes' theorem on a one-parameter model, where prior,
@@ -48,6 +55,8 @@ the square return another Gaussian, while $(\sigma^2)^{-n/2}$ signals an inverse
 Here $y$ holds the asset's excess returns and $X$ a constant, the market return and a size
 factor, so $\beta_1$ is its **beta** and $\beta_0$ its **alpha**. We simulate and fit OLS.
 
+**Reading the computation.** The first column is the intercept, followed by market and size exposures. Simulated true coefficients are available as a diagnostic benchmark; the regression itself only sees X and y.
+
 ```{python}
 n, k = 60, 3
 theta_true = np.array([0.002, 1.15, 0.25])   # alpha, market beta, size loading
@@ -87,6 +96,46 @@ The $\sigma^2$ inside $\sigma^2 B_0$ is the price of conjugacy: prior uncertaint
 coefficients is proportional to the noise, so $B_0$ is not in the units of $\beta$. To give
 coefficient $j$ the prior sd $\tau_j$ we set $B_{0,jj} = \tau_j^2/\bar\sigma^2$.
 
+### Recover the scalar update before tackling the matrix
+
+Set $X=\mathbf1_n$ and write the intercept prior as
+$\beta\mid\sigma^2\sim\mathcal N(b_0,\sigma^2/\kappa_0)$.
+The updated mean is $(\kappa_0b_0+n\bar y)/(\kappa_0+n)$. Completing the square
+uses the identity
+
+$$
+\sum_i(y_i-\beta)^2+\kappa_0(\beta-b_0)^2
+=\sum_i(y_i-\bar y)^2+
+\frac{n\kappa_0}{n+\kappa_0}(\bar y-b_0)^2
++(n+\kappa_0)(\beta-b_1)^2.
+$$
+
+Three quantities have different jobs: variation around the sample mean,
+disagreement between the prior and the data, and remaining uncertainty about
+the coefficient. The UPM Normal-model practical uses this decomposition.
+Regression generalises it from one mean to a vector of conditional means.
+
+### Complete the matrix square explicitly
+
+For any candidate $\beta$, set $P_1=B_0^{-1}+X^\top X$ and
+$d=X^\top y+B_0^{-1}b_0$. Then
+
+$$
+\begin{aligned}
+&(y-X\beta)^\top(y-X\beta)+(\beta-b_0)^\top B_0^{-1}(\beta-b_0)\\
+&=y^\top y+b_0^\top B_0^{-1}b_0-2\beta^\top d+\beta^\top P_1\beta\\
+&=(\beta-P_1^{-1}d)^\top P_1(\beta-P_1^{-1}d)
++y^\top y+b_0^\top B_0^{-1}b_0-d^\top P_1^{-1}d.
+\end{aligned}
+$$
+
+An equivalent, nonnegative expression for the remainder is
+$Q=\|y-Xb_1\|^2+(b_1-b_0)^\top B_0^{-1}(b_1-b_0)$.
+It is useful for checking the implementation: the two forms must agree.
+The prior can regularise a nearly singular design, but strong shrinkage also
+moves the answer toward the prior. In the CAPM example, the prior mean beta of
+one is an economic benchmark, not an estimate smuggled in from the same sample.
+
 ## The posterior update
 
 Multiplying likelihood by prior gives a joint kernel proportional to
@@ -112,6 +161,8 @@ $\alpha_1 = \alpha_0 + n/2$ and whose scale becomes $\delta_1 = \delta_0 + Q/2$.
 We now set the prior and encode the four formulas as one function, taking $B_0^{-1}$ as an
 argument so that we can later pass a matrix of zeros. The prior is the CAPM itself: alpha
 zero, beta one, no size exposure, tight on alpha.
+
+**Reading the computation.** P1 collects prior and sample information; b1 solves the resulting linear system. Q is the remaining sum of squared deviations after completing the square, and updates uncertainty about the variance.
 
 ```{python}
 a0, d0 = 3.0, 0.0032                         # Inverse-Gamma(3, 0.0032)
@@ -146,6 +197,8 @@ Drawing $\sigma^2$ from its inverse-Gamma marginal and then $\beta$ from
 $\mathcal{N}(b_1, \sigma^2 B_1)$ samples the posterior exactly, so such a composition
 sample must reproduce the analytic moments.
 
+**Reading the computation.** First draw the marginal variance, then draw coefficients conditional on that same variance. The shared variance draw preserves dependence between coefficient uncertainty and residual noise.
+
 ```{python}
 n_draw = 200_000
 sig2_draws = stats.invgamma(a=post["a1"], scale=post["d1"]).rvs(
@@ -177,7 +230,9 @@ Here $\Sigma_1$ is the scale matrix, not the variance: the variance is
 $\frac{\nu}{\nu-2}\Sigma_1 = \mathbb{E}[\sigma^2\mid y]\,B_1$, printed above. Coefficient
 $j$ has a univariate $t_\nu$ marginal with location $b_{1,j}$ and scale
 $\sqrt{\Sigma_{1,jj}}$, the heavy tails coming from not knowing $\sigma^2$. We plot it
-against its Normal approximation and against the classical OLS sampling distribution.
+against its Normal approximation and the reference-prior posterior centred at OLS. The latter gives intervals numerically identical to classical t confidence intervals, with a different probability interpretation.
+
+**Reading the computation.** The t density uses a scale matrix rather than a covariance matrix. Compare its tails with the Normal approximation; matching a centre alone does not make the two distributions identical.
 
 ```{python}
 nu, j = 2 * post["a1"], 1                    # degrees of freedom, market beta
@@ -189,7 +244,7 @@ ax.plot(gb, t_post.pdf(gb), lw=1.8, label=f"posterior  $t_{{{nu:.0f}}}$")
 ax.plot(gb, stats.norm(post["b1"][j], sd_beta[j]).pdf(gb), "--",
         label="Normal approximation")
 ax.plot(gb, stats.t(df=n - k, loc=b_ols[j], scale=se_ols[j]).pdf(gb), ":", lw=1.6,
-        label="OLS sampling dist.")
+        label="Reference-prior posterior")
 ax.axvline(theta_true[j], color="black", lw=1, label="true beta 1.15")
 ax.set_xlabel(r"market beta $\beta_1$")
 ax.set_ylabel("density")
@@ -201,22 +256,46 @@ plt.show()
 
 The posterior and its Normal approximation are almost indistinguishable, because $\nu =
 66$ degrees of freedom is enough for the $t$ to look Gaussian; it would be poor with
-fifteen observations. The OLS sampling distribution is slightly wider and shifted right,
+fifteen observations. The reference-prior posterior is slightly wider and shifted right,
 since the prior pulls toward $\beta_1 = 1$ and removes a little uncertainty.
+
+### Marginalising is different from fixing a variance
+
+Integrating a Normal coefficient density over an inverse-Gamma variance gives
+the kernel
+
+$$
+p(\beta\mid y)\propto
+\left[\delta_1+\frac12(\beta-b_1)^\top B_1^{-1}(\beta-b_1)
+\right]^{-(\alpha_1+k/2)}.
+$$
+
+To obtain it, substitute $u=1/\sigma^2$ and use
+$\int_0^\infty u^{a-1}e^{-bu}du=\Gamma(a)/b^a$.
+This explains the Student-t tails: small posterior probability on large
+variances still contributes to extreme coefficient values. Substituting
+$\mathbb E[\sigma^2\mid y]$ into a Normal distribution matches a covariance
+when the moment exists, but does not reproduce the marginal distribution.
+
+For a portfolio manager asking whether market beta exceeds one, report
+$\Pr(\beta_{\mathrm{market}}>1\mid y)$ using the marginal t distribution.
+For predicting a new return, add observation noise too. That second question
+will return in the dedicated prediction lecture.
 
 ## Summarising the marginals
 
 Decision theory supplies the point estimate: we report the value minimising the posterior
 expected loss $\mathbb{E}[L(\theta,\hat\theta)\mid y]$. Squared-error loss is minimised by
-the posterior **mean**, absolute-error loss by the **median**, and 0-1 loss by the
-**mode**. For a symmetric unimodal $t$ all three coincide; the right-skewed inverse-Gamma
+the posterior **mean** and absolute-error loss by the **median**. For a continuous parameter, exact 0–1 loss assigns the same expected loss to every point; the **mode** instead arises as the limit of maximising posterior mass in a shrinking neighbourhood (under regularity conditions). For a symmetric unimodal $t$ all three coincide; the right-skewed inverse-Gamma
 has mean $\delta_1/(\alpha_1-1)$ and mode $\delta_1/(\alpha_1+1)$.
 
 The **equal-tailed interval** cuts $\alpha/2$ of the mass from each tail, so its endpoints
 are posterior quantiles, while the **highest-posterior-density (HPD) interval** is the
 shortest interval carrying the target mass, every point inside having higher density than
-every point outside. They coincide on a symmetric posterior; on a skewed one the HPD is
+every point outside. They coincide on a symmetric unimodal posterior; on a skewed one the HPD is
 narrower. It has no closed form, so we take it from draws.
+
+**Reading the computation.** Sorting draws produces interval summaries, while analytic distributions provide means and modes. The shortest single interval is appropriate here for unimodal marginals; a multimodal HPD region can be disconnected.
 
 ```{python}
 def hpd_interval(draws, cred_mass=0.95):
@@ -245,13 +324,15 @@ of the long right tail; both contain the true variance of $0.0016$.
 
 ## The noninformative limit
 
-The diffuse limit is $B_0^{-1} \to 0$ with $\alpha_0 \to -k/2$ and $\delta_0 \to 0$, the
+A formal kernel substitution is $B_0^{-1} \to 0$ with $\alpha_0 \to -k/2$ and $\delta_0 \to 0$, the
 improper prior $p(\beta, \sigma^2) \propto 1/\sigma^2$, flat in $\beta$ and in
 $\log\sigma^2$; the shape $-k/2$ removes the $(\sigma^2)^{-k/2}$ the conjugate prior
 contributes. Substituting gives $B_1 = (X^\top X)^{-1}$, $b_1 = \hat\beta_{\text{OLS}}$,
 $\alpha_1 = (n-k)/2$ and $\delta_1 = \text{SSR}/2$, hence $\delta_1/\alpha_1 = s^2$ and
 $\beta \mid y \sim t_{n-k}(\hat\beta_{\text{OLS}}, s^2 (X^\top X)^{-1})$, the classical
-sampling distribution of OLS.
+t-based interval formula for each coefficient. Under repeated sampling, the OLS estimator is Normal conditional on the true variance; the standardised statistic using the estimated standard error is t distributed. These are different random quantities. The improper-prior posterior requires full column rank, $n>k$, and positive residual sum of squares. A negative inverse-Gamma shape is not a proper prior or a limit within the proper NIG family.
+
+**Reading the computation.** This is a formal calculation under an improper joint prior, not a call to sample a negative-shape inverse-Gamma. Compare the resulting t-based uncertainty with the classical regression formulas and state the rank and sample-size requirements.
 
 ```{python}
 diffuse = nig_update(y, X, np.zeros(k), np.zeros((k, k)), -k / 2.0, 0.0)
@@ -274,6 +355,8 @@ coincide numerically, though one is about the parameter and the other about the 
 The harder question is what happens when the prior is strong and the sample short. We keep
 the first twenty-four months and tighten the prior sd on the market beta around one, while
 the truth is $1.15$.
+
+**Reading the computation.** Holding the shortened dataset fixed isolates the effect of prior assumptions. Record both the movement of the beta estimate and the interval width; a tighter interval need not be better calibrated if the prior is wrong.
 
 ```{python}
 ys, Xs = y[:24], X[:24]
@@ -307,23 +390,14 @@ the wrong centre is false confidence, not precision, so such a sweep belongs alo
 small-sample result. The next lecture replaces this closed-form posterior with Monte Carlo
 integration, which is what we must do once the prior is no longer conjugate.
 
-::: {.exercises}
-**Exercises**
 
-1. Derive $B_1^{-1} = B_0^{-1} + X^\top X$ and $b_1 = B_1(B_0^{-1}b_0 + X^\top y)$ by
-   expanding the two quadratic forms and matching coefficients, then show that $Q$ is the
-   constant left over.
-2. Write $b_1$ as the matrix-weighted average $W b_0 + (I - W)\hat\beta_{\text{OLS}}$,
-   identify $W$, and verify your expression numerically with the prior and data above.
-3. Rewrite `nig_update` with a Cholesky factorisation and `scipy.linalg.cho_solve` in
-   place of `np.linalg.inv`. Why is an explicit inverse a bad idea when $X^\top X$ is
-   ill-conditioned?
-4. Using the composition draws, estimate the posterior probability that alpha is positive
-   and that beta exceeds one, under the informative and the diffuse prior. Which pair
-   would you report to a portfolio manager, and why?
-5. Raise $\alpha_0$ while holding $\bar\sigma^2$ fixed, and describe what happens to $\nu$
-   and to the width of the marginal posterior of $\beta_1$.
-:::
+
+## Reading guide and sources
+
+UPM Class 5 and the Normal-model Case 2 practical: completing the square and marginalisation. Greenberg (2008), Sections 4.1–4.3 and 8.1, distinguishes prior specification from posterior calculation.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

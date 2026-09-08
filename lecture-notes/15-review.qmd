@@ -3,6 +3,13 @@ title: "Q&A and review"
 subtitle: "Lecture 15"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 15 exercise session](../exercise-sessions/15-review.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Tying the course together
 
 This final lecture has two jobs. The first is to step back and see the whole course as
@@ -63,6 +70,70 @@ reproducing on a cheat sheet.
 | Compute | MC, Gibbs, MH | posterior draws |
 | Check | $\hat R$, ESS, PPC | convergence and fit |
 
+### A derivation checklist
+
+For a new model, answer these questions before writing an algorithm:
+
+1. What is observed, what is unknown, and what is conditioned on? State support
+   and distribution parameterisations, especially rates versus scales.
+2. What is the likelihood under the conditional-independence assumptions?
+3. What is the joint prior? Does a coefficient prior depend on the error variance?
+4. Multiply likelihood and prior. Which factors are constant in the parameter
+   currently being updated? Keep factors needed for later conditional updates.
+5. Recognise a kernel, complete the square, or identify why conjugacy fails.
+6. Is the result a joint posterior, a full conditional, a marginal, or a predictive
+   distribution? Explain how it answers the original economic question.
+7. Check a limiting case and a numerical example before trusting the computation.
+
+### Worked exam-style question: update and predict
+
+Suppose two conditionally independent growth observations are $y_1=1$ and $y_2=3$,
+with known variance $\sigma^2=4$ and prior $\mu\sim\mathcal N(0,1)$.
+Derive the posterior and the distribution of next period's growth.
+
+The kernel is
+
+$$
+p(\mu\mid y)\propto
+\exp\left[-\tfrac12\left\{\mu^2+
+\frac{(1-\mu)^2+(3-\mu)^2}{4}\right\}\right].
+$$
+
+Inside the braces, the $\mu$-dependent terms are
+$\tfrac32\mu^2-2\mu=\tfrac32(\mu-\tfrac23)^2-\tfrac23$.
+Therefore
+
+$$
+\mu\mid y\sim\mathcal N(2/3,2/3),\qquad
+\tilde y\mid y\sim\mathcal N(2/3,14/3).
+$$
+
+The posterior mean is below the sample mean of 2 because the prior contributes
+precision 1 and the sample contributes only $2/4$. Predictive variance adds
+future noise 4 to posterior mean uncertainty $2/3$. A 95% credible interval
+for $\mu$ is $2/3\pm1.96\sqrt{2/3}$; the predictive interval uses
+$2/3\pm1.96\sqrt{14/3}$. Explaining this difference matters as much as the algebra.
+
+### Transfer questions
+
+- **Gibbs:** If the coefficient prior changes to
+  $\beta\mid\sigma^2\sim\mathcal N(b_0,\sigma^2B_0)$, which terms change?
+  Its density adds $(\sigma^2)^{-k/2}$ and a prior quadratic divided by
+  $\sigma^2$; both affect the variance conditional.
+- **MH:** Why does multiplying the target by 100 leave the chain unchanged?
+  The factor cancels from every acceptance ratio.
+- **Filtering:** Why can state uncertainty increase after a precise update?
+  The transition introduces a fresh shock before the next observation.
+- **Forecasting:** Which uncertainty disappears if parameters are known?
+  Parameter uncertainty disappears, but new observation shocks remain.
+- **Causality:** Can a narrow treatment-effect posterior establish identification?
+  No. Its interpretation still depends on consistency, overlap, and the
+  assumed absence of unobserved confounding.
+
+For practice, redo the worked question using a prior mean of 2. Explain why the
+posterior mean changes but its variance does not. Then derive the result with
+unknown variance using the optional Normal–Gamma calculation in Week 2.
+
 ## Putting it together: Bayesian linear regression by Gibbs
 
 To see the full workflow once more, we recap Bayesian linear regression end to end. The
@@ -84,6 +155,8 @@ b_0 + \tfrac{1}{2}\, \| y - X\beta \|^2 \right).
 $$
 
 We simulate data with known coefficients, then sample.
+
+**Reading the computation.** This recap uses independent coefficient and variance priors. Reconstruct its two conditionals before following the loop, and contrast them with the scaled NIG model from Week 2.
 
 ```{python}
 n, k = 200, 3
@@ -126,6 +199,8 @@ With the draws in hand, every posterior summary is an average or a quantile. We 
 the posterior mean, standard deviation, and a 95% credible interval for each parameter
 next to its true value.
 
+**Reading the computation.** The summary table separates central estimates from interval endpoints. Add a numerical-error measure before interpreting small differences between runs.
+
 ```{python}
 names = ["beta0", "beta1", "beta2"]
 summary = pd.DataFrame({
@@ -143,6 +218,8 @@ print(summary.round(3))
 Every credible interval covers its true value, which is the basic sanity check for a
 sampler. The next figure shows the marginal posteriors of the three coefficients with
 the true values overlaid.
+
+**Reading the computation.** A histogram removes time order and therefore cannot establish mixing. Use it to understand marginal shape alongside trace plots and independent-chain comparisons.
 
 ```{python}
 fig, axes = plt.subplots(1, 3, figsize=(11, 3.4))
@@ -164,6 +241,8 @@ data simulated from the fitted model resemble the observed data. We draw replica
 datasets $y^{\text{rep}}$ using posterior draws of $(\beta, \sigma^2)$ and compare a
 test statistic, here the standard deviation of the residuals, between the replicas and
 the real data.
+
+**Reading the computation.** Each replicated dataset is generated using a matched coefficient and variance draw. The posterior predictive check compares a chosen feature of those datasets with the observed feature; it is a model check, not a posterior probability that the model is true.
 
 ```{python}
 n_rep = 1000
@@ -238,22 +317,14 @@ and a good template for revision. For the exam, build a cheat sheet around the c
 formulas, rehearse the linear-regression sampler, and remember that naming the right
 stage of the recipe is often most of the answer.
 
-::: {.exercises}
-**Exercises**
 
-1. Re-run the Gibbs sampler with only $S = 200$ total iterations and a burn-in of 50.
-   Compare the posterior means and interval widths to the long run, and comment on what
-   the difference says about Monte Carlo error.
-2. Add a redundant collinear column to $X$ (a near-copy of an existing regressor) and
-   describe how the posterior of the affected coefficients changes. Why does the prior
-   help here?
-3. Replace the posterior-predictive test statistic (residual standard deviation) with
-   the maximum of $y$. Does the model still pass the check, and what would a failing
-   check on this statistic tell you?
-4. Without running code, write down the full conditional for $\beta$ in the regression
-   model from memory, then check it against the formula in the lecture. This is exactly
-   the kind of recall the cheat sheet should support.
-:::
+
+## Reading guide and sources
+
+Revisit the chapter-specific sources through the derivation checklist. Greenberg (2008), Section 7.3, and Geweke (2005), Section 8.1, motivate checking simulation code against known targets.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

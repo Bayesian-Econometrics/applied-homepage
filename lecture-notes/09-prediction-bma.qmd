@@ -3,6 +3,13 @@ title: "Prediction and Bayesian model averaging"
 subtitle: "Lecture 9"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 9 exercise session](../exercise-sessions/09-prediction-bma.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## From parameters to forecasts
 
 Almost everything so far has been about the posterior of a parameter, yet little economic
@@ -64,6 +71,8 @@ with $2\bar a$ degrees of freedom. The **plug-in forecast** instead fixes the pa
 posterior means and reports $\mathcal{N}(x_*^\top \bar b, \hat\sigma^2)$: the same centre, but with
 neither the $x_*^\top \bar V x_*$ term nor the heavy tails from averaging over $\sigma^2$.
 
+**Reading the computation.** The three functions correspond to three analytic objects: NIG posterior parameters, a future t distribution, and the evidence. The determinant and Gamma terms must remain in the evidence even though they can be omitted from a parameter kernel.
+
 ```{python}
 from scipy.special import gammaln, logsumexp
 
@@ -88,6 +97,8 @@ We simulate $240$ monthly excess returns driven by four standardised candidate p
 only the first two carry signal. The third is correlated with the first, which makes selection
 hard: the data cannot easily tell a true predictor from a close proxy.
 
+**Reading the computation.** Only two predictors generate the return signal; a correlated proxy makes model selection ambiguous. Keep this generating information outside the fitting procedure.
+
 ```{python}
 n_obs, p_cand = 240, 4
 beta_true = np.array([0.10, 0.35, 0.13, 0.0, 0.0])      # intercept, x1, x2, x3, x4
@@ -111,6 +122,8 @@ identical for every model compared, so a coefficient carries the same prior info
 
 To make the gap visible we fit on twenty observations with two regressors, forecast at a
 regressor row well outside the bulk of the data, and plot both densities.
+
+**Reading the computation.** The extrapolating regressor row increases uncertainty about the conditional mean. Compare both the added variance and the heavier tails from integrating the residual variance.
 
 ```{python}
 n_s = 20
@@ -152,6 +165,8 @@ uniquely maximised by quoting that density, so a forecaster gains nothing by exa
 understating uncertainty. Squared error depends only on the centre and is blind to calibration, as
 the next chunk shows by scaling the forecast standard deviation around a correct mean.
 
+**Reading the computation.** Every row has the same forecast mean, so squared-error loss cannot distinguish them. The log score responds to forecast spread and penalises allocating little density to observed outcomes.
+
 ```{python}
 y_out = rng.normal(size=20000)          # truth: mean 0, sd 1
 pd.DataFrame([{"sd / true sd": f, "mean log score": stats.norm.logpdf(y_out, 0, f).mean(),
@@ -163,6 +178,34 @@ The mean log score peaks exactly at the honest forecast and falls away on both s
 overconfident forecaster ($f = 0.5$) harder than the timid one, since an overconfident density can
 give the outcome a density near zero and a score near $-\infty$. Mean squared error is identical in
 every row: two models can issue the same point forecasts and differ enormously in usefulness.
+
+### Why the log score rewards calibrated uncertainty
+
+If the true density is $p$ and the forecast density is $q$, then
+
+$$
+\mathbb E_p[\log p(Y)]-\mathbb E_p[\log q(Y)]
+=\int p(y)\log\frac{p(y)}{q(y)}dy=\operatorname{KL}(p\Vert q)\ge0.
+$$
+
+Thus the correct density maximises the expected log score. The expectation is
+over repeated outcomes, so a single observation can favour a worse forecast.
+Log scores also depend on measurement units; compare densities for the same
+outcomes expressed in the same units.
+
+### Separate within-model and between-model uncertainty
+
+For model probabilities $w_j$, predictive means $m_j$, and variances $v_j$,
+
+$$
+m=\sum_jw_jm_j,\qquad
+\operatorname{Var}(Y^*\mid y)=\sum_jw_jv_j+\sum_jw_j(m_j-m)^2.
+$$
+
+The first term is uncertainty within models. The second is disagreement between
+their predictions. Averaging model variances alone omits that disagreement.
+Likewise, the log score of a mixture is $\log\sum_jw_jp_j(y^*)$,
+not $\sum_jw_j\log p_j(y^*)$. The exercise computes the former with log-sum-exp.
 
 ## The marginal likelihood, complexity and Occam's razor
 
@@ -198,6 +241,8 @@ a weighted average of sixteen Student $t$ densities. Since the evidences are rat
 we work in logs and normalise with the log-sum-exp trick, and summing the weights of all models
 containing a predictor yields its **posterior inclusion probability**. The helper below fits every
 model on a set of rows and optionally scores one future observation.
+
+**Reading the computation.** Each candidate model has a proper prior and its own integrated likelihood. Normalised evidence weights describe relative support among this candidate set, not the probability that one of them is literally true.
 
 ```{python}
 from itertools import combinations
@@ -240,6 +285,8 @@ regressor row, and score four strategies. **BMA** scores the mixture, **selectio
 with the highest posterior probability then, **full** always uses all four predictors, and the
 **benchmark** is the intercept-only model with no predictability.
 
+**Reading the computation.** At each origin, fit using past data only, score the next observation, and then advance. The BMA density is mixed before taking its logarithm; reversing those operations evaluates a different forecast.
+
 ```{python}
 n0 = 60
 j_full, j_bench = models.index(tuple(range(p_cand))), models.index(())
@@ -265,6 +312,8 @@ beat the benchmark; but *selecting* the leader does worse than averaging, becaus
 noisy the leader is often the wrong model and its forecast overconfident. It even loses to the
 over-parameterised full model, which at least propagates coefficient uncertainty for regressors it
 does not need, whereas averaging buys that insurance without estimating four coefficients.
+
+**Reading the computation.** Cumulative score differences show when gains were earned. A final positive difference need not imply uniformly better forecasts at every date or robustness to every prior.
 
 ```{python}
 fig, ax = plt.subplots()
@@ -304,21 +353,24 @@ fails beyond twenty or so predictors, which is why Madigan and Raftery (1994) pr
 window**, keeping only models whose posterior odds against the leader clear a threshold, and why the
 modern alternative is an MCMC sampler over model indicators.
 
-::: {.exercises}
-**Exercises**
 
-1. Derive the Student $t$ predictive from the two-step argument in the text: write
-   $y^* \mid \sigma^2, y$ as Normal, multiply by the inverse-Gamma posterior of $\sigma^2$ and
-   integrate $\sigma^2$ out, confirming the degrees of freedom and the scale.
-2. Show that $p(y \mid M) = \prod_t p(y_t \mid y_{1:t-1}, M)$ and explain in two sentences why
-   this makes the log marginal likelihood an in-sample log predictive score.
-3. Simulate $2000$ samples of size $n = 20$ from the true model, form the $90\%$ predictive and
-   plug-in intervals at `x_star` in each, and report how often each contains a fresh draw of $y^*$.
-4. Repeat the backtest with a much tighter slope prior (variance $0.1$) and a much looser one
-   (variance $100$), and relate the change in inclusion probabilities to $|\bar V| / |V_0|$.
-5. Replace the log score by mean squared forecast error in the summary table. Does the ranking of the
-   four strategies change, and which comparison would you show a risk manager?
-:::
+
+### Reading the backtest as a sequence of decisions
+
+At time $t$, fit using observations through $t-1$, calculate $w_{j,t-1}$, and
+issue $p(y_t\mid y_{1:t-1})$. Only after recording its score may $y_t$ update
+the weights. For fixed model priors and an expanding dataset,
+$w_{j,t}\propto w_{j,t-1}p(y_t\mid y_{1:t-1},M_j)$.
+This is sequential Bayes, as in the UPM coin example, now applied to a model index.
+Rolling-window scores with forgotten observations are a different procedure and
+must not be described as the same full-history posterior model probabilities.
+
+## Reading guide and sources
+
+UPM Classes 1 and 5 connect prediction with model probabilities; Frühwirth-Schnatter, Bayesian Computing, Parts IV a and V, treats predictive mixtures and model selection; Geweke (2005), Sections 8.2–8.3.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

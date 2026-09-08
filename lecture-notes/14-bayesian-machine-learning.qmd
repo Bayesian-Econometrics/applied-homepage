@@ -3,6 +3,13 @@ title: "Bayesian machine learning"
 subtitle: "Lecture 14"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 14 exercise session](../exercise-sessions/14-bayesian-machine-learning.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Priors over functions
 
 Every model so far has been parametric. We wrote down a likelihood indexed by a finite vector, put a
@@ -69,6 +76,35 @@ cheaper than one with a thousand. This is what $f \sim \mathcal{GP}(0, k)$ means
 process** prior is a prior over functions under which every finite set of values is jointly Gaussian
 with covariance $k$ (Rasmussen and Williams, 2006).
 
+### Derive a posterior over functions using a familiar Gaussian identity
+
+Let $f$ be latent function values at the training inputs and $f_*$ those at
+new inputs. A Gaussian-process prior specifies their joint distribution,
+
+$$
+\begin{pmatrix}y\\f_*\end{pmatrix}\sim N\left(0,
+\begin{pmatrix}K+\sigma^2I&K_*\\K_*^\top&K_{**}\end{pmatrix}\right).
+$$
+
+Conditioning a partitioned Normal vector gives
+
+$$
+\mathbb E[f_*\mid y]=K_*^\top(K+\sigma^2I)^{-1}y,\qquad
+\operatorname{Var}(f_*\mid y)=K_{**}-K_*^\top(K+\sigma^2I)^{-1}K_*.
+$$
+
+One way to see the formula is to subtract
+$K_*^\top(K+\sigma^2I)^{-1}y$ from $f_*$. The resulting residual is uncorrelated
+with $y$ and hence independent of it under joint Normality. Computing its
+covariance gives the second expression. Prediction for an observed return adds
+$\sigma^2I$; a band for the latent function does not.
+
+The kernel is a prior covariance, so its length scale states how quickly the
+response may change across nearby inputs. At an input unrelated to the training
+points, $K_*$ is small and the posterior returns toward its prior. A flexible
+curve between observations should not be read as direct evidence from data
+where none were observed.
+
 ## Gaussian process regression from scratch
 
 We observe $y_i = f(x_i) + \varepsilon_i$ with $\varepsilon_i \sim \mathcal{N}(0, \sigma_n^2)$ and
@@ -100,6 +136,8 @@ $$
 
 The chunk implements the kernel, the fit and the prediction, then simulates non-linear data. We
 standardise the outcome so that unit signal variance is sensible and only $\ell$, $\sigma_n^2$ vary.
+
+**Reading the computation.** The kernel creates covariance from distances between inputs. Cholesky solves implement the conditional Normal formulas without explicitly inverting the large training covariance.
 
 ```{python}
 def sq_exp(xa, xb, ell):
@@ -141,6 +179,8 @@ over the function rather than maximising over it and so penalises a prior spread
 functions than the data support. A short length scale lets the prior fit anything, forcing low
 density on the data we saw; a very long one cannot reach the data at all.
 
+**Reading the computation.** The grid compares marginal likelihoods of hyperparameter settings. Selecting the best setting is empirical Bayes; the subsequent bands condition on it and do not integrate hyperparameter uncertainty.
+
 ```{python}
 ells = np.array([0.15, 0.3, 0.6, 1.0, 2.0, 4.0])
 sn2s = np.array([0.01, 0.03, 0.1, 0.3])
@@ -161,6 +201,8 @@ The surface has a clear interior maximum. Reading down a column the likelihood r
 scale grows to about one and then collapses; across a row it rises with the noise variance to about
 a tenth and then falls. The selected noise level recovers the simulation's standard deviation to
 within a couple of hundredths, separating signal from noise unaided.
+
+**Reading the computation.** Predictive mean and latent-function variance come from the joint Gaussian conditioning formula. Add observation noise only when predicting a realised return.
 
 ```{python}
 L, alpha, _ = gp_fit(x, y, ell_hat, sn2_hat)
@@ -192,6 +234,8 @@ much structure the model will see, and getting it wrong fails in two opposite wa
 the noise variance at its selected value and refits with a length scale six times too short and four
 times too long, reporting the in-sample residual standard deviation and the distance of the mean
 from the truth, with the well-chosen model's distance in brackets.
+
+**Reading the computation.** Changing the length scale changes smoothness, while changing noise changes how closely the function follows observations. The two can compensate for each other, which motivates sensitivity checks.
 
 ```{python}
 rms_ref = np.sqrt(np.mean((mu_o - f_true(xs)) ** 2))
@@ -241,6 +285,33 @@ interpretable hyperparameters and a marginal likelihood that selects them withou
 split. The network earns its keep when the input is high-dimensional and structured, as with text or
 images, where the architecture encodes what no kernel can. A monthly panel of predictors is not.
 
+### What makes a neural network Bayesian?
+
+For a network $f_w(x)$ with weight prior $p(w)$, the posterior is
+$p(w\mid y)\propto p(w)\prod_i p(y_i\mid f_w(x_i))$. Predictions integrate
+over weights, rather than evaluating only an optimised weight vector. The
+integral is usually nonconjugate because the hidden-layer transformations are
+nonlinear in $w$.
+
+UPM Class 4 introduces variational inference as an optional computational bridge.
+For a tractable density $q(w)$,
+
+$$
+\log p(y)=\underbrace{\mathbb E_q[\log p(y,w)-\log q(w)]}_{\mathrm{ELBO}(q)}
++\operatorname{KL}(q(w)\Vert p(w\mid y)).
+$$
+
+The identity follows by inserting $p(y,w)=p(w\mid y)p(y)$ under the
+expectation. Maximising the lower bound chooses an approximation within the
+allowed family, not the exact posterior. A restricted family can miss dependence
+and understate uncertainty. HMC offers a sampling route but can be costly for
+large networks. These are computational choices for the same Bayesian model.
+
+The lecture's GP illustration teaches function uncertainty through a closed
+form. The exercise follows the fixed course plan by comparing **BART with OLS**
+on a held-out sample; it also distinguishes learned trees from the fixed-stump
+illustration in Week 10.
+
 ## A predictive horse race for return predictability
 
 The interesting question is not whether a flexible model can fit a non-linear function, which we
@@ -252,6 +323,8 @@ the region of genuine finance data, a few per cent, to a level no return series 
 model is fitted on the first half of the sample and scored on the second by mean **log predictive
 density** and mean squared error, over twenty replications. The linear benchmark is the Bayesian
 linear model, whose Student predictive density accounts for parameter uncertainty.
+
+**Reading the computation.** Training and held-out segments are kept separate within each replication. Compare performance across signal strengths and seeds; this GP experiment supplements the scheduled BART-versus-OLS exercise.
 
 ```{python}
 def one_replication(amp, T, Tt, rng):
@@ -308,20 +381,14 @@ little in low-signal forecasting and a great deal in the higher-signal problems 
 lives: derivative pricing surfaces, term-structure fitting and the conditional means on which causal
 adjustment depends. The Bayesian version tells you which regime you are in.
 
-::: {.exercises}
-**Exercises**
 
-1. Add the signal variance $\sigma_f^2$ as a third hyperparameter and extend the grid over it. Verify
-   that the selected value is near one for standardised data, and explain why.
-2. Replace the squared-exponential kernel with the absolute-exponential kernel
-   $\exp\{-|x - x'| / \ell\}$ and describe how the smoothness of the posterior mean changes.
-3. Reduce the sample from seventy observations to twenty, rerun the grid, and explain the direction in
-   which the selected length scale moves.
-4. In the horse race, raise the training sample from 300 to 2000 at the return-like amplitude. Does
-   the Gaussian process now win, and how much data does a non-linearity need to be detectable?
-5. The cost is cubic in $n$. Time `gp_fit` for $n = 200, 400, 800$, confirm the scaling, and explain
-   why it rules the method out for high-frequency data.
-:::
+
+## Reading guide and sources
+
+UPM Class 4 for the optional approximation discussion; Rasmussen and Williams (2006), Chapter 2, for GP regression; Chipman et al. (2010) for BART. These models share posterior prediction but use different priors over functions.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

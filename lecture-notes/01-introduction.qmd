@@ -3,6 +3,13 @@ title: "Introduction: the Bayesian paradigm"
 subtitle: "Lecture 1"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 1 exercise session](../exercise-sessions/01-introduction.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Where we are going
 
 Every empirical question in economics and finance is a question about a quantity we
@@ -121,6 +128,8 @@ game many times and counts. Each round draws the prize location and the player's
 lets the host open a goat door he is allowed to open, and records whether staying or
 switching would have won.
 
+**Reading the computation.** The simulated host obeys the same information rule used in the calculation. Count wins under staying and switching; this checks the model of the host, not a general claim that switching always helps.
+
 ```{python}
 n_games = 200_000
 prize = rng.integers(0, 3, n_games)          # door hiding the prize
@@ -139,6 +148,32 @@ print(f"win by switching: {(switch_to == prize).mean():.4f}")
 Staying wins about a third of the time and switching about two thirds, which is what the
 posterior said. The point of the exercise is not the puzzle but the habit: we will write
 down a posterior, then check it against a simulation that makes no use of the algebra.
+
+### The economic content of a probability
+
+The Monty Hall experiment works because the host's behaviour is part of the
+likelihood. The same issue appears when a lender interprets a credit warning:
+how often does the warning appear among firms that default, and among firms
+that survive? A statement about the signal conditional on default is not a
+statement about default conditional on the signal.
+
+For illustration, let default probability be 2%, sensitivity 80%, and the
+false-positive rate 10%. Among 10,000 firms, 160 defaulting firms and 980
+surviving firms would be flagged on average. Therefore
+
+$$
+\Pr(\text{default}\mid\text{flag})
+=\frac{0.8(0.02)}{0.8(0.02)+0.1(0.98)}\approx0.140.
+$$
+
+The warning increases risk substantially, but rare defaults remain a small
+part of all flagged cases. Before calculating any posterior, name the population,
+the observation mechanism, and the quantity being conditioned on. This is why
+the course begins with probability rather than a sampler.
+
+An uncertain parameter need not change randomly in the world. A firm's default
+probability can be fixed while our information about it changes. The posterior
+describes that uncertainty conditional on the specified model.
 
 ## From events to parameters
 
@@ -184,6 +219,8 @@ the third tail appeared on the twelfth toss. The data are identical, nine heads 
 tails in twelve tosses, but the sample space is not: the number of tosses is now random
 and the count of tails is fixed. The $p$-value changes with it, because it sums
 probabilities over data we never saw. The block below computes both.
+
+**Reading the computation.** Both calculations use the same observed heads, but count different sets of hypothetical outcomes under their sampling plans. Compare the likelihoods for the observed data separately from the tail probabilities.
 
 ```{python}
 n, y = 12, 9                       # tosses and heads
@@ -280,6 +317,8 @@ The next block draws the three ingredients on one set of axes and prints the sum
 the derivation predicts, so the algebra and the picture can be checked against each
 other.
 
+**Reading the computation.** The Beta object changes its two shape parameters after observing successes and failures. The density plot shows how probability mass moves; its height at a point is not the probability of that exact parameter value.
+
 ```{python}
 a, b = 5, 5                                    # Beta(a, b) prior
 post = stats.beta(a + y, b + n - y)            # Beta(14, 8)
@@ -350,6 +389,8 @@ The elicitation is not finished at that point. The honest final step is to feed 
 implications back and check that the expert believes them, because a prior that sounds
 reasonable in the parameter space can be absurd in the data space.
 
+**Reading the computation.** Translate an elicited prior into future observations before accepting it. The predictive spread asks whether the implied range of outcomes is compatible with the expert’s judgement, rather than only whether the prior mean sounds reasonable.
+
 ```{python}
 a_e, b_e = 250, 250                # elicited prior
 m_e = 100                          # hypothetical future tosses
@@ -392,6 +433,8 @@ the beta parameters is zero and the posterior does not integrate: the improper p
 produced an improper posterior, and every number computed downstream is meaningless. The
 check is one line.
 
+**Reading the computation.** Boundary observations can expose an improper posterior. Follow the exponents when all trials succeed, and distinguish a formal expression from a density that actually integrates to one.
+
 ```{python}
 for y_obs in (9, 12):              # 9 heads (interior) and 12 heads (boundary)
     a_h, b_h = y_obs, n - y_obs
@@ -411,6 +454,8 @@ $I(\theta)$ the Fisher information. Its appeal is invariance: it transforms corr
 reparameterisation, so the analysis does not depend on whether we parameterise by a
 probability or its log-odds. For a binomial probability it works out to
 $\text{Beta}(1/2, 1/2)$, plotted below against the flat $\text{Beta}(1, 1)$.
+
+**Reading the computation.** These priors have different shapes near zero and one. Reading only the centre hides that difference; inspect the boundary behaviour and ask what it says about near-certain outcomes.
 
 ```{python}
 theta_open = np.linspace(0.001, 0.999, 400)
@@ -442,6 +487,8 @@ theorem, now read as a forecast of the data implied by the prior alone. If it pu
 its mass on data we would consider impossible, the prior is telling us something is wrong
 before we have fitted anything. Sampling from it is immediate: draw $\theta$ from the
 prior, then $y$ from the likelihood.
+
+**Reading the computation.** Each simulation first draws a probability from the prior and then a count from the sampling model. This two-stage construction produces the prior predictive distribution, before using the observed count.
 
 ```{python}
 n_trials, n_sim = 20, 20_000
@@ -493,6 +540,8 @@ shape instead of integrating. The update rule reads as plainly as the beta one: 
 event count to the shape and the exposure to the rate, so $a$ is a prior number of events
 and $b$ a prior exposure. Letting $a, b \to 0$ gives the improper objective prior
 $f(\theta) \propto 1/\theta$.
+
+**Reading the computation.** The Poisson model combines event counts with exposure. Gamma rate increases with firm-years, not just with the number of rows; inspect both posterior mean and units.
 
 ```{python}
 a_g, b_g = 2.0, 500.0              # prior: 2 events in 500 firm-years
@@ -553,6 +602,24 @@ an integral with no closed form. Everything from Lecture 3 onwards is a strategy
 handling that integral, either by approximating it or by sampling in a way that never
 requires it.
 
+### Two plausible prior stories
+
+UPM also considers mixtures of conjugate priors. Suppose an analyst regards
+two economic regimes as plausible, with prior
+$p(\theta)=w\operatorname{Beta}(a_1,b_1)+(1-w)\operatorname{Beta}(a_2,b_2)$.
+Each component updates by the usual Beta–Binomial rule. The component weights
+also update:
+
+$$
+w_j^*=\frac{w_j Z_j}{\sum_\ell w_\ell Z_\ell},\qquad
+Z_j=\binom ny\frac{B(a_j+y,b_j+n-y)}{B(a_j,b_j)}.
+$$
+
+The data can both revise the probability within a story and change which story
+is credible. Keeping the old mixture weights would ignore the second update.
+The grid exercise can approximate this posterior without any new integration
+formula. In Week 9, the same calculation becomes Bayesian model averaging.
+
 ## The posterior without algebra
 
 Conjugacy gave us the answer in closed form, which is a luxury. It is worth seeing once
@@ -564,6 +631,8 @@ evaluate that product on a fine grid of $\theta$ values and divide by its sum, w
 posterior, with the integral in the denominator replaced by a sum. This is the exercise
 for this week's session, and it is the crudest member of the family of methods that
 occupies the middle third of the course.
+
+**Reading the computation.** The product of likelihood and prior is evaluated at each grid point, then normalised. The grid approximates integration; compare its resolution with the width of the posterior peak.
 
 ```{python}
 theta_grid = np.linspace(0, 1, 501)
@@ -601,6 +670,8 @@ front of you, which is why it is so often misquoted as the first.
 The interval itself is one line once the posterior is a named distribution, and the
 probability statement that goes with it is the one a confidence interval cannot make.
 
+**Reading the computation.** Quantiles allocate equal probability to the two excluded tails. They describe the parameter conditional on this prior and likelihood, not a repeated-sample coverage claim.
+
 ```{python}
 lo, hi = post.ppf([0.025, 0.975])
 print(f"95% equal-tailed credible interval: [{lo:.3f}, {hi:.3f}]")
@@ -634,6 +705,8 @@ kernel with parameters $a^* + k$ and $b^* + m - k$, so it integrates to
 $B(a^* + k, b^* + m - k)$. This is the **beta-binomial** distribution. The classical
 alternative, $\text{Binomial}(m, \hat\theta)$, conditions on one value of $\theta$ as if
 it were known.
+
+**Reading the computation.** Integrating the uncertain probability gives a Beta–Binomial future count. Compare this with fixing the probability at its posterior mean; multiple future trials share the same uncertain parameter.
 
 ```{python}
 m = 10                                   # further tosses
@@ -683,6 +756,8 @@ The same property is easier to believe as a picture. The block below streams two
 Bernoulli outcomes from a coin with $\theta = 0.7$ and redraws the posterior after the
 first $k$ of them.
 
+**Reading the computation.** The cumulative number of successes is sufficient for this exchangeable Bernoulli model. Updating one observation at a time must agree with processing the entire sample at once.
+
 ```{python}
 true_theta = 0.7
 draws = rng.binomial(1, true_theta, size=200)
@@ -714,6 +789,8 @@ Monte Carlo, Gibbs sampling, Metropolis-Hastings, occupies the next several lect
 logic can be previewed here, where we happen to know the posterior and can draw from it
 directly.
 
+**Reading the computation.** Drawing from a known Beta distribution lets us check an estimated expectation against an analytic one. More draws change simulation error, not the posterior distribution being sampled.
+
 ```{python}
 samples = post.rvs(size=20_000, random_state=rng)
 print(f"analytic posterior mean {post.mean():.4f}   Monte Carlo {samples.mean():.4f}")
@@ -738,32 +815,14 @@ which is why the prior fades as the sample grows. Prediction integrates over the
 instead of conditioning on an estimate, and updating is sequential. From Lecture 3 the
 closed forms disappear and we will compute these same objects by simulation.
 
-::: {.exercises}
-**Exercises**
 
-1. Repeat the coin analysis with a $\text{Beta}(1,1)$ prior and with a
-   $\text{Beta}(50,50)$ prior. Report the posterior mean in each case and check it against
-   the weighted-average formula $w\theta_0 + (1-w)\hat\theta$. At what prior sample size
-   does the conclusion $P(\theta > 0.5 \mid {\bf x}) > 0.9$ break down?
-2. Derive the beta-binomial predictive probability $P(Y = k \mid {\bf x})$ yourself,
-   showing the step where the beta kernel is integrated out. Then verify your expression
-   numerically against a simulation that draws $\theta$ from the posterior and $Y$ from
-   the binomial.
-3. A screening rule flags firms as likely to default. It flags 90% of firms that do
-   default and 20% of those that do not, and 3% of firms default. Using Bayes' theorem for
-   events, compute the probability that a flagged firm actually defaults, and explain in
-   one sentence why the answer is so much lower than 90%.
-4. Naive Bayesian classification by hand. Six emails are labelled: spam, "send us your
-   password"; ham, "send us your review"; ham, "password review"; spam, "review us"; spam,
-   "send your password"; spam, "send us your account". Estimate $P(\text{spam})$ and the
-   word probabilities from these counts, then classify the new message "review us now",
-   treating the words as conditionally independent given the class. Which single word
-   drives the answer?
-5. Extend the grid calculation to two parameters by putting a grid on the mean and the
-   variance of a normal sample. Count the number of density evaluations you need for a
-   grid of 200 points per dimension, and then for five parameters, and explain in one
-   sentence why grids are not the answer.
-:::
+
+## Reading guide and sources
+
+UPM Classes 1–2: probability rules, conjugacy, prior elicitation, mixtures, and sequential updating. Greenberg (2008), Chapters 2–4, provides the probability-to-inference bridge.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

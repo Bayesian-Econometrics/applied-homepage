@@ -3,35 +3,57 @@ title: "Monte Carlo integration and importance sampling"
 subtitle: "Lecture 3"
 ---
 
+::: {.callout-tip}
+## Exercise session
+Practise the derivation and implementation in [Week 3: Vanilla Monte Carlo](../exercise-sessions/03-monte-carlo-importance-sampling.qmd).
+:::
+
+
 ## Why posterior expectations are integrals
 
-Once we have a posterior $p(\theta \mid y)$, the quantities we actually report are
-almost always expectations under that posterior. The posterior mean is
-$\mathbb{E}[\theta \mid y] = \int \theta\, p(\theta \mid y)\, d\theta$, a predictive
-mean is $\int g(\theta)\, p(\theta \mid y)\, d\theta$ for some function $g$, and a tail
-probability such as $\Pr(\theta > c \mid y)$ is the expectation of an indicator,
-$\int \mathbf{1}\{\theta > c\}\, p(\theta \mid y)\, d\theta$. In every case the object
-of interest has the same shape:
+Lecture 1 ended on a specific complaint: the grid trick that solved the coin-tossing
+problem without algebra needs $G^d$ evaluations for $d$ parameters on a $G$-point grid,
+so a five-parameter model already needs billions of evaluations and a ten-parameter one
+is simply out of reach. This lecture picks up exactly there, because the underlying
+problem never went away. Every quantity we report from a posterior is an integral. The
+posterior mean is $\mathbb{E}[\theta \mid y] = \int \theta\, p(\theta \mid y)\, d\theta$,
+a predictive mean is $\int g(\theta)\, p(\theta \mid y)\, d\theta$ for some function $g$,
+and a tail probability such as $\Pr(\theta > c \mid y)$ is the expectation of an
+indicator function, $\int \mathbf{1}\{\theta > c\}\, p(\theta \mid y)\, d\theta$. Every
+one of these has the same shape,
 
 $$
-\mathbb{E}_{p}[g(\theta)] \;=\; \int g(\theta)\, p(\theta \mid y)\, d\theta .
+\mathbb{E}_{p}[g(\theta)] \;=\; \int g(\theta)\, p(\theta \mid y)\, d\theta ,
 $$
 
-In the conjugate models of the earlier lectures these integrals have closed forms.
-That is the exception. As soon as the model has more than a couple of parameters, or
-the prior and likelihood do not pair neatly, the integral has no analytic solution and
-numerical quadrature becomes hopeless: a grid with $G$ points per dimension needs
-$G^d$ evaluations, so a ten-parameter model is already out of reach. The Bayesian
-answer is not to abandon the integral but to estimate it by sampling. This lecture is
-about the simplest version of that idea, Monte Carlo integration, together with its
-error and a first variance-reduction-free workaround, importance sampling.
+for some choice of $g$: the identity function for a mean, an indicator for a
+probability, a squared deviation for a variance. In the conjugate models of Lecture 1
+these integrals had closed forms because we could recognise the kernel. That was a
+lucky accident of the beta and gamma families. As soon as the model has more than a
+couple of parameters, or the prior and likelihood do not pair into a known family, the
+integral has no analytic solution, and the grid we used as a stopgap scales
+exponentially in the dimension rather than linearly. Quadrature is not a smaller,
+slower version of the right method; it is the wrong method entirely once $d$ grows.
 
-We import the usual libraries and fix a seed.
+The resolution is to stop trying to cover the whole parameter space with points and
+instead put points where the posterior actually has mass, by drawing random samples
+from it. This lecture builds that idea from the ground up: plain Monte Carlo
+integration and its error, the importance-sampling trick for when we cannot sample the
+posterior directly, rejection sampling as an alternative that produces exact draws, and
+sampling-importance-resampling as the bridge to the Markov chain methods of the next
+two lectures. We close with two applied examples, a gamma model for a positive-valued
+series with a genuinely non-conjugate posterior, and an option-pricing simulator in
+which the volatility itself carries posterior uncertainty.
+
+We import the usual libraries, add the one new function this lecture needs for
+numerical integration, and fix the seed.
 
 ```{python}
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.integrate import quad
+from scipy.special import gammaln
 import matplotlib.pyplot as plt
 
 rng = np.random.default_rng(2026)
@@ -42,31 +64,49 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 ## Monte Carlo integration and the law of large numbers
 
 Suppose we can draw independent samples $\theta^{(1)}, \dots, \theta^{(S)}$ from the
-posterior $p(\theta \mid y)$. The Monte Carlo estimate of $\mathbb{E}_p[g(\theta)]$ is
-the sample average
+posterior $p(\theta \mid y)$. The **Monte Carlo estimator** of
+$\mathbb{E}_p[g(\theta)]$ replaces the integral by the sample average of $g$ evaluated
+at the draws,
 
 $$
 \hat{g}_S \;=\; \frac{1}{S} \sum_{s=1}^{S} g\big(\theta^{(s)}\big).
 $$
 
-The law of large numbers guarantees that $\hat{g}_S \to \mathbb{E}_p[g(\theta)]$ as
-$S \to \infty$, regardless of the dimension of $\theta$. This is the crucial point: the
-accuracy of a Monte Carlo estimate depends on the number of draws, not on the
-dimension of the integral, which is exactly why sampling rescues us where quadrature
-fails.
+Two facts justify treating this average as an estimate of the integral, and both are
+worth deriving rather than asserting, because the whole lecture rests on them.
+**Unbiasedness** follows from linearity of expectation together with the fact that
+each $\theta^{(s)}$ is itself a draw from $p$:
 
-To see it in action we reuse the Beta-Binomial model from Lecture 1, where the
-posterior is known in closed form so we can check the Monte Carlo answers against the
-truth. We use a $\text{Beta}(2,2)$ prior with 8 successes in 12 trials, giving a
-$\text{Beta}(10, 6)$ posterior, and target two quantities: the posterior mean and the
-tail probability $\Pr(\theta > 0.7 \mid y)$.
+$$
+\mathbb{E}\big[\hat{g}_S\big]
+= \mathbb{E}\left[\frac{1}{S}\sum_{s=1}^S g(\theta^{(s)})\right]
+= \frac{1}{S}\sum_{s=1}^S \mathbb{E}\big[g(\theta^{(s)})\big]
+= \frac{1}{S}\sum_{s=1}^S \mathbb{E}_p[g(\theta)]
+= \mathbb{E}_p[g(\theta)] .
+$$
+
+The estimator is centred on the right answer for every $S$, not just in the limit.
+**Consistency** is the law of large numbers: as $S \to \infty$, $\hat{g}_S \to
+\mathbb{E}_p[g(\theta)]$ with probability one, for essentially any $g$ with finite
+variance under $p$. Crucially, nothing in either derivation refers to the dimension of
+$\theta$. Unbiasedness holds term by term regardless of how many components $\theta$
+has, and the law of large numbers is a statement about a one-dimensional sequence of
+numbers $g(\theta^{(1)}), g(\theta^{(2)}), \dots$, whatever the dimension of the object
+that produced them. This is the entire reason simulation escapes the curse of
+dimensionality that sank the grid.
+
+To see the machinery reproduce a known answer, we return to the coin from Lecture 1:
+nine heads in twelve tosses with a $\text{Beta}(5,5)$ prior, giving the exact posterior
+$\theta \mid y \sim \text{Beta}(14, 8)$ with mean $14/22 \approx 0.6364$ and
+$\Pr(\theta > 0.5 \mid y) \approx 0.905$. Because this posterior is available in closed
+form we can sample it directly with `scipy.stats`, which lets us check the Monte Carlo
+answer against the value we already trust before using simulation anywhere it matters.
 
 ```{python}
-a, b = 2, 2
-y, n = 8, 12
-posterior = stats.beta(a + y, b + n - y)   # Beta(10, 6)
+a, b, y, n = 5, 5, 9, 12
+posterior = stats.beta(a + y, b + n - y)          # Beta(14, 8), exact
 
-c = 0.7
+c = 0.5
 true_mean = posterior.mean()
 true_tail = 1 - posterior.cdf(c)
 
@@ -76,54 +116,81 @@ draws = posterior.rvs(size=S, random_state=rng)
 mc_mean = draws.mean()
 mc_tail = np.mean(draws > c)
 
-print(f"posterior mean   true {true_mean:.4f}   MC {mc_mean:.4f}")
-print(f"P(theta > {c})    true {true_tail:.4f}   MC {mc_tail:.4f}")
+print(f"posterior mean    exact {true_mean:.4f}   MC {mc_mean:.4f}")
+print(f"P(theta > {c})     exact {true_tail:.4f}   MC {mc_tail:.4f}")
 ```
 
-Both Monte Carlo estimates match the analytic values to the precision we should expect
-from a few thousand draws. The tail probability is just the average of an indicator, so
-the same averaging machine handles means and probabilities without any new ideas.
+Both Monte Carlo estimates land within a few thousandths of the values Lecture 1
+derived by hand. The tail probability is nothing but the average of an indicator
+variable, so the identical averaging machine handles a mean, a probability, a
+variance, or any other posterior summary without a single new idea; only the function
+$g$ inside the sum changes.
 
-## Monte Carlo standard error
+## Where the error comes from: the Monte Carlo standard error
 
-A Monte Carlo estimate is itself a random quantity, and we should always report how
-uncertain it is. Because $\hat{g}_S$ is an average of independent terms, the central
-limit theorem applies. Let $\sigma_g^2 = \operatorname{Var}_p[g(\theta)]$ be the
-posterior variance of $g$. Then
+A Monte Carlo estimate is a random number computed from a finite sample, so it needs an
+error bar exactly as an estimator computed from data does. Write $\sigma_g^2 =
+\operatorname{Var}_p[g(\theta)]$ for the posterior variance of $g(\theta)$, assumed
+finite. Because the terms $g(\theta^{(1)}), \dots, g(\theta^{(S)})$ are independent and
+identically distributed, the variance of their average follows from the rule for the
+variance of a sum of independent terms,
 
 $$
-\operatorname{Var}[\hat{g}_S] \;=\; \frac{\sigma_g^2}{S},
-\qquad
-\text{MCSE} \;=\; \frac{\sigma_g}{\sqrt{S}} \;\approx\; \frac{\hat{\sigma}_g}{\sqrt{S}},
+\operatorname{Var}\big[\hat{g}_S\big]
+= \operatorname{Var}\left[\frac{1}{S}\sum_{s=1}^S g(\theta^{(s)})\right]
+= \frac{1}{S^2}\sum_{s=1}^S \operatorname{Var}\big[g(\theta^{(s)})\big]
+= \frac{1}{S^2} \cdot S\sigma_g^2
+= \frac{\sigma_g^2}{S} .
 $$
 
-where $\hat{\sigma}_g$ is the sample standard deviation of the $g(\theta^{(s)})$. The
-Monte Carlo standard error (MCSE) shrinks like $1/\sqrt{S}$. This is the central,
-slightly discouraging fact of Monte Carlo work: to halve the error you must quadruple
-the number of draws, and to add a decimal place of accuracy you need a hundred times as
-many samples. The estimate is unbiased and converges, but it converges slowly.
+Because $\hat{g}_S$ is itself an average of $S$ independent, identically distributed
+terms with finite variance, the central limit theorem applies to it directly, giving
+
+$$
+\hat{g}_S \; \overset{\text{approx}}{\sim} \; \mathcal{N}\!\left(\mathbb{E}_p[g(\theta)],
+\; \frac{\sigma_g^2}{S}\right)
+\qquad \text{for large } S,
+$$
+
+so the standard deviation of the estimator, the **Monte Carlo standard error**, is
+
+$$
+\text{MCSE} = \frac{\sigma_g}{\sqrt{S}} \;\approx\; \frac{\hat\sigma_g}{\sqrt{S}},
+$$
+
+with $\hat\sigma_g$ the sample standard deviation of the $g(\theta^{(s)})$ substituted
+for the unknown $\sigma_g$. The $\sqrt{S}$ in the denominator is the single most
+important fact about Monte Carlo methods in practice: the error shrinks with the square
+root of the number of draws, not with the number of draws itself. Halving the MCSE
+needs four times as many draws, and adding one decimal digit of accuracy needs a
+hundred times as many. The estimator is unbiased and it does converge, but the rate is
+unforgiving, and this is the fact every later chapter's "how many draws do we need"
+question comes back to.
 
 ```{python}
-g_vals = draws                                  # g(theta) = theta for the mean
-mcse_mean = g_vals.std(ddof=1) / np.sqrt(S)
+mcse_mean = draws.std(ddof=1) / np.sqrt(S)
 print(f"MC mean {mc_mean:.4f}  +/- {1.96*mcse_mean:.4f}  (95% MC interval)")
 
-ind = (draws > c).astype(float)                 # g(theta) = 1{theta > c}
+ind = (draws > c).astype(float)                  # g(theta) = 1{theta > c}
 mcse_tail = ind.std(ddof=1) / np.sqrt(S)
 print(f"MC tail {mc_tail:.4f}  +/- {1.96*mcse_tail:.4f}  (95% MC interval)")
 ```
 
-The reported intervals describe uncertainty in the *estimate* coming from the finite
-number of draws, not uncertainty about $\theta$ itself. Drawing more samples shrinks
-these intervals; it does nothing to the posterior, which is fixed by the data and the
-prior.
+The two intervals reported here describe uncertainty in the *Monte Carlo estimate*
+coming from having drawn only $S$ values, not uncertainty about $\theta$ itself, which
+is already fully captured by the posterior. Drawing more samples narrows these
+intervals arbitrarily; it changes nothing about the posterior, which is fixed once the
+data and the prior are fixed. Note also that the tail-probability MCSE is noticeably
+larger relative to its estimate than the mean's MCSE is: an indicator has a Bernoulli
+variance $p(1-p)$, so the relative error of a rare-event probability is much worse than
+that of a well-centred mean at the same $S$, a point the exercises return to.
 
-## Watching convergence
+### Watching the $1/\sqrt{S}$ rate
 
-The clearest way to internalise the $1/\sqrt{S}$ rate is to plot the running average as
-draws accumulate, with a band of width $\pm 1.96 \times \text{MCSE}$ around the true
-value. The running average should wander inside a band that narrows steadily as $S$
-grows.
+The clearest way to internalise the square-root rate is to watch the running average as
+draws accumulate, with a band of width $\pm 1.96 \times \text{MCSE}$ around the known
+posterior mean. The running estimate should wander inside a band that narrows steadily,
+never settling but converging.
 
 ```{python}
 running_mean = np.cumsum(draws) / np.arange(1, S + 1)
@@ -135,18 +202,18 @@ ax.plot(s_grid, running_mean, lw=1, label="running MC estimate")
 ax.axhline(true_mean, color="black", lw=1, ls=":", label="true posterior mean")
 ax.fill_between(s_grid, true_mean - band, true_mean + band,
                 alpha=0.2, label=r"true mean $\pm\,1.96\,$MCSE")
-ax.set_xlabel("number of draws  S")
-ax.set_ylabel("estimate of posterior mean")
+ax.set_xlabel("number of draws  S"); ax.set_ylabel("estimate of posterior mean")
 ax.set_ylim(true_mean - 0.15, true_mean + 0.15)
-ax.legend()
-ax.set_title("Monte Carlo estimate converges at rate 1/sqrt(S)")
-plt.tight_layout()
-plt.show()
+ax.legend(); ax.set_title("Monte Carlo estimate converges at rate 1/sqrt(S)")
+plt.tight_layout(); plt.show()
 ```
 
-The shrinking band is the $1/\sqrt{S}$ law made visible. We can confirm the rate
-directly by measuring the actual error over many independent repetitions at a range of
-sample sizes and checking that it falls in proportion to $1/\sqrt{S}$.
+The band visibly narrows as $S$ grows and the running average stays inside it, which is
+the derivation above made concrete. To confirm the rate rather than merely gesture at
+it, we can measure the actual root-mean-squared error of the estimator over many
+independent repetitions at a range of sample sizes and check that it falls in
+proportion to $1/\sqrt{S}$, which on a log-log plot is a straight line of slope
+$-1/2$.
 
 ```{python}
 sizes = np.array([50, 200, 800, 3200, 12800])
@@ -154,177 +221,526 @@ reps = 200
 rmse = np.empty(len(sizes))
 for i, m in enumerate(sizes):
     ests = np.array([posterior.rvs(size=m, random_state=rng).mean()
-                     for _ in range(reps)])
+                      for _ in range(reps)])
     rmse[i] = np.sqrt(np.mean((ests - true_mean) ** 2))
 
-ref = rmse[0] * np.sqrt(sizes[0] / sizes)       # 1/sqrt(S) reference line
+ref = rmse[0] * np.sqrt(sizes[0] / sizes)         # 1/sqrt(S) reference line
 
 fig, ax = plt.subplots()
 ax.loglog(sizes, rmse, "o-", label="empirical RMSE")
 ax.loglog(sizes, ref, "--", color="grey", label=r"$\propto 1/\sqrt{S}$ reference")
-ax.set_xlabel("number of draws  S")
-ax.set_ylabel("RMSE of MC estimate")
-ax.legend()
-ax.set_title("Error falls like 1/sqrt(S) on a log-log scale")
-plt.tight_layout()
-plt.show()
+ax.set_xlabel("number of draws  S"); ax.set_ylabel("RMSE of MC estimate")
+ax.legend(); ax.set_title("Error falls like 1/sqrt(S) on a log-log scale")
+plt.tight_layout(); plt.show()
 ```
 
-On the log-log axes the empirical error sits on a straight line with slope $-1/2$,
-parallel to the reference, confirming the rate.
+The empirical curve sits on top of the reference line across three orders of magnitude
+in $S$, which is the $\sqrt{S}$ law made visible rather than merely quoted: each step in
+the grid of sizes multiplies $S$ by exactly 4, and the RMSE drops by a factor close to
+2 at every step, exactly as $1/\sqrt{4} = 1/2$ predicts.
+
+## Coin tossing revisited: when we cannot sample directly
+
+Everything so far assumed we could draw straight from the posterior, which only worked
+because the beta prior is conjugate to the binomial likelihood. Suppose instead we keep
+the same coin and the same data, nine heads in twelve tosses, but replace the beta
+prior with a **truncated normal** prior on $\theta \in (0,1)$, $\theta \sim
+\mathcal{N}(0.5, 1)$ restricted to the unit interval. This is a perfectly reasonable
+prior belief, centred at a fair coin with the same spread as before, but it is not
+conjugate to the binomial: multiplying the binomial likelihood by a normal density does
+not produce a kernel we recognise, and the posterior is now
+
+$$
+p(\theta \mid y) \;\propto\; \theta^{9}(1-\theta)^{3} \times
+\exp\!\left(-\frac{(\theta - 0.5)^2}{2}\right), \qquad 0 < \theta < 1 ,
+$$
+
+a shape with no name. We cannot sample it with `stats.beta.rvs` or any other canned
+generator, and the normalising constant is a one-dimensional integral we happen to be
+able to compute by quadrature here only because $\theta$ is scalar. We use that
+quadrature once, as a ground truth to check the simulation methods against, exactly as
+the closed-form beta posterior served as ground truth above.
+
+```{python}
+def unnorm_post(theta):
+    return theta**9 * (1 - theta)**3 * stats.norm.pdf(theta, loc=0.5, scale=1.0)
+
+Z, _ = quad(unnorm_post, 0, 1)                       # normalising constant
+true_mean_tn, _ = quad(lambda t: t * unnorm_post(t) / Z, 0, 1)
+
+grid = np.linspace(0, 1, 400)
+fig, ax = plt.subplots()
+ax.plot(grid, unnorm_post(grid) / Z, label="posterior (truncated-normal prior)")
+ax.axvline(true_mean_tn, color="grey", ls=":", label=f"mean = {true_mean_tn:.4f}")
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density")
+ax.legend(); ax.set_title("A non-conjugate posterior: no sampler exists for this shape")
+plt.tight_layout(); plt.show()
+```
+
+The curve is a legitimate density, unimodal and shifted noticeably right of the prior's
+0.5 by the nine observed heads, but it belongs to no textbook family. Quadrature
+answered the one-dimensional question, and this is exactly where Lecture 1 warned we
+would run out of road: with two or three parameters this same integral would need a
+fine grid over each dimension, and the cost explodes long before an economically
+interesting model is reached. What we need is a way to compute posterior expectations
+under a density we can *evaluate* but not *sample*, without ever computing $Z$. That is
+importance sampling.
 
 ## Importance sampling
 
-Direct Monte Carlo assumes we can sample from the posterior. Often we cannot, but we
-*can* sample from some convenient distribution and we can evaluate the target density
-up to a constant. Importance sampling exploits exactly this. Write the target
-expectation as an expectation under a **proposal** density $q(\theta)$ from which we can
-sample:
+The idea is to rewrite the target expectation as an expectation under a distribution we
+*can* sample, called the **proposal** $q(\theta)$, by multiplying and dividing inside
+the integral by $q$:
 
 $$
 \mathbb{E}_p[g(\theta)]
+= \int g(\theta)\, p(\theta)\, d\theta
 = \int g(\theta)\, \frac{p(\theta)}{q(\theta)}\, q(\theta)\, d\theta
 = \mathbb{E}_q\!\left[ g(\theta)\, w(\theta) \right],
-\qquad w(\theta) = \frac{p(\theta)}{q(\theta)},
+\qquad w(\theta) = \frac{p(\theta)}{q(\theta)} ,
 $$
 
-where $w(\theta)$ is the **importance weight**. Drawing
-$\theta^{(s)} \sim q$ gives the estimator
-$\frac{1}{S}\sum_s g(\theta^{(s)}) w(\theta^{(s)})$. In Bayesian work we usually know
-the target only up to its normalising constant, so we use the **self-normalised**
-estimator, which divides by the sum of the weights and needs only unnormalised
-densities:
+valid whenever $q(\theta) > 0$ everywhere $g(\theta)p(\theta) \neq 0$. This is an exact
+algebraic identity, not an approximation: it says the expectation of $g$ under $p$
+equals the expectation of $g$ times a **importance weight** $w(\theta) = p(\theta) /
+q(\theta)$ under $q$. Drawing $\theta^{(1)}, \dots, \theta^{(S)} \sim q$ and averaging
+gives an unbiased Monte Carlo estimator of this new expectation by exactly the same
+argument as before, $\frac{1}{S}\sum_s g(\theta^{(s)}) w(\theta^{(s)})$.
+
+In Bayesian work we almost never know $p(\theta) = p(\theta \mid y)$ exactly, only its
+unnormalised kernel $\tilde p(\theta) = c \cdot p(\theta)$ for some unknown constant
+$c$ (here, $c = Z$). Writing the weight in terms of the kernel introduces the same
+unknown constant, $\tilde w(\theta) = \tilde p(\theta)/q(\theta) = c\, w(\theta)$, but
+because it multiplies every weight identically, it cancels from a *ratio* of two
+importance-sampling sums. This gives the **self-normalised** estimator,
 
 $$
 \hat{g}_S^{\,\text{IS}}
 = \frac{\sum_{s=1}^{S} g(\theta^{(s)})\, \tilde{w}^{(s)}}
-       {\sum_{s=1}^{S} \tilde{w}^{(s)}},
-\qquad
-\tilde{w}^{(s)} = \frac{\tilde{p}(\theta^{(s)})}{q(\theta^{(s)})}.
+       {\sum_{s=1}^{S} \tilde{w}^{(s)}} ,
+\qquad \tilde{w}^{(s)} = \frac{\tilde p(\theta^{(s)})}{q(\theta^{(s)})} ,
 $$
 
-To make this concrete we estimate the same $\text{Beta}(10, 6)$ posterior mean, but now
-pretend we cannot sample from it. We sample instead from a uniform proposal on
-$[0, 1]$ and reweight by the unnormalised posterior density. Because the uniform covers
-the whole support generously, the weights are well behaved.
+which needs only the unnormalised target and works whether or not $Z$ is known. Unlike
+the plain estimator, this one is a ratio of two Monte Carlo averages and is therefore
+biased in finite samples, by an amount of order $1/S$: writing $\hat A_S =
+\frac{1}{S}\sum_s g(\theta^{(s)})w(\theta^{(s)}) \to \mathbb{E}_p[g(\theta)]$ and
+$\hat B_S = \frac{1}{S}\sum_s w(\theta^{(s)}) \to 1$, the ratio $\hat A_S/\hat B_S$ is
+not itself unbiased even though numerator and denominator separately are, because
+$\mathbb{E}[\hat A_S/\hat B_S] \neq \mathbb{E}[\hat A_S]/\mathbb{E}[\hat B_S]$ in
+general. What survives is consistency: both $\hat A_S$ and $\hat B_S$ converge almost
+surely by the law of large numbers, so their ratio converges to $\mathbb{E}_p[g(\theta)]
+/ 1$ by the continuous mapping theorem. The self-normalised estimator trades a small,
+vanishing bias for the ability to work with an unnormalised target, which in practice is
+the only option we have.
+
+We put this to work on the truncated-normal coin, proposing from a $\text{Uniform}(0,1)$
+distribution, which covers the whole domain of $\theta$ generously.
 
 ```{python}
-def unnorm_post(theta):
-    # Beta(10, 6) kernel, ignoring the normalising constant
-    return theta ** (10 - 1) * (1 - theta) ** (6 - 1)
+S_is = 20_000
+prop = stats.uniform(0, 1)
+samp = prop.rvs(size=S_is, random_state=rng)
 
-S = 5000
-prop = stats.uniform(0, 1)                       # proposal q
-samp = prop.rvs(size=S, random_state=rng)
-
-w = unnorm_post(samp) / prop.pdf(samp)           # unnormalised weights
-w_norm = w / w.sum()                             # self-normalised weights
+w = unnorm_post(samp) / prop.pdf(samp)             # unnormalised weights
+w_norm = w / w.sum()                               # self-normalised weights
 
 is_mean = np.sum(samp * w_norm)
-is_tail = np.sum((samp > c) * w_norm)
-print(f"posterior mean   true {true_mean:.4f}   IS {is_mean:.4f}")
-print(f"P(theta > {c})    true {true_tail:.4f}   IS {is_tail:.4f}")
+ess_good = 1.0 / np.sum(w_norm ** 2)
+print(f"posterior mean    quadrature {true_mean_tn:.4f}   IS {is_mean:.4f}")
+print(f"effective sample size: {ess_good:.0f} out of {S_is}")
 ```
 
-The importance-sampling estimates again recover the analytic values, this time without
-ever drawing from the posterior directly.
+The importance-sampling estimate lands within a few thousandths of the quadrature
+answer, obtained entirely from uniform draws reweighted by the target's shape, with no
+canned truncated-normal-times-binomial sampler anywhere in sight. The printed effective
+sample size is explained next.
 
-## Effective sample size and the danger of heavy tails
+## The variance of the weights and effective sample size
 
-Importance sampling works only when the weights are reasonably even. If a handful of
-draws carry almost all the weight, the estimator behaves as though it rests on those
-few points alone and its variance explodes. The standard diagnostic is the **effective
-sample size**,
+Importance sampling is only as good as its weights are even. If a handful of draws
+carry nearly all the weight, the weighted average behaves as though it were computed
+from those few points alone, and its variance is far larger than a plain Monte Carlo
+average over the same $S$ would give. This can be seen directly from the variance of a
+single weighted term, $\operatorname{Var}_q[g(\theta)w(\theta)]$: substituting
+$w = p/q$,
+
+$$
+\mathbb{E}_q\!\left[\big(g(\theta)w(\theta)\big)^2\right]
+= \int g(\theta)^2 \frac{p(\theta)^2}{q(\theta)^2}\, q(\theta)\, d\theta
+= \int g(\theta)^2\, w(\theta)\, p(\theta)\, d\theta
+= \mathbb{E}_p\!\left[g(\theta)^2\, w(\theta)\right] ,
+$$
+
+so whenever $w(\theta)$ is large exactly where $g(\theta)^2 p(\theta)$ is not
+negligible, the second moment — and hence the variance — of the importance-sampling
+estimator inflates, even though the estimator's mean is unaffected. This happens
+precisely when $q$ decays faster in the tails than $p$ does: then $w(\theta) =
+p(\theta)/q(\theta) \to \infty$ as $\theta$ moves into the tail, and an occasional draw
+that lands there is multiplied by an enormous weight. The standard diagnostic that
+summarises how uneven the weights are is the **effective sample size**,
 
 $$
 \text{ESS} = \frac{\left(\sum_s \tilde{w}^{(s)}\right)^2}{\sum_s (\tilde{w}^{(s)})^2}
-\;=\; \frac{1}{\sum_s (w_{\text{norm}}^{(s)})^2},
+= \frac{1}{\sum_s (w_{\text{norm}}^{(s)})^2} ,
 $$
 
-which ranges from $1$ (one draw dominates) to $S$ (all weights equal). It is the number
-of independent posterior draws the weighted sample is worth.
+which equals $S$ when all normalised weights are equal to $1/S$ and falls toward $1$
+as one weight comes to dominate the rest; it is the number of *independent* posterior
+draws the weighted sample is worth. The good uniform proposal above returned an ESS
+of a bit over 40% of `S_is`: some efficiency is lost to reweighting, because a uniform
+proposal still spends many draws away from where the posterior has its mass, but the
+loss is moderate and the weights stay usable. We now deliberately choose a bad
+proposal, one concentrated where the posterior has little mass, to see the failure
+mode the derivation predicts.
 
 ```{python}
-def ess(weights):
-    w = weights / weights.sum()
-    return 1.0 / np.sum(w ** 2)
-
-print(f"good proposal (Uniform):  ESS = {ess(w):.0f} out of {S}")
-```
-
-Now contrast a poor proposal. The posterior $\text{Beta}(10, 6)$ has nearly all its
-mass between roughly $0.4$ and $0.85$. If we propose from a distribution concentrated
-in the wrong place, say $\text{Beta}(2, 8)$ which lives near small $\theta$, then the
-proposal rarely visits the region where the posterior has mass, the few draws that land
-there receive enormous weights, and the effective sample size collapses.
-
-```{python}
-bad_prop = stats.beta(2, 8)                       # mass in the wrong region
-samp_b = bad_prop.rvs(size=S, random_state=rng)
+bad_prop = stats.beta(2, 10)                        # mass concentrated near small theta
+samp_b = bad_prop.rvs(size=S_is, random_state=rng)
 w_bad = unnorm_post(samp_b) / bad_prop.pdf(samp_b)
+w_bad_norm = w_bad / w_bad.sum()
 
-is_mean_bad = np.sum(samp_b * (w_bad / w_bad.sum()))
-print(f"bad proposal mean estimate: {is_mean_bad:.4f}  (true {true_mean:.4f})")
-print(f"bad proposal:  ESS = {ess(w_bad):.0f} out of {S}")
-print(f"largest single normalised weight: {(w_bad / w_bad.sum()).max():.3f}")
+is_mean_bad = np.sum(samp_b * w_bad_norm)
+ess_bad = 1.0 / np.sum(w_bad_norm ** 2)
+print(f"bad-proposal mean estimate: {is_mean_bad:.4f}  (true {true_mean_tn:.4f})")
+print(f"effective sample size: {ess_bad:.0f} out of {S_is}")
+print(f"largest single normalised weight: {w_bad_norm.max():.3f}")
 ```
 
-The estimate is noticeably off and the effective sample size has fallen to a small
-fraction of $S$, with a single draw often carrying a large share of the total weight.
-Comparing the two weight distributions side by side shows the failure plainly.
+The posterior for this coin has almost all its mass between roughly $0.5$ and $0.9$,
+while $\text{Beta}(2,10)$ concentrates near $0.15$: the proposal rarely visits the
+region the target cares about, the rare draws that do land there receive very large
+weights to compensate, and the effective sample size collapses to a small fraction of
+`S_is`, with a single draw sometimes carrying a large share of the total weight. The
+point estimate is visibly biased at this finite $S$ despite the theoretical guarantee
+of consistency, because consistency is a statement about $S \to \infty$ and a
+collapsed ESS means we are effectively very far from that limit. Plotting the two
+weight distributions side by side shows the contrast directly.
 
 ```{python}
 fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.8), sharey=True)
-for ax, w_, ttl in [(axes[0], w, f"good proposal\nESS={ess(w):.0f}"),
-                    (axes[1], w_bad, f"bad proposal\nESS={ess(w_bad):.0f}")]:
-    wn = w_ / w_.sum()
-    ax.hist(wn, bins=40, color="steelblue", alpha=0.85)
-    ax.set_title(ttl)
+for ax, w_, ess_, ttl in [(axes[0], w_norm, ess_good, "good proposal (Uniform)"),
+                          (axes[1], w_bad_norm, ess_bad, "bad proposal (Beta(2,10))")]:
+    ax.hist(w_, bins=40, color="steelblue", alpha=0.85)
+    ax.set_title(f"{ttl}\nESS = {ess_:.0f}")
     ax.set_xlabel("normalised weight")
 axes[0].set_ylabel("count")
 fig.suptitle("Importance weights: even vs degenerate")
-plt.tight_layout()
-plt.show()
+plt.tight_layout(); plt.show()
 ```
 
-The good proposal produces many small, comparable weights; the bad one produces a spike
-near zero and a long thin tail of a few dominant weights. The general lesson is that an
-importance proposal must have heavier tails than the target and must cover the regions
-where the target has mass. A proposal that is too narrow, or that decays faster than the
-target, leads to a handful of runaway weights, infinite asymptotic variance, and an
-estimate that looks fine until it suddenly is not. This fragility, together with the
-difficulty of finding good proposals in high dimensions, is what motivates the Markov
-chain Monte Carlo methods of the next lectures, which generate dependent draws that
-adapt to the shape of the posterior automatically.
+The good proposal produces many small, comparable weights clustered together; the bad
+one produces a spike of near-zero weights and a long thin tail of a few draws that
+dominate the sum. The general lesson, and the reason importance sampling is taught
+alongside a warning, is that a safe proposal needs **heavier tails than the target** and
+must cover every region where the target has appreciable mass. A proposal that is too
+narrow, or that decays faster than the target in some direction, produces a handful of
+runaway weights and an estimator whose variance can be infinite even though its bias
+vanishes asymptotically; the estimate looks perfectly reasonable until, on a bad draw of
+the random seed, it suddenly is not. Finding such a proposal by hand becomes close to
+impossible once $\theta$ has more than a few components, which is exactly the
+difficulty that motivates the Markov chain samplers of the next two lectures.
+
+## Rejection sampling
+
+Importance sampling reweights every draw and never touches the target's normalising
+constant, but its output is a set of *weighted* points, not a sample from $p$ itself.
+**Rejection sampling** takes a different route to the same problem and returns actual,
+unweighted draws from the target. Choose a proposal $q$ and a constant $M \geq 1$ such
+that the **envelope condition**
+
+$$
+\tilde p(\theta) \;\leq\; M\, q(\theta) \qquad \text{for all } \theta
+$$
+
+holds, i.e. $M q$ lies everywhere above the unnormalised target. The algorithm then
+repeats, for each draw wanted:
+
+1. Generate a candidate $\tilde\theta \sim q(\theta)$.
+2. Generate $u \sim \text{Uniform}(0,1)$.
+3. Accept $\theta = \tilde\theta$ if $u < \tilde p(\tilde\theta) / \big(M q(\tilde\theta)\big)$; otherwise discard $\tilde\theta$ and return to step 1.
+
+The reason an accepted draw is an exact draw from $p$ is a short geometric argument
+worth sketching in full. Consider the region under the envelope,
+$\mathcal{A} = \{(\theta, u) : 0 \leq u \leq Mq(\theta)\}$. Steps 1 and 2 generate a
+point uniformly distributed over $\mathcal{A}$: first $\theta$ from $q$, then, given
+$\theta$, a height $u$ uniform on $[0, Mq(\theta)]$, which is precisely how a uniform
+distribution on the region under a curve is built up. Step 3 keeps only the points that
+additionally fall under the *target's* curve, $u < \tilde p(\theta)$, which by
+construction lies entirely inside $\mathcal{A}$ because of the envelope condition. A
+point drawn uniformly over a region and then restricted to a sub-region is uniformly
+distributed over that sub-region, so the accepted $(\theta, u)$ pairs are uniform over
+$\{(\theta,u) : 0 \le u \le \tilde p(\theta)\}$, and the marginal distribution of
+$\theta$ under a uniform distribution on the area beneath a curve is exactly the density
+proportional to that curve, namely $p(\theta)$. No reweighting is needed afterward
+because the acceptance step already did the reweighting geometrically. The unconditional
+acceptance probability at any single trial is $\Pr(\text{accept}) = \int \tilde
+p(\theta)\,d\theta / M = Z/M$, so smaller $M$, meaning a tighter envelope, means fewer
+wasted draws; this is also why the method reduces to plain Monte Carlo sampling when
+$q = p$ exactly, since then $M = 1$ and every candidate is accepted.
+
+We apply it to the truncated-normal coin with the same uniform proposal used for
+importance sampling, generating candidates in batches so the loop terminates quickly.
+
+```{python}
+grid_M = np.linspace(1e-4, 1 - 1e-4, 2000)
+M = (unnorm_post(grid_M) / prop.pdf(grid_M)).max()   # smallest valid envelope constant
+
+N_target, accepted = 20_000, []
+n_tried = 0
+while len(accepted) < N_target:
+    cand = prop.rvs(size=5000, random_state=rng)
+    u = rng.uniform(size=cand.size)
+    keep = u < unnorm_post(cand) / (M * prop.pdf(cand))
+    accepted.extend(cand[keep])
+    n_tried += cand.size
+
+rej_draws = np.array(accepted[:N_target])
+print(f"envelope constant M = {M:.3e}")
+print(f"acceptance rate: {N_target/n_tried:.3f}  (theory: Z/M = {Z/M:.3f})")
+print(f"rejection-sample mean: {rej_draws.mean():.4f}  (quadrature {true_mean_tn:.4f})")
+```
+
+The observed acceptance rate matches the theoretical $Z/M$ closely, and the mean of the
+accepted draws reproduces the quadrature answer without any weight ever appearing in the
+calculation: these are genuine, exchangeable draws from the posterior, usable in any
+downstream calculation exactly like the direct beta draws from the first section. The
+price is the acceptance rate itself. In one dimension an envelope constant a little
+above one is usually attainable with a sensible proposal, but in $d$ dimensions the
+volume between a safe envelope and the target typically grows so that $M$ grows
+exponentially with $d$, and the acceptance rate $1/M$ collapses correspondingly:
+rejection sampling suffers from the same curse of dimensionality as the grid, just with
+a slower fuse.
+
+## Sampling-importance-resampling
+
+Importance sampling gives weighted points; rejection sampling gives unweighted points at
+a cost that grows quickly with dimension. **Sampling-importance-resampling (SIR)**
+is a cheap compromise that converts the weighted sample from importance sampling into an
+approximately unweighted one, without needing an envelope constant at all. Having drawn
+$\theta^{(1)}, \dots, \theta^{(S)} \sim q$ and computed self-normalised weights
+$w_{\text{norm}}^{(s)}$, resample $N \leq S$ indices from $\{1, \dots, S\}$ with
+replacement, using the weights as selection probabilities. A draw that received a large
+weight is proportionally more likely to be copied into the resampled set, and one that
+received a negligible weight is unlikely to appear at all, so the resulting sample
+approximates a draw from $p$ itself the way rejection sampling delivers exactly. The
+approximation improves as $S \to \infty$ with $N$ fixed, but unlike rejection sampling
+it never rejects anything outright, so it costs no extra random draws beyond the
+original importance sample.
+
+```{python}
+idx = rng.choice(S_is, size=S_is, replace=True, p=w_norm)
+sir_draws = samp[idx]
+
+fig, ax = plt.subplots()
+ax.hist(sir_draws, bins=40, density=True, alpha=0.6, label="SIR resample")
+ax.plot(grid, unnorm_post(grid) / Z, lw=2, label="true posterior (quadrature)")
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density")
+ax.legend(); ax.set_title("SIR turns weighted draws into an (approximate) posterior sample")
+plt.tight_layout(); plt.show()
+print(f"SIR resample mean: {sir_draws.mean():.4f}  (quadrature {true_mean_tn:.4f})")
+```
+
+The resampled histogram tracks the true density well because the original importance
+sample here had a healthy effective sample size; with a degenerate weight distribution
+like the bad proposal above, the same recipe would simply copy the same handful of
+dominant points over and over, which is the resampling analogue of a collapsed ESS.
+SIR is the conceptual bridge to Lectures 4 and 5: instead of reweighting a fixed
+proposal once, Markov chain Monte Carlo methods let the sampler *adapt* its own
+proposal as it explores the space, which is what makes them viable in high dimensions
+where a single fixed $q$, however carefully chosen, cannot cover the target.
+
+## A gamma model with no conjugate posterior
+
+We close with two applications built entirely from the tools above. The first mirrors a
+case used in Bayesian hydrology: a positive-valued series such as hourly glacier
+meltwater discharge, modelled with a **gamma distribution**,
+$Y \mid \nu, \lambda \sim \text{Gamma}(\nu, 1/\lambda)$ with shape $\nu$ and rate
+$\lambda$, density $f(y \mid \nu, \lambda) = \frac{\lambda^\nu}{\Gamma(\nu)}
+y^{\nu-1}e^{-\lambda y}$. There is no conjugate prior for the gamma family in both
+parameters simultaneously, so we place a weakly informative prior directly, $\nu \sim
+\text{Uniform}(0.1, 15)$ and $\lambda \sim \text{Gamma}(2, 1)$ independent of $\nu$.
+Given data $y_1,\dots,y_n$, the likelihood depends on the data only through the
+sufficient statistics $n$, $\sum_i y_i$ and $\sum_i \log y_i$, so once those three
+numbers are in hand, evaluating the likelihood at any candidate $(\nu, \lambda)$ costs
+nothing further. We first simulate a discharge-like series so the true parameter values
+are known and the exercise can be checked against them, then use **the prior itself as
+the importance proposal**, a common shortcut for a first pass at a non-conjugate
+posterior: because the unnormalised posterior is $\tilde p(\nu,\lambda) =
+l(\nu,\lambda \mid y)\, p(\nu)p(\lambda)$ and the proposal is $q(\nu,\lambda) =
+p(\nu)p(\lambda)$, the weight collapses to the likelihood itself,
+$w(\nu,\lambda) = \tilde p/q = l(\nu,\lambda\mid y)$, so we need only draw from the
+prior and weight by how well each draw explains the data.
+
+```{python}
+nu_true, lam_true, n_obs = 3.0, 2.0, 150
+y_disch = rng.gamma(shape=nu_true, scale=1 / lam_true, size=n_obs)
+sum_y, sum_logy = y_disch.sum(), np.log(y_disch).sum()
+
+S_g = 400_000
+nu_s = rng.uniform(0.1, 15, size=S_g)
+lam_s = rng.gamma(shape=2.0, scale=1.0, size=S_g)
+
+loglik = (n_obs * nu_s * np.log(lam_s) - n_obs * gammaln(nu_s)
+          + (nu_s - 1) * sum_logy - lam_s * sum_y)
+logw = loglik - loglik.max()                     # for numerical stability
+w_g = np.exp(logw)
+w_g_norm = w_g / w_g.sum()
+
+post_mean_nu = np.sum(nu_s * w_g_norm)
+post_mean_lam = np.sum(lam_s * w_g_norm)
+ess_g = 1.0 / np.sum(w_g_norm ** 2)
+print(f"simulated discharge: n={n_obs}, mean={y_disch.mean():.3f} "
+      f"(true nu/lambda = {nu_true/lam_true:.3f})")
+print(f"posterior mean: nu = {post_mean_nu:.3f} (true {nu_true}), "
+      f"lambda = {post_mean_lam:.3f} (true {lam_true})")
+print(f"effective sample size: {ess_g:.0f} out of {S_g}")
+```
+
+The simulated series has a mean close to the model's implied $\nu/\lambda = 1.5$, and
+both posterior means land close to the parameters that generated the data, recovering
+the truth the same way the beta-binomial and truncated-normal examples did earlier, this
+time for a genuinely two-dimensional, non-conjugate model. The effective sample size is
+far below $S_g$, because the prior is much more diffuse than the likelihood and so is a
+poor match to it as a proposal; this is the price of the shortcut, paid here in wasted
+draws rather than in a wrong answer, and it is exactly the kind of situation the next
+lectures address with proposals that adapt to the posterior instead of ignoring it.
+
+The posterior predictive probability that a *future* discharge exceeds some threshold is
+now one line of simulation once we have weighted parameter draws: for each
+$(\nu^{(s)}, \lambda^{(s)})$ draw one predictive value $Y^{(s)} \sim
+\text{Gamma}(\nu^{(s)}, 1/\lambda^{(s)})$ and average the indicator that it exceeds the
+threshold, using the same self-normalised weights as before. This is the discrete Monte
+Carlo version of $\Pr(Y_{n+1} > c \mid y) = \int \Pr(Y_{n+1}>c \mid \nu,\lambda)\,
+p(\nu,\lambda\mid y)\, d\nu\, d\lambda$.
+
+```{python}
+y_pred = rng.gamma(shape=nu_s, scale=1 / lam_s)          # one draw per (nu, lambda)
+threshold = 3.0                                          # twice the model's mean discharge
+
+pred_prob = np.sum((y_pred > threshold) * w_g_norm)
+print(f"P(future discharge > {threshold} | data)  ~=  {pred_prob:.4f}")
+
+fig, ax = plt.subplots()
+ax.hist(y_disch, bins=25, density=True, alpha=0.5, label="observed discharge")
+ax.hist(y_pred, bins=200, weights=w_g_norm, range=(0, 8), density=True,
+        histtype="step", lw=2, label="posterior predictive")
+ax.axvline(threshold, color="black", ls=":", label=f"threshold = {threshold}")
+ax.set_xlabel("discharge"); ax.set_ylabel("density"); ax.set_xlim(0, 8)
+ax.legend(); ax.set_title("Posterior predictive distribution of future discharge")
+plt.tight_layout(); plt.show()
+```
+
+The predictive histogram is visibly wider than the observed data's own spread, because
+it carries parameter uncertainty on top of the sampling variability the gamma model
+already implies, exactly the effect Lecture 1's beta-binomial predictive illustrated in
+the coin example. The printed probability of exceeding the threshold is the number a
+hydrologist or a risk manager would actually want, and it required no closed form
+anywhere in the calculation, only the weighted Monte Carlo average of an indicator.
+
+## Vanilla Monte Carlo for option pricing under parameter uncertainty
+
+The paired exercise for this week is to price a financial option by simulation while
+letting the model's volatility parameter carry its own posterior uncertainty, which is
+the plain Monte Carlo idea from the start of the lecture applied to a genuinely
+practical problem: averaging a function of simulated paths, where now one of the
+"random draws" is a parameter rather than data. Under the standard geometric Brownian
+motion model, a stock with current price $S_0$, risk-free rate $r$ and volatility
+$\sigma$ has a terminal price after time $T$ given by
+$S_T = S_0 \exp\!\big((r - \sigma^2/2)T + \sigma\sqrt{T}\,Z\big)$ for $Z \sim
+\mathcal{N}(0,1)$, and the fair price of a European call with strike $K$ is the
+discounted expected payoff, $e^{-rT}\mathbb{E}[\max(S_T - K, 0)]$, which is itself an
+integral over $Z$ that Monte Carlo estimates by simulating many paths and averaging the
+payoff. The textbook version of this calculation treats $\sigma$ as known. In practice
+it is estimated from historical returns and therefore uncertain, and that uncertainty
+should propagate into the option price rather than being discarded by plugging in a
+point estimate.
+
+We generate a short history of daily log-returns from a "true" volatility, then use the
+normal-model conjugate result for the variance (the same normal-inverse-gamma family
+referenced in Lecture 2) to get a posterior distribution over $\sigma^2$ instead of a
+single number: with a $\text{Gamma}(a_0, b_0)$ prior on the precision $1/\sigma^2$ and
+$m$ observed returns with sum of squares $\text{SS}$, the posterior is $1/\sigma^2 \mid
+\text{data} \sim \text{Gamma}(a_0 + m/2,\, b_0 + \text{SS}/2)$, mirroring exactly the
+Poisson-gamma update of Lecture 1. With that posterior in hand we price a one-year
+at-the-money European call two ways: the naive plug-in approach that fixes $\sigma$ at
+its posterior mean before simulating, and the full Bayesian approach that draws a fresh
+$\sigma$ from its posterior for every simulated path, so parameter uncertainty and
+sampling uncertainty are mixed together exactly as the predictive distribution mixed
+them in the discharge example.
+
+```{python}
+sigma_true_daily = 0.02
+returns = rng.normal(0, sigma_true_daily, size=250)          # one year of daily returns
+a0, b0 = 2.0, 0.0005
+m, SS = returns.size, (returns ** 2).sum()
+post_precision = stats.gamma(a0 + m / 2, scale=1 / (b0 + SS / 2))
+
+S_opt = 50_000
+sigma_daily_draws = 1 / np.sqrt(post_precision.rvs(size=S_opt, random_state=rng))
+sigma_annual_draws = sigma_daily_draws * np.sqrt(252)
+
+S0, K, r, T = 100.0, 100.0, 0.02, 1.0
+Z = rng.standard_normal(S_opt)
+sigma_bar = sigma_annual_draws.mean()
+ST_plugin = S0 * np.exp((r - sigma_bar**2/2)*T + sigma_bar*np.sqrt(T)*Z)
+price_plugin = np.exp(-r*T) * np.maximum(ST_plugin - K, 0).mean()
+ST_full = S0 * np.exp((r - sigma_annual_draws**2/2)*T
+                       + sigma_annual_draws*np.sqrt(T)*Z)
+price_full = np.exp(-r*T) * np.maximum(ST_full - K, 0).mean()
+
+print(f"posterior mean annualised volatility: {sigma_bar:.4f} "
+      f"(true {sigma_true_daily*np.sqrt(252):.4f})")
+print(f"plug-in price (fixed sigma = posterior mean): {price_plugin:.4f}")
+print(f"full Bayesian price (sigma drawn per path):    {price_full:.4f}")
+print(f"price increase from pricing in parameter uncertainty: "
+      f"{100*(price_full/price_plugin - 1):.2f}%")
+```
+
+The full Bayesian price comes out slightly above the plug-in price, and the direction
+is not an accident: the option payoff is a convex function of volatility, so by
+Jensen's inequality $\mathbb{E}_\sigma[\text{price}(\sigma)] \geq
+\text{price}(\mathbb{E}[\sigma])$ whenever price is convex in $\sigma$, and averaging
+over the posterior of $\sigma$ rather than plugging in its mean can only push the price
+up, never down. The gap is small here because a full year of daily returns pins
+$\sigma$ down fairly precisely, so its posterior is tight and the plug-in price is
+already close to the full average; with less data, or a more diffuse prior, the same
+convexity acts on a wider spread of $\sigma$ and the gap widens, which is exactly what
+Exercise 5 asks you to check. The general point survives the small size of the number
+here: ignoring parameter uncertainty does not just add noise around the right answer,
+it produces an estimate that is systematically too low, which is why risk desks that
+treat volatility as known tend to under-price optionality. Both simulations are
+otherwise identical vanilla Monte Carlo, exactly the machinery of the lecture's first
+section, applied to a payoff function instead of a posterior summary.
 
 ## Takeaways
 
 Posterior summaries are integrals, and outside conjugate models those integrals are
-intractable. Monte Carlo integration estimates them by averaging over samples; the
-estimate is unbiased, converges by the law of large numbers, and carries a Monte Carlo
-standard error that shrinks like $1/\sqrt{S}$ independently of dimension. When we cannot
-sample the posterior directly, importance sampling reweights draws from a proposal, but
-its reliability hinges on the proposal covering the target, which the effective sample
-size lets us monitor. These limitations set up the need for the Gibbs and
-Metropolis-Hastings samplers that follow.
+intractable, with quadrature failing exponentially fast as the number of parameters
+grows. Monte Carlo integration replaces the integral with a sample average that is
+unbiased by linearity of expectation and consistent by the law of large numbers, with an
+error that shrinks like $1/\sqrt{S}$ regardless of dimension. When we cannot sample the
+target directly, importance sampling reweights draws from a proposal by the ratio of
+target to proposal density, exactly and without approximation, and its self-normalised
+version trades a vanishing finite-sample bias for working with an unnormalised target;
+its reliability depends entirely on the proposal having heavier tails than the target,
+which the effective sample size lets us monitor. Rejection sampling instead accepts or
+discards proposal draws geometrically to return exact draws from the target, at a cost
+that grows quickly with dimension, and sampling-importance-resampling converts a
+weighted sample into an approximately unweighted one as a bridge to the adaptive
+samplers ahead. The gamma and option-pricing examples showed the same machinery solving
+two applied problems: predicting a positive-valued series and pricing an option while
+carrying parameter uncertainty all the way through to the final number, rather than
+discarding it at a plug-in estimate.
 
-::: {.exercises}
-**Exercises**
 
-1. For the $\text{Beta}(10, 6)$ posterior, compute the number of direct Monte Carlo
-   draws needed so that the MCSE of the estimated posterior mean is below $0.001$. Verify
-   your answer empirically.
-2. Estimate $\Pr(\theta > 0.9 \mid y)$ for the same posterior by direct Monte Carlo with
-   $S = 5000$. Why is the relative Monte Carlo error of a small tail probability so much
-   larger than that of the posterior mean?
-3. Repeat the importance-sampling example with a $\text{Beta}(5, 3)$ proposal and report
-   the ESS. Then try a proposal that is far too narrow and show that the ESS collapses.
-4. Show, for self-normalised importance sampling, that as the proposal approaches the
-   target the weights become equal and the ESS approaches $S$.
-:::
+
+## Reading guide and sources
+
+Supplied UPM Class 3 for Monte Carlo, importance sampling and rejection sampling; UPM Case 3 for the non-conjugate Gamma model. Geweke (2005), Sections 4.2–4.4, and Greenberg (2008), Chapter 5, develop the integration and simulation arguments.
+
+The UPM materials are by Audronė Virbickaitė and Martina Zaharieva. The examples are adapted to this course’s notation and fixed weekly sequence.
 
 ## References
 
-Chan et al., *Bayesian Econometric Methods* (2nd ed.), ch. 3. Gelman et al., *Bayesian
-Data Analysis* (3rd ed.), ch. 10. Koop, *Bayesian Econometrics*, ch. 3-4. Lambert,
-*A Student's Guide to Bayesian Statistics*, ch. 11.
+Geweke (1989). Robert and Casella, *Monte Carlo Statistical Methods*.

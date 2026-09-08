@@ -3,6 +3,13 @@ title: "Portfolio choice"
 subtitle: "Lecture 13"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 13 exercise session](../exercise-sessions/13-portfolio-choice.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## The investor's problem
 
 An investor with wealth to allocate across $n$ risky assets chooses portfolio weights $w$
@@ -63,6 +70,8 @@ We simulate a modest sample of monthly returns on four correlated assets and com
 plug-in weights together with the condition number of the sample covariance, a direct
 measure of how much the inversion above amplifies estimation error.
 
+**Reading the computation.** The plug-in allocation solves an unconstrained mean–variance problem using estimated moments. It can use leverage and short positions, so record those exposures before comparing it with a constrained allocation.
+
 ```{python}
 n_assets, T_ret = 4, 120
 true_mu = np.array([0.008, 0.010, 0.006, 0.012])
@@ -99,7 +108,7 @@ p(\mu, \Sigma \mid \text{data})\; d\mu\, d\Sigma ,
 $$
 
 which averages the return distribution over everything the posterior finds plausible for
-$(\mu, \Sigma)$. Under a diffuse prior the posterior is normal-inverse-Wishart and this
+$(\mu, \Sigma)$. Under the reference prior $p(\mu,\Sigma)\propto|\Sigma|^{-(n+1)/2}$ the posterior is normal-inverse-Wishart and this
 integral has a closed form: the predictive distribution is multivariate Student-t, centred
 at $\hat\mu$ as before but with an inflated covariance,
 
@@ -110,10 +119,12 @@ $$
 The $(1+1/T)$ factor is the standard penalty for forecasting one new draw rather than a
 population mean, present even if $\Sigma$ were known; the $(T-1)/(T-n-2)$ factor is the
 price of not knowing $\Sigma$ itself, and it grows without bound as $T$ approaches $n+2$.
-Substituting $\Sigma_{\text{pred}}$ for $S$ gives the Bayesian investor's optimal weights.
+Substituting $\Sigma_{\text{pred}}$ for $S$ gives the optimum under the stated mean–variance criterion. This is not a general expected-utility result.
 We also implement a direct posterior sampler, drawing $(\mu,\Sigma)$ and a return from
 each pair, both to confirm the closed form and to reuse below for expected-utility
 maximisation.
+
+**Reading the computation.** For every covariance draw, sample its associated mean and then a return. The covariance of these predictive draws contains both expected shock covariance and uncertainty about the mean.
 
 ```{python}
 def predictive_weights(R, gamma):
@@ -147,49 +158,97 @@ The two variances agree, and the Bayesian weights pull toward a visibly less agg
 portfolio, an automatic consequence of maximising expected utility against a wider,
 fatter-tailed predictive distribution instead of a razor-thin plug-in one.
 
+### Derive the two sources of predictive risk
+
+Use $p(\mu,\Sigma)\propto|\Sigma|^{-(n+1)/2}$, flat in $\mu$, with positive
+definite scatter and $T>n+2$. Under this convention,
+$\mu\mid\Sigma,R\sim N(\bar r,\Sigma/T)$ and
+$\Sigma\mid R\sim IW(T-1,(T-1)S)$. The inverse-Wishart mean is
+$\mathbb E[\Sigma\mid R]=(T-1)S/(T-n-2)$.
+Total variance gives
+
+$$
+\operatorname{Var}(r_{T+1}\mid R)
+=\mathbb E[\Sigma\mid R]+\operatorname{Var}(\mu\mid R)
+=\left(1+\frac1T\right)\frac{T-1}{T-n-2}S.
+$$
+
+The first term represents future shocks averaged over covariance uncertainty;
+the second represents uncertainty about expected returns. A mean–variance
+investor minimises a function of this entire covariance. Averaging
+$\Sigma^{-1}\mu/\gamma$ over posterior parameter draws is a different operation:
+it averages decisions that would be optimal if parameters were observed.
+The investor must choose one decision before those unknowns are resolved.
+
+### A local research connection: shrink toward a reference portfolio
+
+Frey and Pohlmeier's supplied 2026 working paper studies Bayesian shrinkage
+regressions for the global minimum variance portfolio. A useful route to its
+intuition starts with a reference return $r_{0t}=w_0^\top r_t$. Regress it on
+return differences $r_{0t}-r_{jt}$ with coefficients $b_j$. The residual return is
+
+$$
+r_{0t}-\sum_j b_j(r_{0t}-r_{jt})
+=\left[(1-\mathbf1^\top b)w_0+b\right]^\top r_t.
+$$
+
+The implied asset weights add to one whenever $w_0$ does. Shrinking $b$ toward
+zero moves the portfolio toward the reference, which may be equal weights.
+This makes the regression–allocation connection tangible. The full method and
+its empirical results belong to the paper; the identity is a reading extension,
+while the scheduled exercise focuses on expected utility using predictive draws.
+
 ## Maximising expected utility numerically
 
-The closed-form predictive weights rest on two conveniences that will not always be
-available: a mean-variance objective, valid only for CARA utility and Gaussian-like
-returns, and a predictive distribution simple enough to integrate by hand. A power (CRRA)
-utility investor has no such formula, and the way forward is to maximise expected utility
-directly against simulated draws: draw parameters from the posterior, draw a return given
-each draw, and replace the intractable integral $\mathbb{E}[U(w'r)]$ by the sample average
-of $U$, a Monte Carlo objective any optimiser can climb. We use power utility over wealth,
-$U(W) = W^{1-\gamma}/(1-\gamma)$ with $W = 1 + w'r$; non-positive wealth is assigned a
-large penalty rather than passed through the power function, representing aversion to
-ruin.
+Mean–variance is a decision criterion in its own right. Its equivalence with
+CARA expected utility is exact under a Normal return distribution, but does not
+extend automatically to a Student-t predictive distribution: the exponential
+moment needed for CARA utility does not exist for a nondegenerate Student-t.
 
-We maximise this objective over the four weights with a derivative-free optimiser,
-starting at the closed-form predictive weights, and compare it to the analytic rule on
-the same predictive moments. A grid search would also work for two assets, but it becomes
-hopeless past two or three, which is why an optimiser is the general tool.
+For a CRRA example we therefore specify a different return model with positive
+gross asset returns. Model **log gross returns** as multivariate Normal with
+unknown moments, draw from their posterior predictive, and exponentiate.
+Choose long-only risky weights with total at most 0.9, leaving at least 10% in
+cash with positive gross return. Wealth is then strictly positive under the
+model, not just in the realised simulation. For gamma greater than one, the
+cash floor also bounds utility below, so the expected utility is well defined.
+
+The existing synthetic sample has gross returns above zero. We transform it
+with log1p, fit the predictive model on this scale, and compare allocations on
+the same set of simulated scenarios. The simplex constraint prevents an
+optimiser from exploiting a few lucky simulated tails through leverage.
+
+**Reading the computation.** The log-return model supplies positive gross returns, and a cash floor keeps CRRA wealth positive. The optimiser compares weights against common scenarios; its objective is a finite-simulation approximation.
 
 ```{python}
 from scipy.optimize import minimize
 
 def power_utility(W, gamma):
-    U = np.full_like(W, -1e6)
-    good = W > 1e-6
-    U[good] = (W[good] ** (1 - gamma)) / (1 - gamma)
-    return U
+    return W ** (1 - gamma) / (1 - gamma)
 
-def neg_expected_utility(w, sim_returns, gamma):
-    return -power_utility(1.0 + sim_returns @ w, gamma).mean()
+def neg_expected_utility(w, gross_returns, cash_gross, gamma):
+    wealth = (1-w.sum())*cash_gross + gross_returns @ w
+    return -power_utility(wealth, gamma).mean()
 
-res = minimize(neg_expected_utility, x0=w_bayes, args=(sim, gamma), method="Nelder-Mead",
-               options={"maxiter": 4000, "xatol": 1e-6, "fatol": 1e-9})
+log_sample = np.log1p(R)
+gross_draws = np.exp(draw_predictive(log_sample, 4000, rng))
+cash_gross = 1.001
+res = minimize(neg_expected_utility, x0=np.full(n_assets, 0.1),
+               args=(gross_draws, cash_gross, gamma), method="SLSQP",
+               bounds=[(0.0, 0.9)] * n_assets,
+               constraints={"type": "ineq", "fun": lambda w: 0.9-w.sum()},
+               options={"maxiter": 1000, "ftol": 1e-10})
 w_numeric = res.x
-print("analytic mean-variance weights (predictive):", np.round(w_bayes, 3))
-print("numerical power-utility weights:             ", np.round(w_numeric, 3))
-print(f"optimiser converged: {res.success}, expected utility: {-res.fun:.6f}")
+print("constrained power-utility weights:", np.round(w_numeric, 3))
+print("cash weight:", round(1-w_numeric.sum(), 3))
+print(f"optimiser converged: {res.success}, estimated expected utility: {-res.fun:.6f}")
 ```
 
-The two solutions are close but not identical: they would coincide only if the predictive
-distribution were normal and utility were CARA. The Student-t predictive has heavier
-tails, which power utility weighs differently from a quadratic objective, so the optimum
-shifts slightly; the gap is small here since the predictive degrees of freedom are large,
-but would widen for shorter samples, exactly when the mean-variance shortcut is weakest.
+The utility, return model, and constraints now differ from the unconstrained
+mean–variance calculation. Numerical differences should be interpreted in
+that light. Re-evaluate the chosen weights on fresh predictive draws, and
+compare feasible allocations under the same objective. The exercise develops
+this idea using MCMC predictive draws and common simulation scenarios.
 
 ## How the gap closes as data accumulate
 
@@ -199,6 +258,8 @@ it is substantial. We measure this as the **certainty-equivalent loss**: using t
 simulation parameters as an outside benchmark, the certainty equivalent of weights $w$ is
 $w'\mu - \tfrac{\gamma}{2}w'\Sigma w$ at the true $\mu,\Sigma$, and the loss is the gap
 between this quantity at the true optimum and at the estimated weights.
+
+**Reading the computation.** The generating parameters evaluate allocations without entering their estimation. A single sample at each size illustrates estimation risk but cannot establish a uniform dominance claim.
 
 ```{python}
 def certainty_equivalent(w, mu, Sigma, gamma):
@@ -241,6 +302,8 @@ asset under an **i.i.d. model** with constant mean and a **predictable model** w
 depends on a lagged signal $z_{t-1}$, treating the residual variance as known so the
 coefficients integrate out in closed form, and combine both into a single **Bayesian
 model averaged** (BMA) predictive distribution.
+
+**Reading the computation.** Each model contributes a predictive density and an evidence weight. Model averaging includes disagreement about expected returns; averaging only within-model variances would omit that component.
 
 ```{python}
 T_m, phi_z = 96, 0.9
@@ -305,20 +368,14 @@ maximise the resulting sample-average utility. Model uncertainty is distinct fro
 parameter uncertainty, adding its own risk that shrinks only as evidence favours one
 story over the others.
 
-::: {.exercises}
-**Exercises**
 
-1. Rerun the numerical maximisation with $\gamma \in \{2, 10\}$ instead of $5$, and
-   compare how far the numerical weights drift from the analytic ones in each case.
-2. Replace the power utility in `neg_expected_utility` with exponential (CARA) utility,
-   $U(x) = -e^{-\gamma w'r}$, applied to the return rather than wealth, and check whether
-   the optimum now coincides more closely with the closed-form mean-variance weights.
-3. Add a no-short-sales constraint via `bounds=[(0, None)] * n_assets` in the `minimize`
-   call, and compare the constrained portfolio to the unconstrained one.
-4. Simulate the model-uncertainty data instead from the pure i.i.d. process
-   ($b_{\text{true}} = 0$) and report how the model probabilities and variance
-   decomposition change.
-:::
+
+## Reading guide and sources
+
+Geweke (2005), Section 2.4, for posterior expected loss; Avramov and Zhou (2010) for portfolio decisions; Frey and Pohlmeier (2026), Section 2.2 of the supplied working paper, for the reference-portfolio extension.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

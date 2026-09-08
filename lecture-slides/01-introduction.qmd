@@ -18,7 +18,7 @@ subtitle: "1 — Introduction and the Bayesian paradigm"
 
 The Bayesian answer is to treat unknowns as random and update beliefs with evidence.
 
-- Parameters are not fixed numbers we "estimate"; they are quantities we are *uncertain* about
+- An unknown parameter can describe a fixed feature of the world; its distribution represents our uncertainty
 - We start from a prior, observe data through a likelihood, and obtain a posterior
 - Every answer comes with a full distribution, not just a point and a standard error
 
@@ -37,20 +37,28 @@ and finance need when models are large and data are scarce.
 The less glamorous reality: most of the work is careful modelling and honest
 accounting for uncertainty, not magic.
 
-## Topics of this course
+## The fixed lecture sequence: Weeks 1–8
 
-- Subjective probability and the Bayesian paradigm
-- MCMC: Gibbs sampling and Metropolis-Hastings
-- Shrinkage via Minnesota priors
-- Bayesian VARs and state-space models for macroeconomics
-- Stochastic volatility and portfolio choice for finance
-- Bayesian machine learning for causal inference in microeconomics
+1. Introduction: the Bayesian paradigm
+2. The linear regression model
+3. Monte Carlo integration and importance sampling
+4. Gibbs sampling
+5. Metropolis-Hastings and NUTS sampling
+6. Minnesota priors
+7. BVARs and identification
+8. State space and time-varying parameter models
 
-By the end you should
+## The fixed lecture sequence: Weeks 9–15
 
-- understand the theoretical foundations of Bayesian inference
-- analyse high-dimensional data with modern Bayesian techniques
-- implement standard algorithms by writing your own Python code
+9. Prediction and Bayesian model averaging
+10. Causal inference
+11. Variable selection and big data
+12. Stochastic volatility
+13. Portfolio choice
+14. Bayesian machine learning
+15. Q&A and review
+
+The [schedule](../schedule.qmd) specifies each week's reading and Python exercise.
 
 ## Objectives
 
@@ -133,6 +141,32 @@ approximating that posterior.
 Neither is "correct" in the abstract. The Bayesian framing is especially natural
 when we have prior information and want coherent uncertainty.
 
+## A default warning and the base rate
+
+Among 1,000 firms, suppose 30 default.
+
+- A warning flags 90% of defaults: **27** flagged defaults.
+- It also flags 20% of non-defaults: **194** false alarms.
+- Among the 221 flagged firms, the default probability is $27/221\approx12.2\%$.
+
+The warning's sensitivity is not the probability of default given a warning.
+
+::: {.notes}
+Use counts before Bayes' formula. Ask students to identify the two different conditioning events. This course example develops the conditional-probability teaching sequence in the supplied UPM Class 1 materials (Virbickaitė and Zaharieva).
+:::
+
+## Bayes' theorem from the joint probability
+
+For an event $D$ and a warning $W$:
+
+$$P(D,W)=P(W\mid D)P(D)=P(D\mid W)P(W).$$
+
+Divide by $P(W)>0$ and partition the population:
+
+$$P(D\mid W)=\frac{P(W\mid D)P(D)}{P(W\mid D)P(D)+P(W\mid D^c)P(D^c)}.$$
+
+The denominator counts **all ways** a warning can occur.
+
 ## A first example: estimating a probability
 
 Suppose we observe $y$ successes in $n$ trials and want the success probability $\theta$.
@@ -143,6 +177,54 @@ Suppose we observe $y$ successes in $n$ trials and want the success probability 
 
 The Beta prior is **conjugate** to the binomial likelihood, so the posterior is
 again Beta. We will lose conjugacy quickly, which is exactly why we need MCMC.
+
+## Deriving the Beta posterior: collect powers
+
+The likelihood and prior kernels are
+
+$$p(y\mid\theta)\propto\theta^y(1-\theta)^{n-y},\qquad
+p(\theta)\propto\theta^{a-1}(1-\theta)^{b-1}.$$
+
+Multiply them:
+
+$$p(\theta\mid y)\propto\theta^{a+y-1}(1-\theta)^{b+n-y-1}.$$
+
+This is the kernel of $\operatorname{Beta}(a+y,b+n-y)$.
+
+::: {.notes}
+Write the factors on the board and collect each exponent separately. Constants may be dropped only when they do not depend on the unknown parameter. Reading: Koop (2003), introductory conjugate models; supplied UPM Classes 1–2.
+:::
+
+## Deriving the Beta posterior: normalise
+
+The Beta function integrates the kernel:
+
+$$B(A,B)=\int_0^1\theta^{A-1}(1-\theta)^{B-1}\,d\theta.$$
+
+With $A=a+y$ and $B=b+n-y$,
+
+$$p(\theta\mid y)=\frac{\theta^{A-1}(1-\theta)^{B-1}}{B(A,B)}.$$
+
+For $a=b=2$, $y=8$, $n=12$: $\theta\mid y\sim\operatorname{Beta}(10,6)$.
+
+## How strongly should twelve trials change a belief?
+
+$$E[\theta\mid y]=\frac{a+b}{a+b+n}\frac{a}{a+b}
++\frac{n}{a+b+n}\frac{y}{n}.$$
+
+In our example: $\tfrac14\times\tfrac12+\tfrac34\times\tfrac23=0.625$.
+
+- The prior contributes its mean and concentration $a+b$.
+- The observations contribute their success fraction and sample size.
+- A concentrated prior moves less; justify that concentration before observing the outcome.
+
+## Interpreting the plot before writing code
+
+- Evaluate two **densities** on the same horizontal grid.
+- The posterior uses the two updated shape parameters.
+- The vertical line is the observed success fraction, not a probability distribution.
+
+A density's height is not a point probability. Probability is area under the curve.
 
 ## The same example in Python
 
@@ -172,17 +254,41 @@ plt.show()
 
 The posterior sits between the prior and the data, and it tightens as $n$ grows.
 
+## Prediction integrates parameter uncertainty
+
+For one future binary observation $Y_{\mathrm{new}}$,
+
+$$P(Y_{\mathrm{new}}=1\mid y)=\int_0^1\theta\,p(\theta\mid y)\,d\theta
+=E[\theta\mid y].$$
+
+For several future trials, use the same uncertain $\theta$ for the batch.
+Integrating it out produces a **Beta-binomial** predictive distribution.
+
+::: {.notes}
+The one-trial predictive probability equals the posterior mean, but plugging that mean into a multi-trial binomial loses the extra variation due to parameter uncertainty. Derive the Beta-function ratio in the lecture notes or as additional practice.
+:::
+
+## Week 1 exercise: posterior calculation on a grid
+
+1. Multiply the prior and likelihood at midpoint grid values.
+2. Normalise the grid masses so they sum to one.
+3. Compute the mean, interval and a tail probability.
+4. Refine the grid and compare with the analytic Beta posterior.
+
+The [exercise session](../exercise-sessions/01-introduction.qmd) uses a second dataset so that the derivation must be transferred, not copied.
+
 ## What you should take away today
 
 - Bayesian inference combines a prior and a likelihood into a posterior
 - The posterior *is* the answer: it carries the full uncertainty
-- Conjugate models are rare; computation (MCMC) is what makes the rest possible
-- We will implement every method in Python, starting next week
+- Conjugacy gives exact benchmarks; numerical integration and MCMC extend our reach
+- This week, implement Bayes’ rule directly on a discrete grid
 
 ## Next steps
 
 - Set up Python and confirm NumPy, SciPy, and Matplotlib run
-- Skim Lambert, *A Student's Guide to Bayesian Statistics*, chapters 1–3
+- Read the introductory Bayesian treatment in Koop (2003) and Zellner (1971)
+- Use the [lecture notes](../lecture-notes/01-introduction.qmd) for worked derivations
 - Bring questions to the first exercise session
 
 Material and updates: **ILIAS**. See the [course homepage](../index.qmd) for the

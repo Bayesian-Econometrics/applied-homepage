@@ -3,6 +3,13 @@ title: "Causal inference"
 subtitle: "Lecture 10"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 10 exercise session](../exercise-sessions/10-causal-inference.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## From prediction to causation
 
 Almost everything so far has treated estimation as learning a distribution that describes the data
@@ -54,10 +61,36 @@ $\tau = \mathbb{E}_X[\mathbb{E}[Y \mid D = 1, X] - \mathbb{E}[Y \mid D = 0, X]]$
 and Rubin (2015). Estimation is now the problem of getting $\mathbb{E}[Y \mid D, X]$ right: whatever
 the model cannot represent is correlated with $D$ and is charged to the treatment.
 
+### Derive what the data identify
+
+Consistency means $Y=Y(D)$ for the treatment as specified, including the assumed
+absence of interference. For $d=0,1$, iterated expectation, unconfoundedness,
+and consistency give
+
+$$
+\mathbb E[Y(d)]=\mathbb E_X\{\mathbb E[Y(d)\mid X]\}
+=\mathbb E_X\{\mathbb E[Y(d)\mid D=d,X]\}
+=\mathbb E_X\{\mathbb E[Y\mid D=d,X]\}.
+$$
+
+Overlap ensures both treatment arms have support at the covariates over which
+we average. Subtract the two expressions to obtain the adjustment formula.
+A flexible regression estimates its ingredients; it cannot establish that
+important confounders were measured. Weak overlap can leave a narrow model-based
+interval driven largely by extrapolation and the prior.
+
+For a posterior surface draw $f^{(s)}$, compute
+$\tau^{(s)}=n^{-1}\sum_i[f^{(s)}(1,X_i)-f^{(s)}(0,X_i)]$.
+Both predictions must come from the **same surface draw** so their dependence is
+preserved. The quantity is an average conditional mean effect at the empirical
+covariate distribution, not a recovered individual missing potential outcome.
+
 ## A confounded policy experiment
 
 The chunk below simulates a confounder that drives selection through a non-linear propensity and
 also enters the outcome non-linearly, with a constant true effect of two.
+
+**Reading the computation.** Selection depends on the same nonlinear covariate that drives outcomes. The naive contrast therefore combines treatment and composition; the simulation lets us see both parts.
 
 ```{python}
 n, tau_true = 600, 2.0
@@ -84,6 +117,8 @@ applies unchanged: $\beta \mid Y \sim \mathcal{N}(m, V)$ with $V = (\sigma^{-2} 
 \tau_0^{-2} I)^{-1}$ and $m = \sigma^{-2} V Z^\top Y$, so the treatment coefficient has a univariate
 Gaussian marginal read straight off $m$ and $V$. We compute it twice, ignoring the confounder and
 then with a linear term in $X$.
+
+**Reading the computation.** The adjustment model is Gaussian conditional on an estimated residual variance. Adding only a linear covariate cannot remove nonlinear confounding, however precise the coefficient posterior appears.
 
 ```{python}
 def bayes_linreg(Z, y, sigma2=1.0, tau0=10.0):
@@ -160,6 +195,8 @@ Wishart draw follows from the **Bartlett decomposition**: let $C$ be the Cholesk
 and $A$ be lower triangular with $A_{ii} = \sqrt{\chi^2_{\nu - i + 1}}$ and standard normals below
 the diagonal, and set $W = (CA)(CA)^\top$. The chunk below implements both draws.
 
+**Reading the computation.** Conditional Gaussian errors turn the IV block into an adjusted regression. The helper receives the adjusted design, outcome, variance, and prior precision so each update can be compared with its formula.
+
 ```{python}
 def draw_gaussian(Xd, yd, s2, prec0, rng):
     """Draw from the Gaussian posterior of a linear model with known variance s2."""
@@ -194,6 +231,8 @@ The least-squares interval is tight and wrong, missing the truth by many multipl
 standard error, the signature of bias rather than imprecision. The sampler below cycles the three
 blocks derived above under diffuse priors.
 
+**Reading the computation.** After drawing the first-stage and structural coefficients, update their error covariance from current residuals. Correlation between the errors is the source of endogeneity, not a numerical defect to be removed by standardising.
+
 ```{python}
 prec0, nu0, S0, n_draw, burn = np.eye(2) / 100.0, 4.0, np.eye(2), 6000, 2000
 gamma = np.linalg.solve(Zi.T @ Zi, Zi.T @ x_end)
@@ -222,6 +261,42 @@ recovers the error correlation, the parameter that diagnoses the endogeneity in 
 its posterior concentrated near zero we would have concluded that least squares was fine. The wider
 Bayesian interval is the correct price of instrumenting, and it widens as the instrument weakens.
 
+### Interpret the IV conditionals before programming them
+
+In the triangular system, conditional Normal algebra gives
+
+$$
+u_i\mid v_i,\Sigma\sim N\left(
+\frac{\sigma_{vu}}{\sigma_v^2}v_i,
+\sigma_u^2-\frac{\sigma_{vu}^2}{\sigma_v^2}\right).
+$$
+
+After subtracting the conditional error mean from $y_i$, the outcome equation
+is a Gaussian regression with the smaller conditional variance. This is the
+reason the Gibbs code constructs an adjusted outcome rather than simply
+regressing on fitted values and treating them as observed without error.
+The first-stage update uses the corresponding conditional distribution of $v_i$
+given $u_i$. Neither update guarantees identification: exclusion, instrument
+exogeneity, and relevance are substantive assumptions. With a weak instrument,
+prior sensitivity is part of the result, not merely a numerical nuisance.
+
+### The Normal update inside a tree
+
+Fix all trees except one, subtract their predictions, and consider partial
+residuals in a leaf: $r_i=\mu_\ell+\epsilon_i$, with
+$\mu_\ell\sim N(0,s_\mu^2)$ and $\epsilon_i\sim N(0,\sigma^2)$.
+Completing the scalar square gives
+
+$$
+V_\ell=(s_\mu^{-2}+n_\ell/\sigma^2)^{-1},\qquad
+m_\ell=V_\ell\sum_{i\in\ell}r_i/\sigma^2.
+$$
+
+The leaf conditional is $N(m_\ell,V_\ell)$. Small leaves receive stronger
+shrinkage. BART additionally learns tree structures; keeping a fixed dictionary
+of indicator functions gives a useful backfitting demonstration but a different
+model. The exercise uses the tree model for the prescribed policy-effect task.
+
 ## A runnable stand-in for BART
 
 Return to the confounding problem, where the failure was the rigidity of the adjustment. Bayesian
@@ -248,6 +323,8 @@ The prior variance of each amplitude is divided by $M$, exactly as in BART's lea
 keeps a sensible scale however many stumps we use while each is individually pulled towards doing
 nothing. Every full conditional is standard: $a_m$ given the rest is a one-dimensional Gaussian,
 $(\mu, \tau)$ given the ensemble is Gaussian, and $\sigma^2$ is inverse-Gamma.
+
+**Reading the computation.** Backfitting adds one learner’s old contribution back to the residual, draws its new amplitude, and subtracts the new contribution. The cut points are fixed, so this illustrates an additive basis model rather than learned BART trees.
 
 ```{python}
 M = 40
@@ -284,6 +361,8 @@ the credible interval brackets it. The residual variance also lands near its tru
 direct evidence that the curvature in $X$ was absorbed by the learners rather than charged to the
 treatment.
 
+**Reading the computation.** The fitted surface and treatment posterior answer related questions: whether observable curvature is represented and what average treatment effect remains. Neither plot verifies the absence of unobserved confounding.
+
 ```{python}
 order, fit_mean, tgrid = np.argsort(X), fit_draws.mean(0), np.linspace(1.6, 3.2, 400)
 fit_lo, fit_hi = np.quantile(fit_draws, [0.025, 0.975], axis=0)
@@ -309,18 +388,14 @@ not assuming a functional form. Real BART learns where to split, handles many co
 interactions, and lets the treatment interact with them, so that averaging the posterior contrast
 $\hat{f}(1, X_i) - \hat{f}(0, X_i)$ over the sample gives an average effect even under heterogeneity.
 
-::: {.exercises}
-**Exercises**
 
-1. Weaken the instrument by setting the slope in `gamma_iv` to $0.15$ and rerun the Gibbs sampler.
-   Describe what happens to the width and coverage of the posterior for $\beta$, and why.
-2. Set `rho_iv` to zero, so the regressor is exogenous. Compare the Bayesian IV posterior with the
-   least-squares interval and explain why instrumenting is now a cost rather than a cure.
-3. Multiply `sa2` by one hundred to remove most of the shrinkage, then describe what happens to the
-   fitted surface in the sparse tails of $X$ and to the credible interval for $\tau$.
-4. Make the treatment effect heterogeneous, say $\tau_i = 2 + 0.8 X_i$, and explain why the
-   constant-$\tau$ specification then estimates a weighted average of the individual effects.
-:::
+
+## Reading guide and sources
+
+Greenberg (2008), Sections 11.1–11.2, for treatment models and endogenous covariates. Hill (2011) and Chipman et al. (2010) supply the BART application; UPM supplies the conditional-update mechanics, not a BART implementation.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 

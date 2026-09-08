@@ -3,6 +3,13 @@ title: "State space and time-varying parameter models"
 subtitle: "Lecture 8"
 ---
 
+::: {.callout-note}
+## Lecture and exercise
+Read the model and work through the derivations before running the examples.
+The [Week 8 exercise session](../exercise-sessions/08-state-space-tvp.qmd) contains the practical lab and the
+chapter's practice questions.
+:::
+
 ## Why state-space models
 
 Many macroeconomic quantities we care about are not observed directly. Trend output,
@@ -76,6 +83,8 @@ should smooth aggressively; when it is large the state tracks the data closely.
 
 We simulate one path with a modest signal-to-noise ratio.
 
+**Reading the computation.** The hidden path evolves with state noise, while observations add independent measurement noise. Only the observations would be visible in an empirical application; the true path is shown for validation.
+
 ```{python}
 T = 200
 sigma_eps = 1.0      # measurement standard deviation
@@ -88,6 +97,42 @@ y = alpha + sigma_eps * rng.standard_normal(T)
 
 print(f"signal-to-noise ratio q = {(sigma_eta/sigma_eps)**2:.3f}")
 ```
+
+### Bayes' theorem at each date
+
+Conditional on past data and fixed $H,Q$, suppose
+$\alpha_t\mid y_{1:t-1}\sim\mathcal N(a,P)$ and
+$y_t\mid\alpha_t\sim\mathcal N(\alpha_t,H)$. These are exactly the two
+Normal distributions in the scalar Normal update, with one new observation. Their product has kernel
+
+$$
+p(\alpha_t\mid y_{1:t})\propto
+\exp\left[-\frac12\left\{\frac{(\alpha_t-a)^2}{P}
++\frac{(y_t-\alpha_t)^2}{H}\right\}\right].
+$$
+
+Collecting the quadratic and linear terms gives posterior variance and mean
+
+$$
+P^+=(P^{-1}+H^{-1})^{-1}=\frac{PH}{P+H},\qquad
+a^+=P^+\left(\frac aP+\frac{y_t}{H}\right)
+=a+\frac{P}{P+H}(y_t-a).
+$$
+
+Thus the Kalman gain is $K=P/(P+H)$. If our prior state estimate is precise
+(small $P$), the new observation receives little weight. If measurement is
+precise (small $H$), the new observation receives most of the weight. With
+$a=2$, $P=1$, $H=3$, and $y_t=6$, the updated mean is 3 and variance is $3/4$.
+
+The transition $\alpha_{t+1}=\alpha_t+\eta_t$, with independent
+$\eta_t\sim\mathcal N(0,Q)$, then adds uncertainty:
+
+$$
+\alpha_{t+1}\mid y_{1:t}\sim\mathcal N(a^+,P^++Q).
+$$
+
+Observing data reduces state variance; letting the state evolve increases it.
+The repeated alternation of these two operations is the filter.
 
 ## The Kalman filter from scratch
 
@@ -123,6 +168,8 @@ how one estimates the variances $\sigma_\varepsilon^2$ and $\sigma_\eta^2$ by ma
 likelihood, or evaluates them inside a Bayesian sampler. We implement all of this
 directly in numpy, starting from a diffuse prior on the initial state.
 
+**Reading the computation.** The forecast error is divided by its variance to determine the gain. After incorporating the observation, add state noise for the next period; adding it twice would overstate uncertainty.
+
 ```{python}
 def kalman_filter_ll(y, sigma_eps, sigma_eta, a1=0.0, P1=1e6):
     T = len(y)
@@ -150,6 +197,8 @@ The filtered state recovers the hidden trend even though every observation is co
 by noise. The shaded band is a pointwise 95% interval from the filtered variance
 $P_{t|t}$, which quantifies how confident we are about the state at each date.
 
+**Reading the computation.** Each shaded interval conditions only on information available at that date. Compare it with the hidden path, remembering that pointwise intervals do not form a simultaneous confidence band.
+
 ```{python}
 band = 1.96 * np.sqrt(res["P_filt"])
 t_axis = np.arange(T)
@@ -175,6 +224,8 @@ should look like independent standard normals. This is the basic diagnostic for 
 state-space fit, the analogue of residual checks in regression. We discard the first few
 observations, where the diffuse initialisation still dominates.
 
+**Reading the computation.** Standardised innovations test the observation model relative to its forecast variance. Their mean and spread diagnose calibration; persistent correlation would suggest remaining dynamics.
+
 ```{python}
 std_err = res["v"] / np.sqrt(res["F"])
 print(f"mean of standardised errors: {std_err[5:].mean():.3f}")
@@ -191,6 +242,8 @@ averages over a long window and produces a very smooth estimate. A large $q$ tel
 the state is volatile, so it follows the data closely and filters out little noise. The
 next figure runs the filter on the same data under three assumed values of $q$, holding
 the measurement variance fixed.
+
+**Reading the computation.** Changing state noise changes how quickly the filter reacts to observations. A rapidly moving filtered line can represent a prior assumption about drift rather than strong evidence of structural change.
 
 ```{python}
 fig, ax = plt.subplots()
@@ -220,6 +273,32 @@ the filtered ones because they use more data, and the smoothed variances are sma
 We do not implement the backward pass here, but the logic is a mirror image of the
 forward recursion and adds only a handful of lines.
 
+### Why later observations revise earlier states
+
+Filtering learns $p(\alpha_t\mid y_{1:t})$; smoothing learns
+$p(\alpha_t\mid y_{1:T})$ for $T>t$. In the local-level model, conditional
+on $y_{1:t}$, the joint covariance of $(\alpha_t,\alpha_{t+1})$ is
+
+$$
+\begin{pmatrix}P_{t|t}&P_{t|t}\\P_{t|t}&P_{t|t}+Q\end{pmatrix}.
+$$
+
+The conditional-Normal formula therefore gives
+
+$$
+\alpha_t\mid\alpha_{t+1},y_{1:t}\sim
+\mathcal N\left(a_{t|t}+J_t(\alpha_{t+1}-a_{t+1|t}),
+P_{t|t}-J_t^2P_{t+1|t}\right),\qquad
+J_t=\frac{P_{t|t}}{P_{t+1|t}}.
+$$
+
+Averaging over the smoothed next state gives
+$a_{t|T}=a_{t|t}+J_t(a_{t+1|T}-a_{t+1|t})$ and
+$P_{t|T}=P_{t|t}+J_t^2(P_{t+1|T}-P_{t+1|t})$.
+Alternatively, draw the terminal state from its filtered posterior and draw
+backwards from these conditionals. This is forward filtering, backward sampling:
+it generates a coherent state path, rather than independent draws from pointwise bands.
+
 ## From the local level to time-varying parameters
 
 The real payoff of the state-space form in macroeconomics is the **time-varying-parameter
@@ -243,6 +322,25 @@ shocks and the volatility of the US economy changed across the post-war period. 
 finding that the systematic part of policy and the size of the shocks both varied has
 been central to the debate over the Great Moderation. Every such model is, under the
 hood, a large state-space system filtered by the recursions we just wrote down.
+
+### A drifting market beta
+
+For the exercise, replace the local-level observation equation by
+$r_{i,t}=\alpha_t+\beta_t r_{m,t}+\varepsilon_t$ and let
+$s_t=(\alpha_t,\beta_t)^\top$ follow a random walk. The observation row is
+$x_t^\top=(1,r_{m,t})$. With predicted covariance $P_t^-$,
+
+$$
+F_t=x_t^\top P_t^-x_t+H,\qquad
+K_t=P_t^-x_t/F_t,\qquad
+s_t^+=s_t^-+K_t(r_{i,t}-x_t^\top s_t^-).
+$$
+
+An observation with market return near zero contains little direct information
+about beta. A large market movement is more informative, conditional on the
+measurement-noise variance. This is why a rolling OLS window and a Kalman update
+weight observations differently. Filtering at date $t$ uses no later returns;
+smoothing can revise history and must not be mistaken for a real-time trading signal.
 
 ## Where the Bayesian sampler comes in
 
@@ -274,21 +372,14 @@ scales to time-varying-parameter regressions and to Primiceri's time-varying VAR
 Bayesian analysis the filter is embedded in a forward-filter backward-sample step that
 draws the whole latent path, turning the filter into one block of an MCMC sampler.
 
-::: {.exercises}
-**Exercises**
 
-1. Estimate the variances by maximum likelihood: write the negative of `kalman_filter_ll`'s
-   log-likelihood as a function of $(\sigma_\varepsilon, \sigma_\eta)$ and minimise it over a
-   grid (or with `scipy.optimize.minimize`). How close are the estimates to the true values?
-2. Add a deterministic drift to the state, $\alpha_{t+1} = \alpha_t + c + \eta_t$, so the
-   trend grows. Modify the filter and check that it still tracks the simulated state.
-3. Implement the backward smoothing recursion for the local level model and compare the
-   smoothed path and its variance band to the filtered ones. Confirm the smoother is more
-   accurate in the interior of the sample.
-4. Vary the true signal-to-noise ratio used to *simulate* the data and, for each, plot the
-   mean squared error of the filtered state against the assumed $q$. Verify that the error is
-   minimised when the assumed $q$ matches the truth.
-:::
+
+## Reading guide and sources
+
+Frühwirth-Schnatter, Bayesian Computing, Part IV c: prediction, correction, and TVP state inference. Greenberg (2008), Section 10.3, gives the time-varying-parameter context.
+
+The explanations and exercises are adapted to this course's notation and weekly
+structure; consult the cited originals for the full treatments.
 
 ## References
 
