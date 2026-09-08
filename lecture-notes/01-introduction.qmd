@@ -5,16 +5,21 @@ subtitle: "Lecture 1"
 
 ## Where we are going
 
-This course is about reasoning under uncertainty when the data are limited, noisy, and
-high-dimensional, the normal situation in economics and finance. The Bayesian approach
-gives us one consistent rule for doing that: treat every unknown as a random quantity,
-write down what we believe before seeing the data, and update that belief with the
-evidence. The result is a full distribution, not a single number with an asterisk.
+This course is about reasoning under uncertainty when the data are limited, noisy,
+and high-dimensional, which is the normal situation in economics and finance. The
+Bayesian approach gives us one consistent rule for doing that: treat every unknown
+as a random quantity, write down what we believe before seeing the data, and update
+that belief with the evidence. The result is a full probability distribution over
+the unknowns rather than a single number with an asterisk.
 
-In this first lecture we fix notation, state Bayes' theorem, look carefully at the prior,
-and work through the simplest non-trivial model end to end in Python. Everything later,
-from the Gibbs sampler to stochastic volatility, computes the same object we introduce
-here: the posterior. We import the libraries used throughout and fix a seed.
+In this first lecture we fix notation, state Bayes' theorem, and work through the
+simplest non-trivial model end to end in Python. Everything later in the course, the
+Gibbs sampler, Metropolis-Hastings, BVARs, stochastic volatility, is a way to compute
+the same object we introduce here: the posterior distribution.
+
+We import the small set of libraries used throughout the notes. The code uses only
+`numpy`, `scipy`, `pandas`, and `matplotlib`, and we fix a seed so results are
+reproducible.
 
 ```{python}
 import numpy as np
@@ -28,6 +33,53 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 ```
 
 ## The Bayesian paradigm
+
+### Start with a question about information
+
+Suppose 2% of firms default in a year. A warning signal occurs for 80% of
+defaulting firms, but also for 10% of firms that do not default. If a firm triggers
+the signal, is its default probability 80%? The 80% conditions on default; our
+question conditions on the signal. These are different groups of firms.
+
+Let $D$ denote default and $S$ the signal. Among 10,000 firms we expect 200
+defaults, of which 160 trigger the signal, and 9,800 non-defaults, of which 980
+trigger it. Thus
+
+$$
+\Pr(D\mid S)=\frac{160}{160+980}\approx 0.140.
+$$
+
+The signal raises the default probability from 2% to about 14%. It is informative,
+but its interpretation depends on the starting default rate.
+
+### Derive Bayes' rule from the joint probability
+
+The multiplication rule gives the same joint event in two ways:
+
+$$
+\Pr(D,S)=\Pr(S\mid D)\Pr(D)=\Pr(D\mid S)\Pr(S).
+$$
+
+Divide by $\Pr(S)>0$. To calculate that denominator, partition firms into
+defaulting and non-defaulting firms:
+
+$$
+\Pr(D\mid S)=
+\frac{\Pr(S\mid D)\Pr(D)}
+{\Pr(S\mid D)\Pr(D)+\Pr(S\mid D^c)\Pr(D^c)}.
+$$
+
+The same argument works with densities and integrals for an unknown continuous
+parameter. Bayesian inference therefore uses ordinary conditional probability;
+the modelling choice is to represent uncertainty about parameters by a distribution.
+A default probability can be fixed in the world while being uncertain to us.
+
+::: {.callout-tip}
+## Check your intuition
+Keep the signal's detection and false-alarm rates fixed. If defaults become rarer,
+does a flagged firm's default probability rise or fall? It falls: more of the
+flagged firms come from the much larger non-defaulting group.
+:::
 
 Let $\theta$ denote the unknown parameters of a model and $y$ the observed data.
 Bayesian inference combines three ingredients:
@@ -44,9 +96,10 @@ p(\theta \mid y) \;=\; \frac{p(y \mid \theta)\,p(\theta)}{p(y)}
 $$
 
 Read left to right, this is a rule for revising beliefs: start with the prior, multiply by
-the evidence, renormalise. The denominator $p(y) = \int p(y \mid \theta) p(\theta) d\theta$ does
-not depend on $\theta$ and only rescales the numerator, but handling it absorbs most of the
-computational effort, either by avoiding it (conjugacy) or sampling around it (MCMC).
+the evidence, renormalise. The denominator $p(y) = \int p(y \mid \theta)\,p(\theta)\,d\theta$ does not depend on
+$\theta$; it only rescales the numerator so the posterior integrates to one. Most of
+the computational effort in Bayesian work goes into handling that integral, either
+avoiding it (conjugacy) or sampling around it (MCMC).
 
 The contrast with the frequentist view is worth stating once, plainly.
 
@@ -57,9 +110,10 @@ The contrast with the frequentist view is worth stating once, plainly.
 | Main output | point estimate + confidence interval | posterior distribution |
 | Uncertainty | sampling variability | the posterior itself |
 
-Neither view is "correct" in the abstract. The Bayesian framing is convenient when we
-have genuine prior information, when we want to talk directly about the probability that
-a parameter lies in a range, and when models are too large to estimate unregularised.
+Neither view is "correct" in the abstract. The Bayesian framing is convenient when
+we have genuine prior information, when we want to talk directly about the
+probability that a parameter lies in a range, and when models are too large to
+estimate without regularisation.
 
 ## A worked example: estimating a probability
 
@@ -69,14 +123,23 @@ successes in $n$ independent trials, so the likelihood is binomial, and a conven
 is the Beta distribution. The Beta prior is **conjugate** to the binomial likelihood,
 meaning the posterior is again a Beta distribution with updated parameters:
 
+The likelihood is binomial,
 $$
-y \mid \theta \sim \text{Binomial}(n, \theta), \quad \theta \sim \text{Beta}(a, b)
-\quad \Longrightarrow \quad \theta \mid y \sim \text{Beta}(a + y,\; b + n - y).
+y \mid \theta \sim \text{Binomial}(n, \theta),
+$$
+and a convenient prior is the Beta distribution,
+$$
+\theta \sim \text{Beta}(a, b).
+$$
+The Beta prior is **conjugate** to the binomial likelihood, meaning the posterior is
+again a Beta distribution with updated parameters:
+$$
+\theta \mid y \sim \text{Beta}(a + y,\; b + n - y).
 $$
 
-This is the rare case where the posterior has a closed form. The next chunk sets up the
-numbers: a weakly informative $\text{Beta}(2, 2)$ prior and data of 8 successes in 12
-trials.
+This is the rare case where we can write the posterior in closed form. Let us set up
+the numbers: a weakly informative $\text{Beta}(2, 2)$ prior, and data of 8 successes
+in 12 trials.
 
 ```{python}
 a, b = 2, 2          # Beta(a, b) prior
@@ -91,9 +154,11 @@ print(f"Posterior mean:       {posterior.mean():.3f}")
 print(f"Prior mean:           {prior.mean():.3f}")
 ```
 
-The posterior mean sits between the prior mean (0.5) and the data-only estimate (0.667).
-That is the whole idea: the posterior is a compromise between what we believed and what
-we saw, weighted by how strong each is. Plotting the densities makes the update concrete.
+The posterior mean sits between the prior mean (0.5) and the data-only estimate
+(0.667). That is the whole idea: the posterior is a compromise between what we
+believed and what we saw, weighted by how strong each is.
+
+Plotting the three densities makes the update concrete.
 
 ```{python}
 theta = np.linspace(0, 1, 400)
@@ -254,10 +319,11 @@ most underused form of prior checking.
 
 ## Beliefs update sequentially
 
-Bayesian updating is sequential and order-independent: yesterday's posterior is today's
-prior. If the data arrive one batch at a time, we can fold them in one by one and reach
-the same posterior as if we had used all of them at once. The next block simulates a
-stream of Bernoulli outcomes and shows the posterior tightening as evidence accumulates.
+Bayesian updating is sequential and order-independent: yesterday's posterior is
+today's prior. If the data arrive one batch at a time, we can fold them in one by one
+and reach the same posterior as if we had used all of them at once. The next block
+simulates a stream of Bernoulli outcomes and shows the posterior tightening as
+evidence accumulates.
 
 ```{python}
 true_theta = 0.7
@@ -276,21 +342,26 @@ plt.tight_layout()
 plt.show()
 ```
 
-With no data the posterior equals the prior; as $n$ grows it concentrates around the true
-value and the prior's influence fades. This is the Bernstein-von Mises idea in miniature:
-with enough data the prior stops mattering and the Bayesian and frequentist answers
-converge. The machinery earns its keep when data are scarce or the model is large, which
-is where the rest of the course lives.
+With no data the posterior equals the prior. As $n$ grows it concentrates around the
+true value and the prior's influence fades. This is the Bernstein-von Mises idea in
+miniature: with enough data the prior stops mattering, and the Bayesian and
+frequentist answers converge. The Bayesian machinery earns its keep precisely when
+data are scarce or the model is large, which is where the rest of the course lives.
 
 ## Why we will need more than this
 
-Conjugate models are the exception. As soon as the prior and likelihood do not pair neatly,
-the posterior has no closed form and the integral $p(y)$ is intractable. The response is
-not to give up but to approximate the posterior by drawing samples from it: given
-$\theta^{(1)}, \dots, \theta^{(S)}$ we can estimate any posterior quantity by averaging, for
-example the mean as $\frac{1}{S}\sum_s \theta^{(s)}$. Building the algorithms that produce
-those samples, Monte Carlo, Gibbs sampling, Metropolis-Hastings, occupies the next several
-lectures. The chunk below previews the logic using draws from the known Beta posterior.
+Conjugate models are the exception. As soon as the prior and likelihood do not pair
+neatly, the posterior has no closed form and the normalising integral $p(y)$ is
+intractable. The response is not to give up on the Bayesian answer but to approximate
+it by drawing samples from the posterior. Given samples $\theta^{(1)}, \dots,
+\theta^{(S)}$ we can estimate any posterior quantity by averaging, for example the
+posterior mean as $\frac{1}{S}\sum_s \theta^{(s)}$. Building algorithms that produce
+those samples, Monte Carlo, Gibbs sampling, Metropolis-Hastings, is the subject of the
+next several lectures.
+
+To preview the logic, here is a crude Monte Carlo estimate of the posterior mean from
+the worked example, using direct draws from the known Beta posterior. Later we will
+generate such draws when the posterior is *not* known in closed form.
 
 ```{python}
 samples = posterior.rvs(size=20000, random_state=rng)
