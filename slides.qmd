@@ -9,17 +9,24 @@ fullscreen, and <kbd>M</kbd> or the menu button (bottom left) to navigate.
 
 ## Block I — Foundations
 
-- [01 — Introduction and the Bayesian paradigm](lecture-slides/01-introduction.qmd)
+- [01 — Introduction: the Bayesian paradigm](lecture-slides/01-introduction.qmd)
 
 ## Coming up
 
-Additional decks for the computation and applications blocks will appear here
-during the term, matching the [schedule](schedule.qmd):
+Decks are released as each lecture is finalised, following the
+[schedule](schedule.qmd):
 
-- 02 — Bayes' theorem, priors, and the posterior
-- 03 — Monte Carlo and the Gibbs sampler
-- 04 — Metropolis-Hastings and diagnostics
-- 05 — Shrinkage and the Minnesota prior
-- 06 — BVARs and state-space models
-- 07 — Stochastic volatility and portfolio choice
-- 08 — Bayesian machine learning for causal inference
+- 02 — The linear regression model
+- 03 — Monte Carlo integration and importance sampling
+- 04 — Gibbs sampling
+- 05 — Metropolis-Hastings and NUTS sampling
+- 06 — Minnesota priors
+- 07 — BVARs and identification
+- 08 — State space and time-varying parameter models
+- 09 — Prediction and Bayesian model averaging
+- 10 — Causal inference
+- 11 — Variable selection and big data
+- 12 — Stochastic volatility
+- 13 — Portfolio choice
+- 14 — Bayesian machine learning
+- 15 — Q&A and review

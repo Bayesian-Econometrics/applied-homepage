@@ -1,0 +1,326 @@
+---
+title: "Variable selection and big data"
+subtitle: "Lecture 11"
+---
+
+## From macroeconomic shrinkage to the factor zoo
+
+Lectures 8 to 10 built a toolkit for high-dimensional macroeconometrics, where a zero-mean Normal prior turns out to
+be exactly ridge regression and the same idea carries over to Bayesian VARs and state-space models. Throughout, the
+prior did the regularising and the question of *which* variables belong never arose: we kept them all and shrank them.
+
+This lecture opens the finance block, where the problem returns in a sharper form. Empirical asset pricing has
+produced hundreds of published characteristics claimed to forecast the cross-section of returns, a collection Cochrane
+called the **factor zoo**. Here the identity of the relevant predictors is itself the object of interest, and the
+temptation to search a vast model space until something looks significant is what makes published predictability hard
+to trust.
+
+We therefore need a prior on whether each coefficient is there at all. That device is the **spike-and-slab** prior,
+made operational by **stochastic search variable selection** (SSVS), a Gibbs sampler that wanders through model space
+instead of enumerating it. We build it from scratch and confront it with the dense shrinkage of Lecture 6.
+
+We import the same small set of libraries used throughout the notes and fix a seed.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The quadrillion-regressions problem
+
+With $p$ candidates, and any subset admissible as a model, the model space contains $2^p$ members. The count defeats
+brute force at once: $p = 20$ gives about a million models, $p = 50$ gives $1.1 \times 10^{15}$, a genuine
+quadrillion, which at a billion marginal likelihoods per second would take a fortnight, and the $p \approx 300$ of a
+realistic factor zoo gives $2 \times 10^{90}$, more than the atoms in the observable universe. Any procedure must
+therefore *sample* the model space, which is what a Gibbs sampler over inclusion indicators does.
+
+The second difficulty is statistical. Screening $p$ candidates at the five per cent level yields about $0.05p$
+spurious rejections even when nothing predicts anything, so a zoo of 1000 characteristics delivers some fifty
+significant factors by construction, and reporting only the winner presents a number selected for its extremeness.
+This is **data mining**, which a prior over models prices in by penalising inclusion before the data are seen.
+
+## Two prior philosophies: sparsity versus dense shrinkage
+
+The **sparsity** view holds that a few predictors matter and the rest are exactly zero, so returns are priced by a
+small number of risk sources and the remaining characteristics are repackagings or artefacts of mining. A sparsity
+prior places an atom of probability mass at zero for each coefficient, making it a **discrete mixture** whose
+posterior answers "which factors are in the model?" with a short list.
+
+The **dense shrinkage** view holds that many predictors matter a little and none is exactly zero, so no short list is
+adequate and the useful object is a regularised combination of everything. This is the philosophy of Lecture 6, and of
+Kozak, Nagel and Santosh, who argue that the stochastic discount factor implied by the cross-section is well
+approximated by a dense combination of characteristic portfolios. Because a Normal prior can make a coefficient
+arbitrarily small without setting it to zero, a dense model can mimic a sparse one arbitrarily well in fit, which is
+why the two are hard to separate.
+
+## The spike-and-slab prior and its full conditionals
+
+We work with the predictive regression
+$$
+y = X\beta + \varepsilon, \qquad \varepsilon \sim \mathcal{N}(0, \sigma^2 I_n),
+$$
+where $y$ collects $n$ returns and the columns of the $n \times p$ matrix $X$ hold standardised candidate factors. To
+express sparsity we introduce latent binary **inclusion indicators** $\gamma = (\gamma_1, \dots, \gamma_p)^\top$, with
+$\gamma_j = 1$ meaning factor $j$ belongs in the model. Each coefficient then comes from one of two Normal components,
+the indicators are independent Bernoulli draws, and the error variance keeps its conjugate prior:
+$$
+\beta_j \mid \gamma_j \sim (1 - \gamma_j)\, \mathcal{N}(0, \tau_j^2) + \gamma_j\, \mathcal{N}(0, c^2 \tau_j^2),
+\qquad \gamma_j \sim \text{Bernoulli}(\pi), \qquad \sigma^2 \sim \text{Inverse-Gamma}(a_0, b_0).
+$$
+
+The **spike** has the tiny variance $\tau_j^2$, so small that a coefficient drawn from it is practically zero; the
+**slab** has variance $c^2\tau_j^2$ with $c \gg 1$, wide enough for a genuinely large coefficient. The prior inclusion
+probability $\pi$ says how many factors we expect a priori, so $\pi = 0.2$ with $p = 25$ means about five, supplying
+the multiplicity penalty the data miner lacked. Every coefficient stays in the regression, the excluded ones merely
+forced near zero, so the design matrix never changes size.
+
+Collecting the prior variances into $D_\gamma = \operatorname{diag}(d_1, \dots, d_p)$ with $d_j = (1-\gamma_j)\tau_j^2
++ \gamma_j c^2\tau_j^2$ gives $\beta \mid \gamma \sim \mathcal{N}(0, D_\gamma)$. Conditional on $\gamma$ the model is
+the conjugate Normal regression of Lecture 2:
+$$
+\beta \mid \gamma, \sigma^2, y \sim \mathcal{N}(b_1, B_1), \quad
+B_1 = \Big(D_\gamma^{-1} + \tfrac{1}{\sigma^2} X^\top X\Big)^{-1}, \quad b_1 = \tfrac{1}{\sigma^2} B_1 X^\top y,
+$$
+$$
+\sigma^2 \mid \beta, y \sim \text{Inverse-Gamma}\!\left(a_0 + \tfrac{n}{2}, \;\; b_0 + \tfrac{1}{2}(y - X\beta)^\top(y - X\beta)\right).
+$$
+
+The new block is the indicator. Given $\beta_j$ it depends on the data only through $\beta_j$, since $\gamma_j$ is
+merely the label of the component that generated it. Its full conditional is therefore Bernoulli, written most cleanly
+as the posterior **odds ratio** of the two components: prior odds times a likelihood ratio. With $\phi(\cdot; 0, v)$
+the Normal density of variance $v$, the normalising constants leave a factor $1/c$ and the exponents combine:
+$$
+O_j = \frac{\Pr(\gamma_j = 1 \mid \beta_j)}{\Pr(\gamma_j = 0 \mid \beta_j)}
+= \frac{\pi}{1 - \pi} \cdot \frac{\phi(\beta_j; 0, c^2\tau_j^2)}{\phi(\beta_j; 0, \tau_j^2)}
+= \frac{\pi}{1 - \pi} \cdot \frac{1}{c} \cdot \exp\!\left\{ \frac{\beta_j^2}{2}\left(\frac{1}{\tau_j^2} - \frac{1}{c^2\tau_j^2}\right) \right\},
+$$
+from which $\Pr(\gamma_j = 1 \mid \beta_j) = O_j / (1 + O_j)$. The factor $1/c$ penalises the slab for its width, an
+Occam's razor term favouring exclusion when $\beta_j$ is small, while the exponential rewards inclusion and grows in
+$\beta_j^2$: once a draw is large relative to the spike width it overwhelms the penalty and the indicator switches on.
+The sampler thus walks through model space one coordinate at a time.
+
+## A simulated cross-section of candidate factors
+
+We simulate $p = 25$ standardised candidate factors with $n = 300$ observations for estimation and 300 held back. Four
+genuinely price returns; three have zero coefficients but are correlated with a true factor, mildly in two cases and
+as a near-duplicate in the third; the rest are independent noise.
+
+```{python}
+n_train, n_test, p = 300, 300, 25
+n_all = n_train + n_test
+Z = rng.standard_normal((n_all, p))
+X_all = Z.copy()
+X_all[:, 4] = 0.75 * Z[:, 0] + np.sqrt(1 - 0.75 ** 2) * Z[:, 4]   # mild decoy for f1
+X_all[:, 5] = 0.55 * Z[:, 1] + np.sqrt(1 - 0.55 ** 2) * Z[:, 5]   # mild decoy for f2
+X_all[:, 6] = 0.98 * Z[:, 3] + np.sqrt(1 - 0.98 ** 2) * Z[:, 6]   # near-twin of f4
+X_all = (X_all - X_all.mean(0)) / X_all.std(0)
+beta_true = np.zeros(p)
+beta_true[[0, 1, 2, 3]] = [0.45, -0.35, 0.28, 0.32]
+y_all = X_all @ beta_true + rng.normal(0, 1.0, n_all)
+X, y = X_all[:n_train], y_all[:n_train]
+X_te, y_te = X_all[n_train:], y_all[n_train:]
+names = [f"f{j+1}" for j in range(p)]
+XtX, Xty = X.T @ X, X.T @ y
+signal_var = beta_true @ np.cov(X_all.T) @ beta_true
+print(f"population R^2 = {signal_var / (signal_var + 1.0):.3f};  sample corr(f1,f5) = "
+      f"{np.corrcoef(X[:, 0], X[:, 4])[0, 1]:.2f}, "
+      f"corr(f4,f7) = {np.corrcoef(X[:, 3], X[:, 6])[0, 1]:.2f}")
+```
+
+A population $R^2$ near a third is generous for return prediction but keeps the illustration readable. Factor 7 is
+almost indistinguishable from factor 4, so any procedure reporting one "correct" model must make a choice the data
+barely support.
+
+## The SSVS Gibbs sampler from scratch
+
+The coefficient draw uses a Cholesky factor of the posterior precision rather than an explicit inverse: if $L L^\top =
+B_1^{-1}$, solving $L^\top z = \eta$ for a standard Normal $\eta$ gives a draw with covariance $B_1$. The indicator
+block is vectorised, the $p$ indicators being conditionally independent given $\beta$.
+
+```{python}
+tau, c_slab, pi_prior = 0.025, 40.0, 0.2      # spike sd, slab factor, prior inclusion
+a0, b0 = 3.0, 3.0                             # inverse-Gamma prior on sigma^2
+n_iter, burn = 6000, 2000
+log_prior_odds = np.log(pi_prior) - np.log1p(-pi_prior) - np.log(c_slab)
+slab_gain = 0.5 * (1.0 / tau ** 2 - 1.0 / (c_slab * tau) ** 2)
+beta, gamma, sigma2 = np.zeros(p), np.ones(p, dtype=bool), float(np.var(y))
+beta_draws = np.empty((n_iter, p))
+gamma_draws = np.empty((n_iter, p), dtype=bool)
+sigma2_draws = np.empty(n_iter)
+for t in range(n_iter):
+    d = np.where(gamma, (c_slab * tau) ** 2, tau ** 2)    # 1) beta | gamma, sigma^2, y
+    L = np.linalg.cholesky(XtX / sigma2 + np.diag(1.0 / d))
+    b1 = np.linalg.solve(L.T, np.linalg.solve(L, Xty / sigma2))
+    beta = b1 + np.linalg.solve(L.T, rng.standard_normal(p))
+    resid = y - X @ beta                                  # 2) sigma^2 | beta, y
+    sigma2 = 1.0 / rng.gamma(a0 + n_train / 2, 1.0 / (b0 + 0.5 * resid @ resid))
+    log_odds = log_prior_odds + slab_gain * beta ** 2      # 3) gamma | beta, odds ratio
+    gamma = rng.random(p) < 1.0 / (1.0 + np.exp(-log_odds))
+    beta_draws[t], gamma_draws[t], sigma2_draws[t] = beta, gamma, sigma2
+beta_post, gamma_post = beta_draws[burn:], gamma_draws[burn:]
+print(f"kept {beta_post.shape[0]} draws; posterior mean sigma^2 = "
+      f"{sigma2_draws[burn:].mean():.3f} (true 1.00)")
+```
+
+The sampler is a dozen lines and runs in under a second, exploring a space of $2^{25} \approx 3.4 \times 10^{7}$
+subsets without enumerating one. The posterior mean of $\sigma^2$ lands close to the true error variance, a first sign
+the model is not badly misspecified.
+
+## Posterior inclusion probabilities and the median-probability model
+
+The **posterior inclusion probability** (PIP) of factor $j$ is the posterior probability that $\gamma_j = 1$, the
+sample mean of the indicator draws; it integrates over every model the sampler visited. The **median-probability
+model** collects the factors with PIP at least one half, often a better predictive choice than the most probable
+model. Since marginal PIPs cannot show whether two factors are substitutes, we also tabulate joint inclusion for each
+true factor and its decoy.
+
+```{python}
+pip = gamma_post.mean(axis=0)
+post_mean, post_sd = beta_post.mean(axis=0), beta_post.std(axis=0)
+mpm, size = pip >= 0.5, gamma_post.sum(axis=1)
+b_ols = np.linalg.solve(XtX, Xty)
+role = np.array(["noise"] * p, dtype=object)
+role[[0, 1, 2, 3]], role[[4, 5, 6]] = "true factor", "correlated decoy"
+print(pd.DataFrame({"role": role, "true beta": beta_true, "OLS": b_ols.round(3),
+                    "PIP": pip.round(3), "post mean": post_mean.round(3),
+                    "post sd": post_sd.round(3), "in MPM": mpm},
+                   index=names).iloc[:7].to_string())
+print(f"\nthe {p - 7} noise factors: max PIP {pip[7:].max():.3f}, mean {pip[7:].mean():.3f}"
+      f"   |   MPM: {[names[j] for j in np.where(mpm)[0]]}"
+      f"   |   model size: median {np.median(size):.0f}, 90% interval "
+      f"[{np.quantile(size, 0.05):.0f}, {np.quantile(size, 0.95):.0f}]\n")
+print(pd.DataFrame([{"pair": f"{names[j]} vs decoy {names[k]}",
+    "corr(X)": round(float(np.corrcoef(X[:, j], X[:, k])[0, 1]), 2),
+    "true only": round(float((gamma_post[:, j] & ~gamma_post[:, k]).mean()), 3),
+    "decoy only": round(float((~gamma_post[:, j] & gamma_post[:, k]).mean()), 3),
+    "either": round(float((gamma_post[:, j] | gamma_post[:, k]).mean()), 3)}
+    for j, k in [(0, 4), (1, 5), (3, 6)]]).to_string(index=False))
+```
+
+All four genuinely priced factors carry high inclusion probabilities, the eighteen noise factors are essentially never
+selected, and the median-probability model recovers exactly the true set. The OLS column shows what selection protects
+us from: faced with two columns correlated at 0.98, least squares splits the shared effect into a large positive
+coefficient on one and a large offsetting negative one on the other, and it inflates the mild decoys too. Model
+averaging keeps the SSVS coefficients moderate, since most draws admit only one member of a pair.
+
+The joint table shows what the sampler confuses. Where a decoy shares little variance with its target the true factor
+is kept virtually always, but at a correlation of 0.98 nearly a third of the mass puts the decoy in and the true
+factor out, which is why that pair's posterior standard deviations are several times the others'. Yet the probability
+that *at least one* of the pair is included stays close to one, and that is the honest summary: the posterior is
+nearly certain the shared risk source is priced and close to agnostic about which column stands for it.
+
+## Dense shrinkage on the same data
+
+The dense alternative replaces the mixture with a single Normal prior $\beta \sim \mathcal{N}(0, \tau_r^2 I_p)$, whose
+posterior mean is the ridge estimator $(X^\top X + \lambda I)^{-1}X^\top y$ with $\lambda = \sigma^2/\tau_r^2$ from
+Lecture 6. We sweep the tightness and compare out-of-sample predictive $R^2$ with the SSVS prediction, the
+median-probability model refitted by least squares, and OLS.
+
+```{python}
+def pred_r2(b_hat):
+    err, ref = y_te - X_te @ b_hat, y_te - y.mean()
+    return 1.0 - err @ err / (ref @ ref)
+
+lams = np.geomspace(0.25, 1000.0, 40)               # lambda = sigma^2 / tau_r^2
+r2_ridge = np.array([pred_r2(np.linalg.solve(XtX + l * np.eye(p), Xty)) for l in lams])
+b_ridge = np.linalg.solve(XtX + lams[int(np.argmax(r2_ridge))] * np.eye(p), Xty)
+b_mpm = np.zeros(p)
+b_mpm[mpm] = np.linalg.solve(XtX[np.ix_(mpm, mpm)], Xty[mpm])
+print(f"absolute weight on the 18 noise factors: SSVS {np.abs(post_mean[7:]).sum():.3f}, "
+      f"ridge {np.abs(b_ridge[7:]).sum():.3f}")
+print(pd.Series({"SSVS (model averaged)": pred_r2(post_mean),
+                 "SSVS median-prob. model": pred_r2(b_mpm),
+                 "ridge (best lambda)": r2_ridge.max(),
+                 "OLS (no shrinkage)": pred_r2(b_ols)},
+                name="out-of-sample predictive R^2").round(4).to_string())
+```
+
+Sparse selection wins here, but narrowly, and ridge spreads roughly five times as much absolute weight over the noise
+factors. The figure puts the two posteriors side by side.
+
+```{python}
+colours = {"true factor": "C0", "correlated decoy": "C3", "noise": "0.6"}
+order = np.argsort(-np.abs(beta_true))
+fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(10, 4))
+ax0.bar(np.arange(p), pip, color=[colours[r] for r in role])
+ax0.axhline(0.5, color="black", ls="--", lw=1, label="median-prob. threshold")
+ax0.axhline(pi_prior, color="C2", ls=":", lw=1.2, label="prior inclusion prob.")
+ax0.set_xticks(np.arange(p))
+ax0.set_xticklabels(names, rotation=90, fontsize=6)
+ax0.set(xlabel="factor (blue true, red decoy, grey noise)",
+        ylabel="posterior inclusion probability")
+ax0.set_title("SSVS inclusion probabilities")
+ax0.legend(loc="center right", fontsize=8)
+ax1.plot(np.abs(beta_true[order]), "k-", lw=2, label="true |beta|")
+ax1.plot(np.abs(post_mean[order]), "o", ms=5, alpha=0.8, label="SSVS")
+ax1.plot(np.abs(b_ridge[order]), "s", ms=5, alpha=0.8, label="ridge")
+ax1.set(xlabel="factor (sorted by true |beta|)", ylabel="absolute coefficient")
+ax1.set_title("Selection concentrates, shrinkage spreads")
+ax1.legend(fontsize=8)
+plt.tight_layout()
+plt.show()
+```
+
+In the left panel the blue bars stand well above the threshold while the grey bars lie flat against the axis, far
+below the prior inclusion probability of 0.2: the data have actively argued the noise factors out, and the one tall
+red bar is the near-twin of factor 4. In the right panel the SSVS estimates track the genuine coefficients and then
+collapse onto the axis, while ridge leaves a carpet of small weights everywhere.
+
+## The illusion of sparsity
+
+The sparse posterior is the one that looks like the truth, since the truth we simulated is sparse, and it forecasts
+better too. But the margin should give us pause: our design gave selection every advantage, and it still bought only a
+couple of points of predictive $R^2$ over a prior that puts no mass at zero, while ridge in turn beat OLS by less than
+one point.
+
+A criterion that separates the candidates this weakly cannot certify that the world is sparse. Had the truth been
+dense, with all twenty-five coefficients non-zero and the same signal variance, the ranking would plausibly reverse by
+a similar margin, and SSVS would still return a short, confident list, since a prior giving almost no mass to dense
+configurations is not overturned by 300 observations.
+
+A spike-and-slab posterior hands you a named factor list whether or not one exists. This is the **illusion of
+sparsity** documented by Giannone, Lenza and Primiceri across many economic and financial data sets: predictive
+performance is typically best when many coefficients contribute a little, and the data rarely identify a small active
+set with confidence. Kozak, Nagel and Santosh reach a compatible conclusion for returns, where a dense combination of
+characteristic portfolios prices the cross-section better than any sparse model. So report a selected set as one
+summary of a posterior over models, alongside the model-size distribution and a dense benchmark, not as a discovery.
+
+## Takeaways
+
+Variable selection over $p$ candidates involves $2^p$ models, so the space cannot be enumerated once $p$ is moderate,
+and screening many candidates against one return series manufactures predictability out of nothing. The spike-and-slab
+prior answers both with a Bernoulli prior on inclusion indicators and a two-component Normal mixture on each
+coefficient, and SSVS turns it into a three-block Gibbs sampler whose indicator step is an odds ratio comparing slab
+and spike densities at the current draw. Inclusion probabilities and the median-probability model summarise the
+posterior but become unstable when candidates are near-duplicates, and out-of-sample performance separates sparse from
+dense priors only weakly, so sparsity is a prior belief rather than a finding.
+
+::: {.exercises}
+**Exercises**
+
+1. Derive the indicator full conditional: show that $\Pr(\gamma_j = 1 \mid \beta_j) = O_j/(1 + O_j)$ with
+   $O_j$ as in the text, and explain why it is free of $y$ and $\sigma^2$ once $\beta_j$ is known.
+2. Rerun the sampler with $c = 10$ and then $c = 200$, holding $\tau$ fixed. Report how the inclusion
+   probabilities respond, and relate the pattern to the $1/c$ Occam term in the odds ratio.
+3. Replace the fixed $\pi$ with a hierarchical $\pi \sim \text{Beta}(1, 1)$, adding the draw $\pi \mid \gamma
+   \sim \text{Beta}\big(1 + \sum_j \gamma_j, 1 + p - \sum_j \gamma_j\big)$, and say why this aids
+   multiplicity control.
+4. Simulate a dense truth on the same design matrix, all 25 coefficients non-zero and rescaled to the
+   same signal variance, and rerun both procedures. Does the predictive ranking reverse?
+5. Reduce the estimation sample to $n = 80$ and rerun both comparisons. Discuss which procedure degrades
+   faster and whether the out-of-sample ranking survives.
+:::
+
+## References
+
+Kozak, Nagel, and Santosh (2020), "Shrinking the Cross-Section," *Journal of Financial Economics*. Giannone, Lenza,
+and Primiceri (2021), "Economic Predictions with Big Data: The Illusion of Sparsity," *Econometrica*. George and
+McCulloch (1993), "Variable Selection via Gibbs Sampling," *Journal of the American Statistical Association*.
+Barbieri and Berger (2004), "Optimal Predictive Model Selection," *Annals of Statistics*. Cochrane (2011), "Presidential Address: Discount Rates," *Journal of
+Finance*. Koop, *Bayesian Econometrics*, ch. 11. Chan, Koop, Poirier, Tobias, *Bayesian Econometric Methods*, ch. 4.

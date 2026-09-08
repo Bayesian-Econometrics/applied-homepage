@@ -1,0 +1,329 @@
+---
+title: "Portfolio choice"
+subtitle: "Lecture 13"
+---
+
+## The investor's problem
+
+An investor with wealth to allocate across $n$ risky assets chooses portfolio weights $w$
+to maximise expected utility of the resulting return, $\mathbb{E}[U(w'r)]$, where $r$ is
+the vector of next-period returns and $U$ is increasing and concave. This separates two
+conceptually distinct ingredients, how returns behave and how much the investor dislikes
+risk, and a Bayesian treatment of portfolio choice is an insistence on being honest about
+how well the first of these is really known.
+
+Mean-variance analysis is not an ad hoc simplification of this problem but its exact
+solution in an important special case. Suppose $r \sim N(\mu, \Sigma)$ and the investor
+has constant absolute risk aversion, $U(x) = -e^{-\gamma x}$. Because $w'r$ is normal with
+mean $w'\mu$ and variance $w'\Sigma w$, and for $X \sim N(m, s^2)$ we have
+$\mathbb{E}[-e^{-\gamma X}] = -\exp\!\big(-\gamma(m - \tfrac{\gamma}{2}s^2)\big)$, expected
+utility collapses to
+
+$$
+\mathbb{E}[U(w'r)] = -\exp\!\Big(-\gamma\Big(w'\mu - \frac{\gamma}{2}\,w'\Sigma w\Big)\Big).
+$$
+
+Since $-e^{-\gamma x}$ is increasing, maximising expected utility is exactly equivalent to
+maximising the mean-variance objective $w'\mu - \frac{\gamma}{2}w'\Sigma w$ inside the
+exponent. Setting the gradient to zero gives the closed-form optimal weights
+
+$$
+w^\star = \frac{1}{\gamma}\, \Sigma^{-1} \mu .
+$$
+
+Everything here is conditional on knowing $\mu$ and $\Sigma$. In practice we never do, and
+this lecture asks what changes once that is taken seriously. We keep mean-variance as the
+workhorse for its closed form, but also build the tools to go beyond it to genuine
+expected-utility maximisation once the closed form runs out.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The plug-in fallacy
+
+The obvious way to operationalise $w^\star$ is the **plug-in** rule: replace $\mu$ and
+$\Sigma$ with the sample mean $\hat\mu$ and covariance $\hat\Sigma$ and act as if they were
+the truth, the *known-parameter* problem at an estimated point rather than the investor's
+actual problem of weighing outcomes given everything, including the parameters, that is
+uncertain. The damage is not spread evenly: the rule inverts the covariance matrix, and
+inversion amplifies error along directions where the matrix is nearly singular. Assets
+with high sample correlation make $\hat\Sigma$ close to singular in their common
+direction, so $\hat\Sigma^{-1}$ has a huge eigenvalue there and stretches any noise in
+$\hat\mu$ into an enormous, offsetting position, the instability of plug-in portfolios.
+
+We simulate a modest sample of monthly returns on four correlated assets and compute the
+plug-in weights together with the condition number of the sample covariance, a direct
+measure of how much the inversion above amplifies estimation error.
+
+```{python}
+n_assets, T_ret = 4, 120
+true_mu = np.array([0.008, 0.010, 0.006, 0.012])
+A = rng.standard_normal((n_assets, n_assets)) * 0.02
+true_Sigma = A @ A.T + np.diag([0.0016] * n_assets)
+R = rng.multivariate_normal(true_mu, true_Sigma, size=T_ret)
+mu_hat, S, gamma = R.mean(axis=0), np.cov(R, rowvar=False), 5.0
+
+def mv_weights(m, cov, gamma):
+    return (1.0 / gamma) * np.linalg.solve(cov, m)
+
+w_plug = mv_weights(mu_hat, S, gamma)
+eigvals = np.linalg.eigvalsh(S)
+print("plug-in weights:", np.round(w_plug, 3))
+print(f"gross leverage (sum |w|): {np.abs(w_plug).sum():.2f}, "
+      f"condition number of S: {eigvals.max()/eigvals.min():.1f}")
+```
+
+The weights already show a large offsetting position rather than four modest ones, and
+the condition number confirms why: an eigenvalue ratio this large inverts into a matrix
+that magnifies small estimation errors along the weak direction. This is the normal
+situation with ten years of monthly data on four assets, not a pathological one, which is
+exactly why the fix must come from somewhere other than simply collecting more data.
+
+## The posterior predictive distribution
+
+The Bayesian remedy, surveyed for portfolio choice by Avramov and Zhou (2010), is to
+condition on what the investor actually knows, the data, rather than on point estimates.
+The relevant object is the **predictive distribution** of next period's return,
+
+$$
+p(r_{T+1} \mid \text{data}) = \int p(r_{T+1} \mid \mu, \Sigma)\,
+p(\mu, \Sigma \mid \text{data})\; d\mu\, d\Sigma ,
+$$
+
+which averages the return distribution over everything the posterior finds plausible for
+$(\mu, \Sigma)$. Under a diffuse prior the posterior is normal-inverse-Wishart and this
+integral has a closed form: the predictive distribution is multivariate Student-t, centred
+at $\hat\mu$ as before but with an inflated covariance,
+
+$$
+\Sigma_{\text{pred}} = \Bigl(1 + \tfrac{1}{T}\Bigr)\,\frac{T-1}{\,T-n-2\,}\; S .
+$$
+
+The $(1+1/T)$ factor is the standard penalty for forecasting one new draw rather than a
+population mean, present even if $\Sigma$ were known; the $(T-1)/(T-n-2)$ factor is the
+price of not knowing $\Sigma$ itself, and it grows without bound as $T$ approaches $n+2$.
+Substituting $\Sigma_{\text{pred}}$ for $S$ gives the Bayesian investor's optimal weights.
+We also implement a direct posterior sampler, drawing $(\mu,\Sigma)$ and a return from
+each pair, both to confirm the closed form and to reuse below for expected-utility
+maximisation.
+
+```{python}
+def predictive_weights(R, gamma):
+    T, n = R.shape
+    mbar, S = R.mean(axis=0), np.cov(R, rowvar=False)
+    pred_cov = (1 + 1/T) * (T - 1) / (T - n - 2) * S
+    return mv_weights(mbar, pred_cov, gamma)
+def draw_predictive(R, M, rng):
+    T, n = R.shape
+    mbar = R.mean(axis=0)
+    scale = np.linalg.inv((R - mbar).T @ (R - mbar))
+    draws = np.empty((M, n))
+    for i in range(M):
+        prec = stats.wishart.rvs(df=T - 1, scale=scale, random_state=rng)
+        Sigma = np.linalg.inv(np.atleast_2d(prec))
+        mu_draw = rng.multivariate_normal(mbar, Sigma / T)
+        draws[i] = rng.multivariate_normal(mu_draw, Sigma)
+    return draws
+
+w_bayes = predictive_weights(R, gamma)
+sim = draw_predictive(R, 4000, rng)
+pred_cov = (1+1/T_ret)*(T_ret-1)/(T_ret-n_assets-2)*S
+print("plug-in weights:", np.round(w_plug, 3), " predictive weights:", np.round(w_bayes, 3))
+print(f"gross leverage: plug-in {np.abs(w_plug).sum():.2f}, "
+      f"predictive {np.abs(w_bayes).sum():.2f}")
+print("simulated / closed-form variance:", np.round(np.diag(np.cov(sim, rowvar=False)), 6),
+      np.round(np.diag(pred_cov), 6))
+```
+
+The two variances agree, and the Bayesian weights pull toward a visibly less aggressive
+portfolio, an automatic consequence of maximising expected utility against a wider,
+fatter-tailed predictive distribution instead of a razor-thin plug-in one.
+
+## Maximising expected utility numerically
+
+The closed-form predictive weights rest on two conveniences that will not always be
+available: a mean-variance objective, valid only for CARA utility and Gaussian-like
+returns, and a predictive distribution simple enough to integrate by hand. A power (CRRA)
+utility investor has no such formula, and the way forward is to maximise expected utility
+directly against simulated draws: draw parameters from the posterior, draw a return given
+each draw, and replace the intractable integral $\mathbb{E}[U(w'r)]$ by the sample average
+of $U$, a Monte Carlo objective any optimiser can climb. We use power utility over wealth,
+$U(W) = W^{1-\gamma}/(1-\gamma)$ with $W = 1 + w'r$; non-positive wealth is assigned a
+large penalty rather than passed through the power function, representing aversion to
+ruin.
+
+We maximise this objective over the four weights with a derivative-free optimiser,
+starting at the closed-form predictive weights, and compare it to the analytic rule on
+the same predictive moments. A grid search would also work for two assets, but it becomes
+hopeless past two or three, which is why an optimiser is the general tool.
+
+```{python}
+from scipy.optimize import minimize
+
+def power_utility(W, gamma):
+    U = np.full_like(W, -1e6)
+    good = W > 1e-6
+    U[good] = (W[good] ** (1 - gamma)) / (1 - gamma)
+    return U
+
+def neg_expected_utility(w, sim_returns, gamma):
+    return -power_utility(1.0 + sim_returns @ w, gamma).mean()
+
+res = minimize(neg_expected_utility, x0=w_bayes, args=(sim, gamma), method="Nelder-Mead",
+               options={"maxiter": 4000, "xatol": 1e-6, "fatol": 1e-9})
+w_numeric = res.x
+print("analytic mean-variance weights (predictive):", np.round(w_bayes, 3))
+print("numerical power-utility weights:             ", np.round(w_numeric, 3))
+print(f"optimiser converged: {res.success}, expected utility: {-res.fun:.6f}")
+```
+
+The two solutions are close but not identical: they would coincide only if the predictive
+distribution were normal and utility were CARA. The Student-t predictive has heavier
+tails, which power utility weighs differently from a quadratic objective, so the optimum
+shifts slightly; the gap is small here since the predictive degrees of freedom are large,
+but would widen for shorter samples, exactly when the mean-variance shortcut is weakest.
+
+## How the gap closes as data accumulate
+
+The wedge between the plug-in and Bayesian rules depends on how much is known: with a long
+sample the posterior concentrates and the correction vanishes, while with a short sample
+it is substantial. We measure this as the **certainty-equivalent loss**: using the true
+simulation parameters as an outside benchmark, the certainty equivalent of weights $w$ is
+$w'\mu - \tfrac{\gamma}{2}w'\Sigma w$ at the true $\mu,\Sigma$, and the loss is the gap
+between this quantity at the true optimum and at the estimated weights.
+
+```{python}
+def certainty_equivalent(w, mu, Sigma, gamma):
+    return w @ mu - 0.5 * gamma * (w @ Sigma @ w)
+w_true_opt = mv_weights(true_mu, true_Sigma, gamma)
+ce_star = certainty_equivalent(w_true_opt, true_mu, true_Sigma, gamma)
+sizes = [30, 50, 80, 120, 200, 320, 640]
+loss_plug, loss_bayes = [], []
+for T_s in sizes:
+    R_s = rng.multivariate_normal(true_mu, true_Sigma, size=T_s)
+    w_p = mv_weights(R_s.mean(0), np.cov(R_s, rowvar=False), gamma)
+    w_b = predictive_weights(R_s, gamma)
+    loss_plug.append(ce_star - certainty_equivalent(w_p, true_mu, true_Sigma, gamma))
+    loss_bayes.append(ce_star - certainty_equivalent(w_b, true_mu, true_Sigma, gamma))
+
+fig, ax = plt.subplots()
+ax.plot(sizes, loss_plug, "o-", color="C1", label="plug-in")
+ax.plot(sizes, loss_bayes, "o-", color="C0", label="Bayesian predictive")
+ax.set_xlabel("estimation sample size T")
+ax.set_ylabel("certainty-equivalent loss")
+ax.set_yscale("log")
+ax.legend()
+ax.set_title("Bayesian correction matters most when data are scarce")
+plt.tight_layout()
+plt.show()
+```
+
+Both losses fall toward zero as the sample grows, the Bernstein-von Mises pattern from
+Lecture 1: with enough data the Bayesian decision converges to the plug-in one. At short
+samples, the normal situation for many asset classes, the plug-in loss is consistently
+the larger, confirming that ignoring parameter uncertainty is costly precisely when it is
+hardest to avoid.
+
+## Model uncertainty
+
+Everything so far has fixed the functional form of the return model and asked only how
+uncertain we should be about its parameters. A second, distinct kind of uncertainty
+concerns which model is right in the first place. We illustrate this with a single risky
+asset under an **i.i.d. model** with constant mean and a **predictable model** whose mean
+depends on a lagged signal $z_{t-1}$, treating the residual variance as known so the
+coefficients integrate out in closed form, and combine both into a single **Bayesian
+model averaged** (BMA) predictive distribution.
+
+```{python}
+T_m, phi_z = 96, 0.9
+z = np.zeros(T_m + 1)
+for t in range(1, T_m + 1):
+    z[t] = phi_z * z[t-1] + 0.06 * rng.standard_normal()
+a_true, b_true, sigma_m = 0.008, 0.03, 0.045
+z_lag, z_now = z[:-1], z[-1]
+r_m = a_true + b_true * z_lag + sigma_m * rng.standard_normal(T_m)
+sigma2_known = sigma_m ** 2
+XA, b0A, V0A = np.ones((T_m, 1)), np.zeros(1), np.array([[0.05**2]])
+XB = np.column_stack([np.ones(T_m), z_lag])
+b0B, V0B = np.zeros(2), np.diag([0.05**2, 0.06**2])
+
+def log_marglik(y, X, b0, V0, s2):
+    cov = s2 * np.eye(len(y)) + X @ V0 @ X.T
+    return stats.multivariate_normal.logpdf(y, mean=X @ b0, cov=cov)
+def posterior_beta(y, X, b0, V0, s2):
+    Vn = np.linalg.inv(np.linalg.inv(V0) + X.T @ X / s2)
+    bn = Vn @ (np.linalg.inv(V0) @ b0 + X.T @ y / s2)
+    return bn, Vn
+
+log_bf = (log_marglik(r_m, XB, b0B, V0B, sigma2_known)
+          - log_marglik(r_m, XA, b0A, V0A, sigma2_known))
+p_pred = 1.0 / (1.0 + np.exp(-log_bf))
+p_iid = 1.0 - p_pred
+bnA, VnA = posterior_beta(r_m, XA, b0A, V0A, sigma2_known)
+bnB, VnB = posterior_beta(r_m, XB, b0B, V0B, sigma2_known)
+xA, xB = np.array([1.0]), np.array([1.0, z_now])
+muA, varA = xA @ bnA, sigma2_known * (1 + xA @ VnA @ xA)
+muB, varB = xB @ bnB, sigma2_known * (1 + xB @ VnB @ xB)
+mu_bma = p_iid * muA + p_pred * muB
+var_within = p_iid * varA + p_pred * varB
+var_across = p_iid * p_pred * (muA - muB) ** 2
+var_bma = var_within + var_across
+wA, wB = muA / (gamma * varA), muB / (gamma * varB)
+w_bma = mu_bma / (gamma * var_bma)
+print(f"posterior model probabilities: iid {p_iid:.3f}, predictable {p_pred:.3f}")
+print(f"weight if iid true {wA:.3f}, if predictable true {wB:.3f}, "
+      f"model-averaged {w_bma:.3f}")
+print(f"variance: within-model {var_within:.6f}, across-model {var_across:.6f}")
+```
+
+The model-averaged weight is not a probability-weighted average of $w_A$ and $w_B$: it
+pools the predictive moments first and applies the mean-variance rule once, since
+expectation under a mixture is a weighted average of the component expectations for any
+utility function, while the optimal weight itself is not. Within-model variance is the
+familiar parameter uncertainty from each model's own spread; the across-model term,
+$p_{\text{iid}}\,p_{\text{pred}}\,(\mu_A-\mu_B)^2$, is model uncertainty in its purest
+form, shrinking only through evidence that discriminates between models, and an investor
+committed to one specification would understate the true risk of the position.
+
+## Takeaways
+
+Bayesian portfolio choice replaces point estimates with the full posterior, first over the
+parameters of a model and then, more ambitiously, over the model itself. Parameter
+uncertainty inflates the predictive covariance and shrinks the optimal weights relative to
+the plug-in solution, an effect largest with short samples and fading as data accumulate.
+When the objective or return distribution is too complex for a closed form, the same idea
+works by brute force: simulate posterior predictive returns and let a numerical optimiser
+maximise the resulting sample-average utility. Model uncertainty is distinct from
+parameter uncertainty, adding its own risk that shrinks only as evidence favours one
+story over the others.
+
+::: {.exercises}
+**Exercises**
+
+1. Rerun the numerical maximisation with $\gamma \in \{2, 10\}$ instead of $5$, and
+   compare how far the numerical weights drift from the analytic ones in each case.
+2. Replace the power utility in `neg_expected_utility` with exponential (CARA) utility,
+   $U(x) = -e^{-\gamma w'r}$, applied to the return rather than wealth, and check whether
+   the optimum now coincides more closely with the closed-form mean-variance weights.
+3. Add a no-short-sales constraint via `bounds=[(0, None)] * n_assets` in the `minimize`
+   call, and compare the constrained portfolio to the unconstrained one.
+4. Simulate the model-uncertainty data instead from the pure i.i.d. process
+   ($b_{\text{true}} = 0$) and report how the model probabilities and variance
+   decomposition change.
+:::
+
+## References
+
+Avramov and Zhou (2010), "Bayesian Portfolio Analysis," *Annual Review of Financial
+Economics*, leading the literature on parameter and model uncertainty in allocation, with
+Avramov (2010) on expected-utility approaches. Koop, *Bayesian Econometrics*, ch. 8, on
+model comparison and averaging. Chan, Koop, Poirier, and Tobias, *Bayesian Econometric
+Methods* (2nd ed.), ch. 11. Gelman et al., *Bayesian Data Analysis* (3rd ed.), ch. 7.

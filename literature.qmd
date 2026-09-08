@@ -21,6 +21,42 @@ updates, and relevant information are available on **ILIAS**.
 - Hill, Jennifer L. "Bayesian nonparametric modeling for causal inference." *Journal of Computational and Graphical Statistics* 20.1 (2011): 217–240.
 - Primiceri, Giorgio E. "Time varying structural vector autoregressions and monetary policy." *The Review of Economic Studies* 72.3 (2005): 821–852.
 
+## Further textbooks and monographs
+
+- Box, George E. P., and George C. Tiao. *Bayesian Inference in Statistical Analysis*. Addison-Wesley, 1973.
+- Durbin, James, and Siem Jan Koopman. *Time Series Analysis by State Space Methods*. 2nd ed. Oxford University Press, 2012.
+- Imbens, Guido W., and Donald B. Rubin. *Causal Inference for Statistics, Social, and Biomedical Sciences*. Cambridge University Press, 2015.
+- Rasmussen, Carl E., and Christopher K. I. Williams. *Gaussian Processes for Machine Learning*. MIT Press, 2006.
+- Robert, Christian P., and George Casella. *Monte Carlo Statistical Methods*. 2nd ed. Springer, 2004.
+- Zellner, Arnold. *An Introduction to Bayesian Inference in Econometrics*. Wiley, 1971.
+
+## Papers by block
+
+### Foundations
+
+- Geweke, John. "Bayesian inference in econometric models using Monte Carlo integration." *Econometrica* 57.6 (1989): 1317–1339.
+
+### Computation
+
+- Casella, George, and Edward I. George. "Explaining the Gibbs sampler." *The American Statistician* 46.3 (1992): 167–174.
+- Chib, Siddhartha, and Edward Greenberg. "Understanding the Metropolis-Hastings algorithm." *The American Statistician* 49.4 (1995): 327–335.
+- Gelfand, Alan E., and Adrian F. M. Smith. "Sampling-based approaches to calculating marginal densities." *Journal of the American Statistical Association* 85.410 (1990): 398–409.
+- Hoffman, Matthew D., and Andrew Gelman. "The No-U-Turn sampler: adaptively setting path lengths in Hamiltonian Monte Carlo." *Journal of Machine Learning Research* 15 (2014): 1593–1623.
+
+### Macro and policy
+
+- Bańbura, Marta, Domenico Giannone, and Lucrezia Reichlin. "Large Bayesian vector auto regressions." *Journal of Applied Econometrics* 25.1 (2010): 71–92.
+- Giannone, Domenico, Michele Lenza, and Giorgio E. Primiceri. "Prior selection for vector autoregressions." *The Review of Economics and Statistics* 97.2 (2015): 436–451.
+- Madigan, David, and Adrian E. Raftery. "Model selection and accounting for model uncertainty in graphical models using Occam's window." *Journal of the American Statistical Association* 89.428 (1994): 1535–1546.
+- Rubio-Ramírez, Juan F., Daniel F. Waggoner, and Tao Zha. "Structural vector autoregressions: theory of identification and algorithms for inference." *The Review of Economic Studies* 77.2 (2010): 665–696.
+
+### Finance
+
+- Chipman, Hugh A., Edward I. George, and Robert E. McCulloch. "BART: Bayesian additive regression trees." *The Annals of Applied Statistics* 4.1 (2010): 266–298.
+- Jacquier, Eric, Nicholas G. Polson, and Peter E. Rossi. "Bayesian analysis of stochastic volatility models." *Journal of Business & Economic Statistics* 12.4 (1994): 371–389.
+- Kim, Sangjoon, Neil Shephard, and Siddhartha Chib. "Stochastic volatility: likelihood inference and comparison with ARCH models." *The Review of Economic Studies* 65.3 (1998): 361–393.
+- Kozak, Serhiy, Stefan Nagel, and Shrihari Santosh. "Shrinking the cross-section." *Journal of Financial Economics* 135.2 (2020): 271–292.
+
 ## How the reading maps to the course
 
 The textbooks cover the foundations and computation blocks. Chan et al. and Koop

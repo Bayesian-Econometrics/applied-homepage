@@ -1,0 +1,330 @@
+---
+title: "Bayesian machine learning"
+subtitle: "Lecture 14"
+---
+
+## Priors over functions
+
+Every model so far has been parametric. We wrote down a likelihood indexed by a finite vector, put a
+prior on that vector and reported its posterior. The parameters carried the economics: an
+autoregressive coefficient, a persistence in volatility, a treatment effect. The functional form was
+assumed known and the uncertainty lived in the coefficients. That is reasonable when theory pins the
+shape down and poor when it does not, and finance is full of shapes nobody can write down in
+advance: how expected returns respond to a valuation ratio, how a risk premium reacts to liquidity.
+
+The Bayesian machinery does not require the unknown to be a vector. Nothing stops us placing a prior
+directly on the **function** and asking for its posterior. That sounds abstract but is not: a
+Gaussian process is no more than the statement that any finite collection of function values is
+jointly Gaussian, with covariance determined by how close the inputs are. Conditioning on observed
+values is then the Gaussian conditioning formula of Lecture 2, and the result is a posterior over
+whole curves, with credible bands that widen where data are sparse.
+
+This lecture builds that object from scratch, shows how its hyperparameters control smoothness and
+how the marginal likelihood chooses them, sketches the neural-network version, and then asks what a
+financial economist should ask of any flexible method: does it predict better out of sample at the
+signal-to-noise ratios of return data? We import the usual libraries and fix a seed.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## From basis expansions to Gaussian processes
+
+Start from something familiar. Take a Bayesian linear model in a **basis expansion**, so that the
+regression function is a weighted sum of $M$ fixed features, $f(x) = \phi(x)^\top w$ with $\phi(x) =
+(\phi_1(x), \dots, \phi_M(x))^\top$ and $w \sim \mathcal{N}(0, \Sigma_w)$. Because $f$ is a linear
+function of a Gaussian vector it is itself Gaussian, with mean zero and covariance
+
+$$
+\operatorname{Cov}\big( f(x), f(x') \big)
+= \phi(x)^\top \Sigma_w\, \phi(x') \;\equiv\; k(x, x') .
+$$
+
+The weights have vanished. Whatever the basis was, all that survives into the distribution of the
+function is the **kernel** $k$, a function of two inputs, and prediction never needs $w$ at all.
+
+Let the basis get rich: put $M$ radial features $\phi_m(x) = \exp\{-(x - c_m)^2 / (2h^2)\}$ at
+centres $c_m$ spread over the input space, with $\Sigma_w = (\sigma_f^2 / M) I$ so the prior
+variance of $f$ stays finite as $M$ grows. The kernel is an average of products of bumps, and as the
+centres become dense that average becomes an integral. Since $(x - c)^2 + (x' - c)^2 = 2\{c - (x +
+x')/2\}^2 + (x - x')^2/2$, integrating out the centre leaves a factor depending only on their
+distance,
+
+$$
+k(x, x') \;\propto\; \exp\!\left\{ -\frac{(x - x')^2}{4 h^2} \right\}
+\;=\; \sigma_f^2 \exp\!\left\{ -\frac{(x - x')^2}{2 \ell^2} \right\},
+\qquad \ell = h \sqrt{2} .
+$$
+
+The infinitely rich basis expansion has collapsed to the **squared-exponential kernel** with signal
+variance $\sigma_f^2$ and length scale $\ell$, and a model with infinitely many parameters turns out
+cheaper than one with a thousand. This is what $f \sim \mathcal{GP}(0, k)$ means: a **Gaussian
+process** prior is a prior over functions under which every finite set of values is jointly Gaussian
+with covariance $k$ (Rasmussen and Williams, 2006).
+
+## Gaussian process regression from scratch
+
+We observe $y_i = f(x_i) + \varepsilon_i$ with $\varepsilon_i \sim \mathcal{N}(0, \sigma_n^2)$ and
+want the function at new inputs $x_*$. Writing $K$ for $k(x_i, x_j)$, $K_*$ for $k(x_i, x_{*j})$ and
+$K_{**}$ for $k(x_{*i}, x_{*j})$, the prior makes data and unknowns jointly Gaussian,
+
+$$
+\begin{pmatrix} y \\ f_* \end{pmatrix} \sim \mathcal{N}\!\left( 0,
+\begin{pmatrix} K + \sigma_n^2 I & K_* \\ K_*^\top & K_{**} \end{pmatrix} \right),
+$$
+
+and Gaussian conditioning then gives the whole of Gaussian process regression in one line,
+
+$$
+f_* \mid y \sim \mathcal{N}\big( \bar{m}, \bar{V} \big), \quad
+\bar{m} = K_*^\top \big( K + \sigma_n^2 I \big)^{-1} y , \quad
+\bar{V} = K_{**} - K_*^\top \big( K + \sigma_n^2 I \big)^{-1} K_* .
+$$
+
+Never form that inverse. Factor $K + \sigma_n^2 I = L L^\top$ by Cholesky, obtain $\alpha =
+L^{-\top} L^{-1} y$ by two triangular solves and read off $\bar{m} = K_*^\top \alpha$; with $V =
+L^{-1} K_*$ the covariance is $\bar{V} = K_{**} - V^\top V$. The same factorisation delivers the
+**log marginal likelihood** almost for free,
+
+$$
+\log p(y \mid X, \ell, \sigma_n^2)
+= -\tfrac{1}{2} y^\top \alpha - \sum_{i} \log L_{ii} - \tfrac{n}{2} \log 2\pi .
+$$
+
+The chunk implements the kernel, the fit and the prediction, then simulates non-linear data. We
+standardise the outcome so that unit signal variance is sensible and only $\ell$, $\sigma_n^2$ vary.
+
+```{python}
+def sq_exp(xa, xb, ell):
+    """Squared-exponential kernel matrix with unit signal variance."""
+    return np.exp(-0.5 * ((xa[:, None] - xb[None, :]) / ell) ** 2)
+
+def gp_fit(x, y, ell, sn2):
+    """Cholesky factor, weight vector alpha and log marginal likelihood."""
+    L = np.linalg.cholesky(sq_exp(x, x, ell) + sn2 * np.eye(len(x)))
+    alpha = np.linalg.solve(L.T, np.linalg.solve(L, y))
+    lml = -0.5 * y @ alpha - np.log(np.diag(L)).sum() - 0.5 * len(x) * np.log(2 * np.pi)
+    return L, alpha, lml
+
+def gp_predict(x, L, alpha, xs, ell):
+    """Posterior mean and marginal variance of the latent function at xs."""
+    Ks = sq_exp(x, xs, ell)
+    V = np.linalg.solve(L, Ks)
+    return Ks.T @ alpha, np.maximum(1.0 - (V ** 2).sum(0), 0.0)
+
+n = 70
+x = np.sort(rng.uniform(-3.0, 3.0, n))
+f_true = lambda z: np.sin(1.6 * z) + 0.25 * z ** 2
+y_raw = f_true(x) + rng.normal(0.0, 0.35, n)
+ymu, ysd = y_raw.mean(), y_raw.std()
+y = (y_raw - ymu) / ysd
+print(f"n = {n}   outcome sd {ysd:.3f}   noise sd in standardised units {0.35 / ysd:.3f}")
+```
+
+Those three functions are the entire algorithm: one kernel evaluation, one Cholesky factorisation
+and two triangular solves. There is no optimisation loop, because conditioning a Gaussian on a
+Gaussian is closed form. The cubic cost suits a monthly panel, not tick data.
+
+## Choosing the length scale and the noise level
+
+The hyperparameters cannot be chosen by fitting the data as well as possible: shrinking the length
+scale towards zero and the noise with it drives in-sample residuals to zero and produces nonsense
+out of sample. The marginal likelihood solves this without a validation set, because it integrates
+over the function rather than maximising over it and so penalises a prior spread over far more
+functions than the data support. A short length scale lets the prior fit anything, forcing low
+density on the data we saw; a very long one cannot reach the data at all.
+
+```{python}
+ells = np.array([0.15, 0.3, 0.6, 1.0, 2.0, 4.0])
+sn2s = np.array([0.01, 0.03, 0.1, 0.3])
+lml_tab = pd.DataFrame([[gp_fit(x, y, e, s)[2] for s in sn2s] for e in ells],
+                       index=[f"ell={e:.2f}" for e in ells],
+                       columns=[f"sn2={s:.2f}" for s in sn2s])
+print("log marginal likelihood over the hyperparameter grid")
+print(lml_tab.round(1))
+
+flat = lml_tab.to_numpy()
+i_best, j_best = np.unravel_index(np.argmax(flat), flat.shape)
+ell_hat, sn2_hat = ells[i_best], sn2s[j_best]
+print(f"\nselected length scale {ell_hat:.2f} and noise variance {sn2_hat:.2f}: implied "
+      f"noise sd {np.sqrt(sn2_hat) * ysd:.3f} against a true 0.350")
+```
+
+The surface has a clear interior maximum. Reading down a column the likelihood rises as the length
+scale grows to about one and then collapses; across a row it rises with the noise variance to about
+a tenth and then falls. The selected noise level recovers the simulation's standard deviation to
+within a couple of hundredths, separating signal from noise unaided.
+
+```{python}
+L, alpha, _ = gp_fit(x, y, ell_hat, sn2_hat)
+xs = np.linspace(-3.6, 3.6, 300)
+mu, var = gp_predict(x, L, alpha, xs, ell_hat)
+mu_o, sd_o = mu * ysd + ymu, np.sqrt(var) * ysd
+
+fig, ax = plt.subplots()
+ax.scatter(x, y_raw, s=18, color="grey", alpha=0.7, label="observations")
+ax.plot(xs, f_true(xs), "k--", lw=1.4, label="true function")
+ax.plot(xs, mu_o, color="steelblue", lw=1.8, label="posterior mean")
+ax.fill_between(xs, mu_o - 1.96 * sd_o, mu_o + 1.96 * sd_o, alpha=0.25, label="95% band")
+ax.set(xlabel="input x", ylabel="y", title="Gaussian process regression")
+ax.legend(fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+The posterior mean tracks the true curve wherever data are available, and the band is narrow there
+because neighbouring observations constrain the function. Beyond the sampled range the band flares
+and the mean flattens towards the prior mean, which after undoing the standardisation is the sample
+average of $y$. That flaring is the honest answer to an extrapolation question, and it is what a
+fitted polynomial refuses to give: a cubic extrapolates with total confidence and enormous error.
+
+## What the hyperparameters do
+
+The length scale is the distance over which the function is expected to change, so it controls how
+much structure the model will see, and getting it wrong fails in two opposite ways. The figure holds
+the noise variance at its selected value and refits with a length scale six times too short and four
+times too long, reporting the in-sample residual standard deviation and the distance of the mean
+from the truth, with the well-chosen model's distance in brackets.
+
+```{python}
+rms_ref = np.sqrt(np.mean((mu_o - f_true(xs)) ** 2))
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+for ax_, ell_try, name in zip(axes, [0.15, 4.0], ["short", "long"]):
+    Lt, at, _ = gp_fit(x, y, ell_try, sn2_hat)
+    m_grid, _ = gp_predict(x, Lt, at, xs, ell_try)
+    m_in, _ = gp_predict(x, Lt, at, x, ell_try)
+    rms_in = np.std(y - m_in) * ysd
+    rms_fn = np.sqrt(np.mean((m_grid * ysd + ymu - f_true(xs)) ** 2))
+    ax_.scatter(x, y_raw, s=16, color="grey", alpha=0.7)
+    ax_.plot(xs, f_true(xs), "k--", lw=1.3, label="true function")
+    ax_.plot(xs, m_grid * ysd + ymu, color="firebrick", lw=1.7, label="posterior mean")
+    ax_.set(xlabel="input x", ylabel="y", title=f"{name} length scale {ell_try}\nresid sd "
+            f"{rms_in:.2f}, error vs truth {rms_fn:.2f} (best {rms_ref:.2f})")
+    ax_.legend(fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+The two panels are the classic pair. With the short length scale the posterior mean threads between
+individual observations; its in-sample residual standard deviation falls below the true noise level
+of $0.35$, which is the definition of fitting noise, and it sits over twice as far from the truth as
+the well-chosen model. With the long length scale the mean is nearly a straight line that cannot
+follow the oscillation, leaving residuals far above the noise and missing the truth by underfitting.
+The marginal likelihood ranked both below the intermediate value, which is why we let it choose.
+
+## Bayesian neural networks
+
+A neural network is a different route to a flexible function. Write a single hidden layer as $f(x) =
+\sum_{j=1}^{H} v_j\, \sigma(u_j^\top x + b_j)$, put priors on the weights $v$, $u$ and $b$, and you
+have again defined a distribution over functions. The connection to the previous section is exact:
+with independent Gaussian priors and weight variance scaled as $1/H$, the central limit theorem
+applies as $H \to \infty$ and the network prior converges to a Gaussian process whose kernel is
+fixed by the activation function. Neal showed this in 1996, so an infinitely wide Bayesian neural
+network *is* a Gaussian process, a reparameterisation of the object above rather than a new idea.
+
+The difficulty is that useful cases are finite and deep, where the posterior is intractable in a
+much worse way than anything we have met. The map from weights to functions is many-to-one, so the
+posterior has a huge number of equivalent modes from permuting hidden units and flipping signs, and
+is high-dimensional, wildly multimodal and badly scaled. Hamiltonian Monte Carlo works on small
+networks and becomes expensive quickly; in practice people use variational inference, which fits a
+tractable Gaussian family to the posterior, or cheaper devices such as Monte Carlo dropout and deep
+ensembles, which are not strictly Bayesian but do spread the predictions. For most econometric
+problems the honest recommendation is the Gaussian process: calibrated uncertainty in closed form,
+interpretable hyperparameters and a marginal likelihood that selects them without a validation
+split. The network earns its keep when the input is high-dimensional and structured, as with text or
+images, where the architecture encodes what no kernel can. A monthly panel of predictors is not.
+
+## A predictive horse race for return predictability
+
+The interesting question is not whether a flexible model can fit a non-linear function, which we
+have settled, but whether it improves prediction where the truth is nearly buried in noise. We
+simulate a return-predictability experiment in which a predictor generates next-period returns
+through a saturating relationship $g(x) = a \tanh(2 x)$, strongest in the middle of the predictor's
+range and flat in the tails, plus unit-variance noise. Varying $a$ moves the population $R^2$ from
+the region of genuine finance data, a few per cent, to a level no return series has displayed. Each
+model is fitted on the first half of the sample and scored on the second by mean **log predictive
+density** and mean squared error, over twenty replications. The linear benchmark is the Bayesian
+linear model, whose Student predictive density accounts for parameter uncertainty.
+
+```{python}
+def one_replication(amp, T, Tt, rng):
+    """Simulate, fit OLS and a GP on the first half, score both on the second."""
+    xa = rng.normal(0.0, 1.0, T + Tt)
+    g = amp * np.tanh(2.0 * xa)
+    ra = g + rng.normal(0.0, 1.0, T + Tt)
+    xi, yi, xo, yo = xa[:T], ra[:T], xa[T:], ra[T:]
+
+    Xd, Xo = np.column_stack([np.ones(T), xi]), np.column_stack([np.ones(Tt), xo])
+    b = np.linalg.solve(Xd.T @ Xd, Xd.T @ yi)
+    e, dof, XtXi = yi - Xd @ b, T - 2, np.linalg.inv(Xd.T @ Xd)
+    m_lin = Xo @ b
+    v_lin = (e @ e / dof) * (1.0 + np.einsum("ij,jk,ik->i", Xo, XtXi, Xo))
+    lpd_lin = np.mean(stats.t.logpdf((yo - m_lin) / np.sqrt(v_lin), df=dof)
+                      - 0.5 * np.log(v_lin))
+
+    mi, si = yi.mean(), yi.std()
+    e_gp, s_gp = max((gp_fit(xi, (yi - mi) / si, e2, s2_)[2], (e2, s2_))
+                     for e2 in [0.5, 1.0, 2.0, 4.0]
+                     for s2_ in [0.6, 0.8, 0.9, 0.97])[1]
+    Lg, ag, _ = gp_fit(xi, (yi - mi) / si, e_gp, s_gp)
+    m_gp, v_gp = gp_predict(xi, Lg, ag, xo, e_gp)
+    m_gp, v_gp = m_gp * si + mi, (v_gp + s_gp) * si ** 2
+    lpd_gp = np.mean(stats.norm.logpdf(yo, m_gp, np.sqrt(v_gp)))
+    return (g.var() / (g.var() + 1.0), lpd_lin, np.mean((yo - m_lin) ** 2),
+            lpd_gp, np.mean((yo - m_gp) ** 2))
+
+labels, rows = ["return-like", "moderate", "strong"], []
+for amp in [0.2, 0.3, 1.0]:
+    r = np.array([one_replication(amp, 300, 300, rng) for _ in range(20)])
+    rows.append({"true R2": round(r[:, 0].mean(), 3),
+                 "OLS log pd": round(r[:, 1].mean(), 4),
+                 "GP log pd": round(r[:, 3].mean(), 4),
+                 "OLS MSE": round(r[:, 2].mean(), 4),
+                 "GP MSE": round(r[:, 4].mean(), 4),
+                 "GP wins": f"{int((r[:, 3] > r[:, 1]).sum())}/20"})
+print(pd.DataFrame(rows, index=labels))
+```
+
+The table tells a deflating and important story. In the strong-signal regime the Gaussian process
+wins on both criteria and in all twenty replications, because the saturation in $g$ is real
+curvature a straight line cannot represent and three hundred observations suffice to see it. As the
+population $R^2$ falls towards the few per cent of actual return predictability the advantage
+evaporates: the two models score within a few ten-thousandths of each other in log predictive
+density, their mean squared errors agree to three decimals, and the process wins two runs in three.
+
+This is not a failure of the method but of the data. Detecting curvature means telling a bend from
+noise, and the sample size needed grows sharply as the signal weakens. At the signal-to-noise ratios
+of monthly equity returns the flexible model spends its freedom discovering that the relationship is
+approximately linear, its marginal likelihood selecting a long length scale and a noise variance
+close to one, so that it very nearly reproduces the linear model. Non-linear machine learning buys
+little in low-signal forecasting and a great deal in the higher-signal problems where finance also
+lives: derivative pricing surfaces, term-structure fitting and the conditional means on which causal
+adjustment depends. The Bayesian version tells you which regime you are in.
+
+::: {.exercises}
+**Exercises**
+
+1. Add the signal variance $\sigma_f^2$ as a third hyperparameter and extend the grid over it. Verify
+   that the selected value is near one for standardised data, and explain why.
+2. Replace the squared-exponential kernel with the absolute-exponential kernel
+   $\exp\{-|x - x'| / \ell\}$ and describe how the smoothness of the posterior mean changes.
+3. Reduce the sample from seventy observations to twenty, rerun the grid, and explain the direction in
+   which the selected length scale moves.
+4. In the horse race, raise the training sample from 300 to 2000 at the return-like amplitude. Does
+   the Gaussian process now win, and how much data does a non-linearity need to be detectable?
+5. The cost is cubic in $n$. Time `gp_fit` for $n = 200, 400, 800$, confirm the scaling, and explain
+   why it rules the method out for high-frequency data.
+:::
+
+## References
+
+Rasmussen and Williams, *Gaussian Processes for Machine Learning* (2006), ch. 2 and 5. Chipman,
+George and McCulloch, *BART: Bayesian Additive Regression Trees*, Ann. Appl. Stat. (2010). Neal,
+*Bayesian Learning for Neural Networks* (1996), ch. 2.

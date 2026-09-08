@@ -1,0 +1,330 @@
+---
+title: "Prediction and Bayesian model averaging"
+subtitle: "Lecture 9"
+---
+
+## From parameters to forecasts
+
+Almost everything so far has been about the posterior of a parameter, yet little economic
+decision-making is about parameters as such: a risk manager wants the distribution of next month's
+return, a central bank that of inflation four quarters ahead. The object answering such questions is
+the **posterior predictive distribution**, the sampling density of a future observation averaged
+over all we still do not know.
+
+The parameters are not the only unknown. We are rarely sure which regressors belong in the model, and
+conditioning on one selected specification understates our ignorance exactly as plugging in a point
+estimate understates parameter uncertainty. **Bayesian model averaging** (BMA), brought into applied
+statistics by Madigan and Raftery (1994), treats the model index as one more unknown, gives it a
+prior, updates it with the marginal likelihood, and mixes all candidates' predictive distributions.
+
+Judging whether this pays off means grading distributions, not point forecasts, the role of the **log
+predictive score**. We therefore derive the predictive distribution for the conjugate model of Lecture
+2, introduce the log score and the marginal likelihood, and backtest BMA on simulated returns.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The posterior predictive distribution
+
+Let $y = X\beta + \varepsilon$ with $\varepsilon \sim \mathcal{N}(0, \sigma^2 I_n)$ be the
+linear model of Lecture 2 and let $y^*$ be a future observation with known regressor row $x_*$,
+so $y^* \mid \beta, \sigma^2 \sim \mathcal{N}(x_*^\top \beta, \sigma^2)$. The predictive
+distribution integrates the sampling density against the posterior,
+$$
+p(y^* \mid y) = \int\!\!\int p(y^* \mid \beta, \sigma^2)\, p(\beta, \sigma^2 \mid y)\,
+d\beta\, d\sigma^2 .
+$$
+This is a mixture: every parameter value the posterior still finds plausible contributes a
+Gaussian forecast, weighted by its credibility, so the predictive spread must exceed $\sigma$.
+
+We use the **natural conjugate Normal-Inverse-Gamma** prior, in which the coefficient prior is
+scaled by the error variance, $\beta \mid \sigma^2 \sim \mathcal{N}(b_0, \sigma^2 V_0)$ and
+$\sigma^2 \sim \text{Inverse-Gamma}(a_0, d_0)$. From Lecture 2 the posterior is again
+Normal-Inverse-Gamma, with $\bar V = (V_0^{-1} + X^\top X)^{-1}$,
+$\bar b = \bar V (V_0^{-1} b_0 + X^\top y)$, $\bar a = a_0 + n/2$ and
+$\bar d = d_0 + \tfrac{1}{2}[(y - X\bar b)^\top y + (b_0 - \bar b)^\top V_0^{-1} b_0]$. Conditional on
+$\sigma^2$ the future observation is a linear function of a Normal vector plus independent noise, so
+$y^* \mid \sigma^2, y \sim \mathcal{N}(x_*^\top \bar b, \sigma^2(1 + x_*^\top \bar V x_*))$, where the
+$1$ is shock variance and $x_*^\top \bar V x_*$ is coefficient uncertainty, growing as $x_*$ moves
+from where the regressors were observed. Marginalising over the inverse-Gamma variance gives a
+Student $t$, so the predictive is closed form,
+$$
+y^* \mid y \sim t_{2\bar a}\!\left( x_*^\top \bar b,\;
+\frac{\bar d}{\bar a}\big(1 + x_*^\top \bar V x_*\big) \right),
+$$
+with $2\bar a$ degrees of freedom. The **plug-in forecast** instead fixes the parameters at their
+posterior means and reports $\mathcal{N}(x_*^\top \bar b, \hat\sigma^2)$: the same centre, but with
+neither the $x_*^\top \bar V x_*$ term nor the heavy tails from averaging over $\sigma^2$.
+
+```{python}
+from scipy.special import gammaln, logsumexp
+
+def nig_posterior(X, y, b0, V0, a0, d0):
+    V0_inv = np.linalg.inv(V0)
+    V_bar = np.linalg.inv(V0_inv + X.T @ X)
+    b_bar = V_bar @ (V0_inv @ b0 + X.T @ y)
+    Q = (y - X @ b_bar) @ y + (b0 - b_bar) @ V0_inv @ b0
+    return b_bar, V_bar, a0 + 0.5 * y.size, d0 + 0.5 * Q
+
+def predictive_t(x_star, b_bar, V_bar, a_bar, d_bar):
+    return 2 * a_bar, x_star @ b_bar, np.sqrt(d_bar / a_bar * (1 + x_star @ V_bar @ x_star))
+
+def log_marglik(X, y, b0, V0, a0, d0):
+    b_bar, V_bar, a_bar, d_bar = nig_posterior(X, y, b0, V0, a0, d0)
+    ld0, ldb = np.linalg.slogdet(V0)[1], np.linalg.slogdet(V_bar)[1]
+    return (-0.5 * y.size * np.log(2 * np.pi) + 0.5 * (ldb - ld0)
+            + gammaln(a_bar) - gammaln(a0) + a0 * np.log(d0) - a_bar * np.log(d_bar))
+```
+
+We simulate $240$ monthly excess returns driven by four standardised candidate predictors, of which
+only the first two carry signal. The third is correlated with the first, which makes selection
+hard: the data cannot easily tell a true predictor from a close proxy.
+
+```{python}
+n_obs, p_cand = 240, 4
+beta_true = np.array([0.10, 0.35, 0.13, 0.0, 0.0])      # intercept, x1, x2, x3, x4
+Z = rng.normal(size=(n_obs, p_cand))
+Z[:, 2] = 0.6 * Z[:, 0] + np.sqrt(1 - 0.36) * Z[:, 2]   # x3 is a proxy for x1
+r = np.column_stack([np.ones(n_obs), Z]) @ beta_true + rng.normal(size=n_obs)
+
+def prior(k):
+    """Zero mean, loose on the intercept, moderately loose on each slope."""
+    return np.zeros(k), np.diag([25.0] + [4.0] * (k - 1))
+
+a0, d0, sv = 2.5, 2.5, beta_true[1:] @ beta_true[1:]
+print(f"n = {n_obs}, sd of r = {r.std(ddof=1):.3f}, population R2 = {sv / (sv + 1):.3f}")
+```
+
+The predictable component is just over a tenth of return variance, so evidence about which predictors
+matter accumulates slowly, exactly the regime in which model uncertainty matters. The prior is
+identical for every model compared, so a coefficient carries the same prior information anywhere.
+
+## The predictive distribution is wider than the plug-in forecast
+
+To make the gap visible we fit on twenty observations with two regressors, forecast at a
+regressor row well outside the bulk of the data, and plot both densities.
+
+```{python}
+n_s = 20
+X_s = np.column_stack([np.ones(n_s), Z[:n_s, :2]])
+b0_s, V0_s = prior(3)
+b_bar, V_bar, a_bar, d_bar = nig_posterior(X_s, r[:n_s], b0_s, V0_s, a0, d0)
+x_star = np.array([1.0, 2.5, -2.0])
+df, loc, scale = predictive_t(x_star, b_bar, V_bar, a_bar, d_bar)
+sd_plug = np.sqrt(d_bar / (a_bar - 1))              # posterior mean of sigma^2
+pred, plug = stats.t(df, loc, scale), stats.norm(loc, sd_plug)
+w_pred, w_plug = (np.diff(d.ppf([0.05, 0.95]))[0] for d in (pred, plug))
+print(f"x*' V_bar x* {x_star @ V_bar @ x_star:.3f};  predictive df {df:.0f}, 90% width "
+      f"{w_pred:.3f};  plug-in 90% width {w_plug:.3f}  ->  {w_pred / w_plug - 1:.0%} wider")
+grid = np.linspace(loc - 5 * pred.std(), loc + 5 * pred.std(), 400)
+fig, ax = plt.subplots()
+ax.plot(grid, pred.pdf(grid), label=f"posterior predictive: $t_{{{df:.0f}}}$")
+ax.plot(grid, plug.pdf(grid), ls="--", label="plug-in Normal at posterior mean")
+ax.set_xlabel("future return  $y^*$")
+ax.set_ylabel("predictive density")
+ax.legend()
+ax.set_title("Predictive vs plug-in forecast at an extrapolated regressor row")
+plt.tight_layout()
+plt.show()
+```
+
+The forecasts agree on the centre and disagree sharply about the spread, the difference living mostly
+in the tails where a risk manager looks. Nearly all of the gap is the $x_*^\top \bar V x_*$ term, which
+doubles the conditional variance at this extrapolated row, and the Student tails add more the further
+out one goes. Replicating over many samples, as Exercise 3 asks, puts the predictive interval near its
+nominal $90\%$ coverage and the plug-in near $80\%$, so the plug-in misprices tail risk.
+
+## Scoring predictive distributions
+
+If forecasts are distributions they must be graded as distributions. The **log predictive score** of a
+forecast made at time $t$ is the log predictive density at the outcome that occurred,
+$\text{LPS}_{t+1} = \log p(y_{t+1} \mid y_{1:t})$, reported over a backtest as a sum or average, higher
+being better. It is **strictly proper**: its expectation under the true data-generating density is
+uniquely maximised by quoting that density, so a forecaster gains nothing by exaggerating or
+understating uncertainty. Squared error depends only on the centre and is blind to calibration, as
+the next chunk shows by scaling the forecast standard deviation around a correct mean.
+
+```{python}
+y_out = rng.normal(size=20000)          # truth: mean 0, sd 1
+pd.DataFrame([{"sd / true sd": f, "mean log score": stats.norm.logpdf(y_out, 0, f).mean(),
+               "mean squared error": np.mean(y_out ** 2)}
+              for f in [0.5, 0.75, 1.0, 1.5, 2.0]]).round(4)
+```
+
+The mean log score peaks exactly at the honest forecast and falls away on both sides, punishing the
+overconfident forecaster ($f = 0.5$) harder than the timid one, since an overconfident density can
+give the outcome a density near zero and a score near $-\infty$. Mean squared error is identical in
+every row: two models can issue the same point forecasts and differ enormously in usefulness.
+
+## The marginal likelihood, complexity and Occam's razor
+
+The conjugate algebra that produced the predictive $t$ also produces the **marginal likelihood**,
+the density of the observed data with the parameters integrated out,
+$$
+p(y \mid M) = \int\!\!\int p(y \mid \beta, \sigma^2, M)\, p(\beta, \sigma^2 \mid M)\, d\beta\, d\sigma^2
+= (2\pi)^{-n/2} \frac{|\bar V|^{1/2}}{|V_0|^{1/2}} \frac{\Gamma(\bar a)}{\Gamma(a_0)}
+\frac{d_0^{a_0}}{\bar d^{\,\bar a}} ,
+$$
+which is what `log_marglik` computes. It factorises as
+$p(y \mid M) = \prod_t p(y_t \mid y_{1:t-1}, M)$, so the log marginal likelihood *is* an in-sample
+log predictive score: evidence and predictive performance are the same currency.
+
+The marginal likelihood penalises complexity with no penalty term added, and the mechanism is the
+determinant ratio $|\bar V| / |V_0|$. Each extra regressor multiplies the evidence by roughly the
+ratio of posterior to prior spread for its coefficient, well below one whenever the prior is diffuse:
+a model spreading its prior over many conceivable datasets must assign less density to the one we
+saw. A useful regressor repays that cost through a larger reduction in $\bar d$, a useless one does
+not. This is Bayesian **Occam's razor**, and the **Bayes factor**
+$B_{12} = p(y \mid M_1)/p(y \mid M_2)$ is how far the data shift the prior odds.
+
+## Posterior model probabilities and Bayesian model averaging
+
+With four candidate predictors and an always-included intercept there are $2^4 = 16$ models, few
+enough to enumerate exhaustively. Giving each prior probability $1/16$, Bayes' theorem over the
+model index gives $p(M_j \mid y) \propto p(y \mid M_j)\, p(M_j)$, the **posterior model
+probability**, and the BMA predictive is the mixture
+$$
+p(y^* \mid y) = \sum_{j=1}^{J} p(M_j \mid y)\; p(y^* \mid y, M_j),
+$$
+a weighted average of sixteen Student $t$ densities. Since the evidences are ratios of tiny numbers
+we work in logs and normalise with the log-sum-exp trick, and summing the weights of all models
+containing a predictor yields its **posterior inclusion probability**. The helper below fits every
+model on a set of rows and optionally scores one future observation.
+
+```{python}
+from itertools import combinations
+models = [tuple(s) for k in range(p_cand + 1) for s in combinations(range(p_cand), k)]
+
+def fit_all(rows, x_row=None, y_new=None):
+    """Posterior model weights on 'rows', plus each model's log predictive density."""
+    lm, ld = np.empty(len(models)), np.full(len(models), np.nan)
+    for j, m in enumerate(models):
+        b0m, V0m = prior(len(m) + 1)
+        Xm = np.column_stack([np.ones(len(rows))] + [Z[rows, i] for i in m])
+        lm[j] = log_marglik(Xm, r[rows], b0m, V0m, a0, d0)
+        if x_row is not None:
+            post = nig_posterior(Xm, r[rows], b0m, V0m, a0, d0)
+            ld[j] = stats.t.logpdf(y_new, *predictive_t(np.r_[1.0, x_row[list(m)]], *post))
+    return np.exp(lm - logsumexp(lm)), lm, ld
+
+w_all, lm_all, _ = fit_all(np.arange(n_obs))
+labels = ["{" + ",".join(f"x{j+1}" for j in m) + "}" if m else "{intercept}" for m in models]
+print(pd.DataFrame({"model": labels, "log ML": lm_all, "P(M|y)": w_all})
+      .sort_values("P(M|y)", ascending=False).head(5).round(4).to_string(index=False))
+print(f"weights sum to {w_all.sum():.6f};  log Bayes factor of the true model over the "
+      f"full model = {lm_all[models.index((0, 1))] - lm_all[-1]:.2f}")
+pip = [w_all[[j for j, m in enumerate(models) if v in m]].sum() for v in range(p_cand)]
+print("inclusion probabilities:", {f"x{v+1}": round(float(pip[v]), 3) for v in range(p_cand)})
+```
+
+The true model $\{x_1, x_2\}$ takes the largest share of posterior probability but by no means all of
+it: about a quarter of the mass sits on rivals, mostly the model dropping the weak predictor $x_2$
+and models adding a spurious one. That residual spread is model uncertainty, and it is what selecting
+the single best model throws away. The log Bayes factor against the full model shows the razor at
+work, and the inclusion probabilities recover the truth from a prior of $1/2$ each.
+
+## Backtesting: BMA against selection and benchmarks
+
+The real question is whether averaging helps out of sample. We run an expanding-window backtest: at
+each date $t$ we refit all sixteen models on data up to $t$, recompute the model weights from
+information available then only, form each model's one-step-ahead predictive density at the known
+regressor row, and score four strategies. **BMA** scores the mixture, **selection** the single model
+with the highest posterior probability then, **full** always uses all four predictors, and the
+**benchmark** is the intercept-only model with no predictability.
+
+```{python}
+n0 = 60
+j_full, j_bench = models.index(tuple(range(p_cand))), models.index(())
+recs, chosen = [], []
+for t in range(n0, n_obs):
+    w, _, ld = fit_all(np.arange(t), Z[t], r[t])
+    chosen.append(int(np.argmax(w)))
+    recs.append({"BMA": logsumexp(ld + np.log(w)), "selection": ld[chosen[-1]],
+                 "full": ld[j_full], "benchmark": ld[j_bench], "top weight": w.max()})
+score = pd.DataFrame(recs)
+print(f"{len(score)} out-of-sample forecasts; mean weight on the leading model "
+      f"{score['top weight'].mean():.3f}; {len(set(chosen))} distinct models were selected")
+strats = ["BMA", "selection", "full", "benchmark"]
+pd.DataFrame({"mean log score": score[strats].mean(), "cumulative": score[strats].sum(),
+              "gain over benchmark": score[strats].sum() - score["benchmark"].sum()}).round(3)
+```
+
+The leading model carries under half the posterior mass on average and the winner changes several
+times, so model uncertainty is substantial rather than cosmetic. BMA attains the best mean log
+predictive score, the full model comes second, the highest-probability model third, and the
+benchmark last by a wide margin. Predictability is genuine, so all three predictor-based strategies
+beat the benchmark; but *selecting* the leader does worse than averaging, because in a sample this
+noisy the leader is often the wrong model and its forecast overconfident. It even loses to the
+over-parameterised full model, which at least propagates coefficient uncertainty for regressors it
+does not need, whereas averaging buys that insurance without estimating four coefficients.
+
+```{python}
+fig, ax = plt.subplots()
+for s in ["BMA", "selection", "full"]:
+    ax.plot(np.arange(n0, n_obs), np.cumsum(score[s] - score["benchmark"]), label=s)
+ax.axhline(0.0, color="black", lw=1, ls=":")
+ax.set_xlabel("time  t")
+ax.set_ylabel("cumulative log score minus benchmark")
+ax.legend()
+ax.set_title("Out-of-sample log score gain over the intercept-only benchmark")
+plt.tight_layout()
+plt.show()
+```
+
+Cumulative differences show where the gains accrue, which matters because an edge earned in two lucky
+months is not an edge. All three curves drift upwards fairly steadily, the signature of a real
+improvement, with the BMA line at or above the others through most of the sample. The per-period gains
+are a few hundredths of a log point, reflecting how small the predictable component is, but they add up.
+
+## When averaging helps, and when it does not
+
+It is worth separating the two kinds of ignorance at work. **Parameter uncertainty** concerns $\beta$
+and $\sigma^2$ within a given model and is handled by the predictive integral above, which widens the
+forecast relative to the plug-in. **Model uncertainty** concerns which likelihood we should integrate
+at all and is handled by mixing over models. Neither substitutes for the other: one model can
+propagate parameter uncertainty perfectly and still be confidently wrong.
+
+Averaging helps when posterior mass is genuinely spread over models that disagree about the forecast,
+the common case with short samples, weak signals and many candidate specifications. It helps least
+when one model dominates, where the mixture collapses onto it and BMA and selection coincide, and not
+at all when the model space is misspecified as a whole: weights are relative, so if every candidate is
+bad the average is bad too, and as $n$ grows they concentrate on the least-bad model and the mixture
+turns falsely confident. Two warnings follow. Marginal likelihoods depend on the prior even
+asymptotically, so a carelessly diffuse prior can drive a model's evidence to zero for no substantive
+reason, and priors must be comparable across models. And the space grows like $2^p$, so enumeration
+fails beyond twenty or so predictors, which is why Madigan and Raftery (1994) proposed **Occam's
+window**, keeping only models whose posterior odds against the leader clear a threshold, and why the
+modern alternative is an MCMC sampler over model indicators.
+
+::: {.exercises}
+**Exercises**
+
+1. Derive the Student $t$ predictive from the two-step argument in the text: write
+   $y^* \mid \sigma^2, y$ as Normal, multiply by the inverse-Gamma posterior of $\sigma^2$ and
+   integrate $\sigma^2$ out, confirming the degrees of freedom and the scale.
+2. Show that $p(y \mid M) = \prod_t p(y_t \mid y_{1:t-1}, M)$ and explain in two sentences why
+   this makes the log marginal likelihood an in-sample log predictive score.
+3. Simulate $2000$ samples of size $n = 20$ from the true model, form the $90\%$ predictive and
+   plug-in intervals at `x_star` in each, and report how often each contains a fresh draw of $y^*$.
+4. Repeat the backtest with a much tighter slope prior (variance $0.1$) and a much looser one
+   (variance $100$), and relate the change in inclusion probabilities to $|\bar V| / |V_0|$.
+5. Replace the log score by mean squared forecast error in the summary table. Does the ranking of the
+   four strategies change, and which comparison would you show a risk manager?
+:::
+
+## References
+
+Madigan and Raftery (1994), "Model Selection and Accounting for Model Uncertainty in Graphical Models
+Using Occam's Window," *Journal of the American Statistical Association*. Hoeting, Madigan, Raftery,
+and Volinsky (1999), "Bayesian Model Averaging: A Tutorial," *Statistical Science*. Gneiting and
+Raftery (2007), "Strictly Proper Scoring Rules, Prediction, and Estimation," *Journal of the American
+Statistical Association*. Koop, *Bayesian Econometrics*, ch. 2-4 and 11. Chan, Koop, Poirier, and
+Tobias, *Bayesian Econometric Methods* (2nd ed.), ch. 2.

@@ -1,0 +1,299 @@
+---
+title: "State space and time-varying parameter models"
+subtitle: "Lecture 8"
+---
+
+## Why state-space models
+
+Many macroeconomic quantities we care about are not observed directly. Trend output,
+the natural rate of unemployment, expected inflation, and the time-varying response of
+the economy to a policy shock are all latent: we only see noisy, contaminated measures
+of them. State-space models are the natural language for this situation. They split the
+world into two layers, an unobserved **state** that evolves over time and an observed
+**measurement** that is a noisy function of that state, and they come with an exact
+recursive algorithm, the Kalman filter, for extracting the state from the data.
+
+The same structure powers the time-varying-parameter (TVP) models that dominate modern
+empirical macroeconomics, where regression coefficients themselves drift over time. In
+a full Bayesian treatment the Kalman filter does not just deliver a point estimate of
+the state; it becomes one block inside an MCMC sampler that draws the entire latent path
+from its posterior. This lecture builds the filter from scratch on the simplest possible
+example and then explains how it scales up.
+
+We import the usual libraries and fix a seed.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The state-space form
+
+A linear Gaussian state-space model is a pair of equations. The **measurement
+equation** links the observed series $y_t$ to the latent state $\alpha_t$,
+
+$$
+y_t = Z_t\,\alpha_t + \varepsilon_t, \qquad \varepsilon_t \sim N(0, H_t),
+$$
+
+and the **state (transition) equation** describes how the state evolves,
+
+$$
+\alpha_{t+1} = T_t\,\alpha_t + R_t\,\eta_t, \qquad \eta_t \sim N(0, Q_t).
+$$
+
+The matrices $Z_t, T_t, R_t, H_t, Q_t$ are the **system matrices**. They are often
+constant over time, in which case we drop the subscript. The two shocks are independent
+of each other and over time. What makes this setup so useful is that it nests an
+enormous range of models: ARMA processes, unobserved-components models, dynamic factor
+models, and time-varying regressions all fit the same template, and the same filtering
+recursions apply to all of them.
+
+## The local level model
+
+Our running example is the simplest non-trivial state-space model, the **local level**
+or **random walk plus noise** model. The state is a scalar that follows a random walk,
+and we observe it through additive noise:
+
+$$
+y_t = \alpha_t + \varepsilon_t, \qquad \varepsilon_t \sim N(0, \sigma_\varepsilon^2),
+$$
+$$
+\alpha_{t+1} = \alpha_t + \eta_t, \qquad \eta_t \sim N(0, \sigma_\eta^2).
+$$
+
+Here $Z = T = R = 1$, $H = \sigma_\varepsilon^2$, and $Q = \sigma_\eta^2$. You can read
+$\alpha_t$ as a slowly moving trend, for example underlying inflation, and $y_t$ as the
+noisy monthly print. The ratio $q = \sigma_\eta^2 / \sigma_\varepsilon^2$ is the
+**signal-to-noise ratio**: when it is small the trend moves slowly and the filter
+should smooth aggressively; when it is large the state tracks the data closely.
+
+We simulate one path with a modest signal-to-noise ratio.
+
+```{python}
+T = 200
+sigma_eps = 1.0      # measurement standard deviation
+sigma_eta = 0.3      # state standard deviation
+
+alpha = np.zeros(T)
+for t in range(1, T):
+    alpha[t] = alpha[t-1] + sigma_eta * rng.standard_normal()
+y = alpha + sigma_eps * rng.standard_normal(T)
+
+print(f"signal-to-noise ratio q = {(sigma_eta/sigma_eps)**2:.3f}")
+```
+
+## The Kalman filter from scratch
+
+The Kalman filter computes, recursively and exactly, the distribution of the state
+given the data seen so far. Because everything is linear and Gaussian, that distribution
+is itself Gaussian and is fully described by its mean and variance. Write
+$a_{t|t-1}$ and $P_{t|t-1}$ for the mean and variance of $\alpha_t$ given $y_1, \dots,
+y_{t-1}$, and $a_{t|t}, P_{t|t}$ for the same after observing $y_t$.
+
+Each step has a **prediction** part and an **update** part. For the local level model
+the recursions specialise to scalars. The one-step-ahead forecast error and its variance
+are
+
+$$
+v_t = y_t - a_{t|t-1}, \qquad F_t = P_{t|t-1} + H.
+$$
+
+The Kalman gain $K_t = P_{t|t-1} / F_t$ weights the new information, and the update is
+
+$$
+a_{t|t} = a_{t|t-1} + K_t v_t, \qquad P_{t|t} = (1 - K_t)\,P_{t|t-1}.
+$$
+
+Finally the prediction step pushes the state forward one period,
+
+$$
+a_{t+1|t} = a_{t|t}, \qquad P_{t+1|t} = P_{t|t} + Q.
+$$
+
+A useful by-product is the log-likelihood, which the filter delivers for free through the
+**prediction error decomposition**, summing the Gaussian density of each $v_t$. This is
+how one estimates the variances $\sigma_\varepsilon^2$ and $\sigma_\eta^2$ by maximum
+likelihood, or evaluates them inside a Bayesian sampler. We implement all of this
+directly in numpy, starting from a diffuse prior on the initial state.
+
+```{python}
+def kalman_filter_ll(y, sigma_eps, sigma_eta, a1=0.0, P1=1e6):
+    T = len(y)
+    H, Q = sigma_eps**2, sigma_eta**2
+    a_filt = np.zeros(T); P_filt = np.zeros(T)
+    v = np.zeros(T); F = np.zeros(T)
+    a, P = a1, P1
+    loglik = 0.0
+    for t in range(T):
+        v[t] = y[t] - a                 # forecast error
+        F[t] = P + H                    # forecast error variance
+        K = P / F[t]                    # Kalman gain
+        a = a + K * v[t]                # update mean
+        P = (1 - K) * P                 # update variance
+        a_filt[t], P_filt[t] = a, P
+        loglik += -0.5 * (np.log(2*np.pi) + np.log(F[t]) + v[t]**2 / F[t])
+        P = P + Q                       # predict one step ahead (mean unchanged)
+    return dict(a_filt=a_filt, P_filt=P_filt, v=v, F=F, loglik=loglik)
+
+res = kalman_filter_ll(y, sigma_eps, sigma_eta)
+print(f"log-likelihood at true variances: {res['loglik']:.2f}")
+```
+
+The filtered state recovers the hidden trend even though every observation is corrupted
+by noise. The shaded band is a pointwise 95% interval from the filtered variance
+$P_{t|t}$, which quantifies how confident we are about the state at each date.
+
+```{python}
+band = 1.96 * np.sqrt(res["P_filt"])
+t_axis = np.arange(T)
+
+fig, ax = plt.subplots()
+ax.plot(t_axis, y, ".", color="grey", alpha=0.5, label=r"observations $y_t$")
+ax.plot(t_axis, alpha, color="black", lw=1.3, label=r"true state $\alpha_t$")
+ax.plot(t_axis, res["a_filt"], color="C0", lw=1.6, label=r"filtered state $a_{t|t}$")
+ax.fill_between(t_axis, res["a_filt"]-band, res["a_filt"]+band,
+                color="C0", alpha=0.2, label="95% filtered band")
+ax.set_xlabel("time")
+ax.set_ylabel("level")
+ax.legend(loc="upper left")
+ax.set_title("Recovering a latent random walk from noisy data")
+plt.tight_layout()
+plt.show()
+```
+
+### Checking the filter
+
+If the model is correct, the standardised one-step-ahead errors $v_t / \sqrt{F_t}$
+should look like independent standard normals. This is the basic diagnostic for any
+state-space fit, the analogue of residual checks in regression. We discard the first few
+observations, where the diffuse initialisation still dominates.
+
+```{python}
+std_err = res["v"] / np.sqrt(res["F"])
+print(f"mean of standardised errors: {std_err[5:].mean():.3f}")
+print(f"variance of standardised errors: {std_err[5:].var():.3f}")
+```
+
+The mean is near zero and the variance near one, as it should be.
+
+## Signal extraction and the signal-to-noise ratio
+
+The filter's behaviour is governed almost entirely by $q = \sigma_\eta^2 /
+\sigma_\varepsilon^2$. A small $q$ tells the filter that the state barely moves, so it
+averages over a long window and produces a very smooth estimate. A large $q$ tells it
+the state is volatile, so it follows the data closely and filters out little noise. The
+next figure runs the filter on the same data under three assumed values of $q$, holding
+the measurement variance fixed.
+
+```{python}
+fig, ax = plt.subplots()
+for q in [0.05, 0.3, 1.0]:
+    r = kalman_filter_ll(y, sigma_eps, sigma_eps * np.sqrt(q))
+    ax.plot(t_axis, r["a_filt"], lw=1.4, label=f"q = {q}")
+ax.plot(t_axis, alpha, color="black", lw=1.1, ls=":", label="true state")
+ax.set_xlabel("time")
+ax.set_ylabel("filtered state")
+ax.legend()
+ax.set_title("Signal extraction at different signal-to-noise ratios")
+plt.tight_layout()
+plt.show()
+```
+
+The smallest $q$ gives the smoothest line but lags turning points; the largest tracks
+the noise. Choosing $q$ is exactly the problem that maximum likelihood, or a Bayesian
+prior, solves for us rather than by eye.
+
+## The smoother
+
+The filter conditions on data up to time $t$. Often we want the state given the *whole*
+sample, $\alpha_t \mid y_1, \dots, y_T$, which is the job of the **Kalman smoother**. It
+runs a second pass backward through the data, combining the forward filtered estimates
+with information from the future. The smoothed estimates are weakly more accurate than
+the filtered ones because they use more data, and the smoothed variances are smaller.
+We do not implement the backward pass here, but the logic is a mirror image of the
+forward recursion and adds only a handful of lines.
+
+## From the local level to time-varying parameters
+
+The real payoff of the state-space form in macroeconomics is the **time-varying-parameter
+(TVP) regression**. Suppose a relationship of interest, say a Phillips curve or a policy
+rule, has coefficients that drift over time. Write
+
+$$
+y_t = x_t' \beta_t + \varepsilon_t, \qquad
+\beta_t = \beta_{t-1} + \eta_t,
+$$
+
+where the coefficient vector $\beta_t$ is the latent state and follows a random walk,
+exactly as $\alpha_t$ did above. This is just a state-space model with $Z_t = x_t'$ and
+$T = I$, so the *same* Kalman filter, now in vector form, extracts the path of the
+coefficients. The local level model is the special case $x_t = 1$.
+
+Primiceri (2005) pushed this idea to a multivariate setting with his time-varying VAR.
+There both the autoregressive coefficients and the covariance matrix of the shocks
+evolve over time, which lets the model capture how the transmission of monetary policy
+shocks and the volatility of the US economy changed across the post-war period. The
+finding that the systematic part of policy and the size of the shocks both varied has
+been central to the debate over the Great Moderation. Every such model is, under the
+hood, a large state-space system filtered by the recursions we just wrote down.
+
+## Where the Bayesian sampler comes in
+
+In a full Bayesian treatment we do not want a single filtered path; we want draws of the
+entire latent state sequence from its posterior, integrating over the unknown variances
+and any other parameters. The standard tool is **forward-filter backward-sample** (FFBS).
+The idea fits neatly into a Gibbs sampler:
+
+- run the Kalman filter forward to obtain the filtered means and variances;
+- sweep backward, drawing $\alpha_T$ from its filtered distribution and then each
+  earlier $\alpha_t$ conditional on the draw of $\alpha_{t+1}$;
+- given the sampled state path, the variances $\sigma_\varepsilon^2, \sigma_\eta^2$ have
+  simple conditional posteriors (inverse-gamma under conjugate priors), so we draw them;
+- iterate.
+
+Each sweep produces one draw of the joint posterior of the states and the parameters.
+The Kalman filter you implemented above is therefore not a stand-alone estimator but the
+inner engine of the sampler: it is called once per MCMC iteration. This is the bridge
+from the filtering we did here to the fully Bayesian estimation of TVP models and
+stochastic-volatility models in the next lecture.
+
+## Takeaways
+
+State-space models separate a latent state from its noisy measurement, and the Kalman
+filter extracts that state with an exact, fast recursion that also yields the
+likelihood. The local level model is the minimal example, and its single tuning knob,
+the signal-to-noise ratio, controls how much the filter smooths. The same machinery
+scales to time-varying-parameter regressions and to Primiceri's time-varying VAR. In a
+Bayesian analysis the filter is embedded in a forward-filter backward-sample step that
+draws the whole latent path, turning the filter into one block of an MCMC sampler.
+
+::: {.exercises}
+**Exercises**
+
+1. Estimate the variances by maximum likelihood: write the negative of `kalman_filter_ll`'s
+   log-likelihood as a function of $(\sigma_\varepsilon, \sigma_\eta)$ and minimise it over a
+   grid (or with `scipy.optimize.minimize`). How close are the estimates to the true values?
+2. Add a deterministic drift to the state, $\alpha_{t+1} = \alpha_t + c + \eta_t$, so the
+   trend grows. Modify the filter and check that it still tracks the simulated state.
+3. Implement the backward smoothing recursion for the local level model and compare the
+   smoothed path and its variance band to the filtered ones. Confirm the smoother is more
+   accurate in the interior of the sample.
+4. Vary the true signal-to-noise ratio used to *simulate* the data and, for each, plot the
+   mean squared error of the filtered state against the assumed $q$. Verify that the error is
+   minimised when the assumed $q$ matches the truth.
+:::
+
+## References
+
+Primiceri (2005), "Time Varying Structural Vector Autoregressions and Monetary Policy,"
+*Review of Economic Studies*. Koop, *Bayesian Econometrics*, ch. 8 on state-space models.
+Chan, Koop, Poirier, and Tobias, *Bayesian Econometric Methods* (2nd ed.), ch. on
+state-space and TVP models. Gelman et al., *Bayesian Data Analysis* (3rd ed.), ch. 18 on
+hierarchical and dynamic models.

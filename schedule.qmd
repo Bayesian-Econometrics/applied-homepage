@@ -1,55 +1,62 @@
 ---
 title: "Schedule"
-subtitle: "Proposed lecture and exercise plan"
+subtitle: "Weekly lecture and exercise plan"
 ---
 
-::: {.callout-warning}
-## Draft
-This is a proposed plan derived from the module topics. Exact dates, ordering,
-and the split across sessions will be confirmed on ILIAS before the term starts.
+::: {.callout-note}
+## Dates
+Exact dates and room assignments are confirmed on ILIAS before the term starts.
+Each week pairs a 2-hour lecture with a 2-hour exercise session in which the
+week's method is implemented in Python.
 :::
 
-The course runs in three blocks: foundations, computation, and applications.
-Each week pairs a 2-hour lecture with a 2-hour exercise session in which we
-implement the week's method in Python.
+## Foundations
 
-## Block I — Foundations
-
-| Week | Lecture | Exercise (Python) |
-|---|---|---|
-| 1 | Course intro; subjective probability and the Bayesian paradigm | Environment setup; NumPy/SciPy refresher |
-| 2 | Bayes' theorem, priors, likelihoods, and the posterior | Conjugate Beta-Binomial and Normal models by hand |
-| 3 | Point estimates, credible intervals, and prior sensitivity | Posterior summaries and prior-predictive checks |
+| Week | Lecture | Content | Literature | Exercise (Python) |
+|:--|---|---|---|---|
+| 1 | Introduction: The Bayesian Paradigm | Subjective probabilities, Bayes' theorem, priors, likelihoods, and posteriors | Koop (2003); Zellner (1971) | Grid search: calculating a posterior for a beta-binomial model using discrete grids |
+| 2 | The Linear Regression Model | Normal-Inverse-Gamma conjugate priors, analytical solutions, and marginal posterior distributions | Koop (2003); Box and Tiao (1973) | Matrix update: manual NIG update for CAPM betas using only algebra |
+| 3 | Monte Carlo Integration and Importance Sampling | Random sampling for approximating integrals, numerical estimation of expected values, and importance weighting | Geweke (1989); Robert (2004) | Vanilla MC: coding an option pricing simulator that incorporates parameter uncertainty |
 
 : {.striped}
 
-## Block II — Computation
+## Computation
 
-| Week | Lecture | Exercise (Python) |
-|---|---|---|
-| 4 | Monte Carlo integration and the need for sampling | Importance sampling; Monte Carlo error |
-| 5 | The Gibbs sampler | Gibbs sampler for the linear regression model |
-| 6 | Metropolis-Hastings | Random-walk MH from scratch; tuning and diagnostics |
-| 7 | Convergence diagnostics and efficient sampling | Trace plots, effective sample size, thinning |
-
-: {.striped}
-
-## Block III — Applications
-
-| Week | Lecture | Exercise (Python) |
-|---|---|---|
-| 8 | Shrinkage and the Minnesota prior | Ridge-as-prior; shrinkage in high dimensions |
-| 9 | Bayesian Vector Autoregressions (BVARs) | Estimating and forecasting a small BVAR |
-| 10 | State-space models for macroeconomics | Kalman filter and time-varying parameters |
-| 11 | Stochastic volatility and portfolio choice | SV model estimation; Bayesian portfolio weights |
-| 12 | Bayesian machine learning for causal inference | BART-style models; treatment-effect estimation |
-| 13 | Synthesis; exam preparation and review | Open lab; past-exam style problems |
+| Week | Lecture | Content | Literature | Exercise (Python) |
+|:--|---|---|---|---|
+| 4 | Gibbs Sampling | MCMC fundamentals, full conditional distributions, and iterative sampling mechanics | Casella (1992); Gelfand (1990) | The workhorse: programming a Gibbs sampler for multiple regression from scratch |
+| 5 | Metropolis-Hastings and NUTS Sampling | Acceptance-rejection algorithms for non-conjugate models, proposal distributions, and Hamiltonian Monte Carlo | Chib (1995); Hoffman (2014) | HMC vs MH: comparing sampling efficiency for a non-conjugate logistic model |
+| 6 | Minnesota Priors | Minnesota priors and the logic of regularization to prevent overfitting in large models | Banbura (2010); Rubio-Ramirez (2010) | Prior tuning: manual construction of the Minnesota covariance matrix for large systems |
 
 : {.striped}
 
-## Sessions and contact hours
+## Macro & Policy
 
-The plan above spans roughly 13 teaching weeks, which matches the 60 contact
-hours (2h lecture + 2h exercise per week) in the module description. The
-remaining 120 hours are independent study: working through the exercises,
-reading the literature, and preparing for the exam.
+| Week | Lecture | Content | Literature | Exercise (Python) |
+|:--|---|---|---|---|
+| 7 | BVARs and Identification | Multivariate systems and sign restrictions to identify structural shocks | Banbura (2010); Rubio-Ramirez (2010) | BVAR lab: estimating a 3-variable system with sign-restricted impulse responses |
+| 8 | State Space and Time-Varying Parameter Models | The Kalman filter and drifting coefficients in time-varying parameter models | Primiceri (2005); Durbin and Koopman (2012) | TVP filter: coding the Kalman recursions to track drifting market betas over time |
+| 9 | Prediction and Bayesian Model Averaging | Posterior predictive distributions and Bayesian model averaging for robust forecasts | Madigan and Raftery (1994) | Backtesting: calculating log-predictive scores and weighting models via BMA |
+| 10 | Causal Inference | Bayesian IV and treatment effects using BART for policy analysis | Imbens and Rubin (2015); Hill (2011) | Policy impact: estimating causal effects with BART and quantifying the uncertainty |
+
+: {.striped}
+
+## Finance
+
+| Week | Lecture | Content | Literature | Exercise (Python) |
+|:--|---|---|---|---|
+| 11 | Variable Selection and Big Data | Taming the quadrillion-regressions problem with sparsity versus shrinkage priors | Kozak (2020); Giannone et al. (2015) | SSVS sampler: coding a spike-and-slab algorithm to select relevant finance factors |
+| 12 | Stochastic Volatility | Latent volatility processes and time-varying risk models | Kim et al. (1998); Jacquier (1994) | SV sampler: MCMC implementation for log-volatility using the JPR algorithm |
+| 13 | Portfolio Choice | Expected utility and decision theory under parameter and model uncertainty | Avramov (2010) | Robust allocation: maximizing expected utility using MCMC predictive draws |
+| 14 | Bayesian Machine Learning | Gaussian processes and probabilistic neural nets for non-linear finance | Chipman (2010); Rasmussen (2006) | Non-linear Bayes: comparing BART versus OLS for predicting returns with non-linearities |
+
+: {.striped}
+
+## Review
+
+| Week | Lecture | Content | Literature | Exercise (Python) |
+|:--|---|---|---|---|
+| 15 | Q&A and Review | Review lectures and open questions |  | Review: troubleshooting student code |
+
+: {.striped}
+

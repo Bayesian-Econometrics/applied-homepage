@@ -1,0 +1,356 @@
+---
+title: "Stochastic volatility"
+subtitle: "Lecture 12"
+---
+
+## Volatility as a latent state
+
+Asset returns are not homoskedastic. Quiet weeks and turbulent weeks arrive in clusters,
+so a large absolute return today makes a large absolute return tomorrow more likely even
+though the sign of the return stays essentially unpredictable. The GARCH tradition makes
+the conditional variance a deterministic function of past returns, so once the data are
+observed the whole variance path is known; the **stochastic-volatility model** instead
+treats the variance as a genuinely random, unobserved process with a shock of its own.
+
+That choice turns volatility modelling into a state-space problem of the kind used for
+macroeconomic trends, with the log variance as the latent state. The crucial difference is
+that the state enters the measurement equation nonlinearly, so the Kalman filter no longer
+delivers the likelihood, which becomes a high-dimensional integral with no closed form.
+
+Simulation is then indispensable rather than merely convenient: the only practical way to
+learn about the parameters is to sample the volatility path and the parameters jointly. We
+build such a sampler from scratch in the single-move Metropolis-within-Gibbs style of
+Jacquier, Polson and Rossi, apply it to a simulated series where the truth is known, and
+use the output to show how weakly the data identify the persistence of volatility.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The stochastic-volatility model
+
+Let $r_t$ be a demeaned return and $h_t$ the log of its conditional variance. The model
+pairs a measurement equation with an autoregressive state equation,
+
+$$
+r_t = \exp(h_t / 2)\, u_t, \qquad
+h_t = \mu + \phi\,(h_{t-1} - \mu) + \sigma_h\, \zeta_t,
+\qquad u_t, \zeta_t \sim \mathcal{N}(0, 1),
+$$
+
+with $u_t$ and $\zeta_t$ independent of each other and over time. Here $\mu$ sets the
+long-run level of the log variance, $\phi$ governs its **persistence**, and $\sigma_h$ is
+the volatility of volatility. When $|\phi| < 1$ the state is stationary with $h_t \sim
+\mathcal{N}\big(\mu, \sigma_h^2/(1-\phi^2)\big)$, which is the natural prior for the first
+state; financial data point to $\phi$ between $0.9$ and $0.99$, so volatility shocks decay
+slowly, with half-life $\log(0.5)/\log\phi$. Since $r_t$ is normal with a random variance,
+its unconditional distribution is a scale mixture of normals with kurtosis
+$3\exp\big(\sigma_h^2/(1-\phi^2)\big)$, so the model delivers fat tails with no
+non-Gaussian ingredient, while $\mathbb{E}[r_t \mid h_t] = 0$ keeps returns unpredictable
+in level. The chunk below simulates $700$ observations, three years of daily data.
+
+```{python}
+T = 700
+mu_true, phi_true, sig_true = -9.0, 0.95, 0.30
+
+h_true = np.empty(T)
+h_true[0] = mu_true + (sig_true / np.sqrt(1 - phi_true**2)) * rng.standard_normal()
+for t in range(1, T):
+    h_true[t] = mu_true + phi_true * (h_true[t-1] - mu_true) \
+        + sig_true * rng.standard_normal()
+r = np.exp(h_true / 2) * rng.standard_normal(T)
+vol_true = np.exp(h_true / 2)
+
+print(f"lowest / highest daily volatility  {vol_true.min():.4f} / {vol_true.max():.4f}")
+print(f"sample excess kurtosis of returns  {stats.kurtosis(r):.2f}")
+print(f"half-life of a volatility shock    {np.log(0.5)/np.log(phi_true):.1f} days")
+```
+
+The simulated series behaves like a real one: daily volatility ranges over more than a
+factor of ten between the calmest and the most turbulent day, the excess kurtosis is far
+above the Gaussian value of zero even though every shock is normal, and a volatility shock
+takes a fortnight to decay by half.
+
+## Why the likelihood is intractable
+
+With $\theta = (\mu, \phi, \sigma_h)$, the likelihood requires integrating the latent path
+out of the joint density,
+
+$$
+p(r_{1:T} \mid \theta)
+= \int \prod_{t=1}^{T} p(r_t \mid h_t)\; p(h_{1:T} \mid \theta) \; \mathrm{d}h_{1:T},
+$$
+
+where $p(r_t \mid h_t)$ is the $\mathcal{N}(0, e^{h_t})$ density. This integral has
+dimension $700$ and no closed form. In a linear Gaussian state-space model the Kalman
+filter would compute it recursively because each step maps a Gaussian into a Gaussian;
+here the measurement density is Gaussian in $r_t$ but not in $h_t$, so the product of
+measurement density and Gaussian prior is not Gaussian and the recursion cannot be closed.
+
+The Bayesian response is to refuse the integral altogether. We treat the whole path as a
+block of unknowns alongside $\theta$ and sample from the joint posterior, proportional to
+$\prod_t p(r_t \mid h_t)\, p(h_{1:T} \mid \theta)\, p(\theta)$. Averaging over the path
+gives the marginal posterior of $\theta$ without ever evaluating the integral, and
+averaging over $\theta$ gives the posterior of the volatility path itself.
+
+## The full conditional of a single log-volatility
+
+The workhorse construction, due to Jacquier, Polson and Rossi, updates the path one date
+at a time. Because the state equation is a first-order Markov chain, the full conditional
+of $h_t$ involves only its neighbours and the return observed at $t$, so that $p(h_t \mid
+h_{t-1}, h_{t+1}, r_t, \theta) \propto p(r_t \mid h_t)\, p(h_t \mid h_{t-1})\, p(h_{t+1}
+\mid h_t)$. Write the state equation in regression form as $h_t = \alpha + \phi h_{t-1} +
+\sigma_h \zeta_t$ with $\alpha = \mu(1-\phi)$. Completing the square in the exponent of
+the two Gaussian transition densities, $-(h_t - \alpha - \phi h_{t-1})^2 - (h_{t+1} -
+\alpha - \phi h_t)^2$, gives their product as a normal density with
+
+$$
+h_t^\ast = \frac{\alpha (1 - \phi) + \phi\,(h_{t-1} + h_{t+1})}{1 + \phi^2},
+\qquad
+v_t^\ast = \frac{\sigma_h^2}{1 + \phi^2}.
+$$
+
+At the ends of the sample this simplifies: for $t = T$ only the incoming transition
+applies, giving mean $\alpha + \phi h_{T-1}$ and variance $\sigma_h^2$, while for $t = 1$
+the stationary prior replaces it and yields mean $\mu(1-\phi) + \phi h_2$ with the same
+variance. What remains is the measurement density, which is not conjugate: $p(r_t \mid
+h_t) \propto \exp\big(-\tfrac{1}{2}h_t - \tfrac{1}{2} r_t^2 e^{-h_t}\big)$. We therefore
+propose from the Gaussian part, $h_t^{\text{new}} \sim \mathcal{N}(h_t^\ast, v_t^\ast)$;
+the proposal density then cancels against the transition part of the target and the
+acceptance ratio collapses to a likelihood ratio,
+
+$$
+\log \alpha_{\text{MH}} = -\tfrac{1}{2}\big(h_t^{\text{new}} - h_t^{\text{old}}\big)
+- \tfrac{1}{2}\, r_t^2 \Big(e^{-h_t^{\text{new}}} - e^{-h_t^{\text{old}}}\Big),
+$$
+
+truncated above at zero. Jacquier, Polson and Rossi use a more elaborate inverse-gamma
+blanket proposal; the version here is the simplest member of the family and accepts very
+often, because the state equation is already a good guide to where $h_t$ can lie. One
+further observation makes the sweep fast: since the conditional of $h_t$ involves only its
+neighbours, odd-dated states are conditionally independent given the even-dated ones, so
+the sweep runs as two vectorised half-sweeps rather than $T$ scalar steps.
+
+## Drawing the state-equation parameters
+
+Conditional on the path, the state equation is an ordinary Gaussian autoregression, so the
+parameter blocks are the conjugate ones of Bayesian linear regression. Stack $h_2, \dots,
+h_T$ into $y$ and the rows $(1, h_{t-1})$ into $Z$, let $\gamma = (\alpha, \phi)^\top$, and
+take priors $\gamma \sim \mathcal{N}(g_0, G_0)$, $\sigma_h^2 \sim \text{IG}(c_0, d_0)$:
+
+$$
+\gamma \mid \sigma_h^2, h \sim \mathcal{N}\!\Big(G_1\big(G_0^{-1} g_0 +
+\tfrac{Z^\top y}{\sigma_h^2}\big),\; G_1\Big),
+\quad G_1 = \Big(G_0^{-1} + \tfrac{Z^\top Z}{\sigma_h^2}\Big)^{-1},
+$$
+$$
+\sigma_h^2 \mid \gamma, h \sim \text{Inverse-Gamma}\!\left(
+c_0 + \tfrac{T-1}{2}, \; d_0 + \tfrac{1}{2}\,(y - Z\gamma)^\top (y - Z\gamma)\right),
+$$
+
+and $\mu$ is recovered as $\alpha/(1-\phi)$. Draws violating $|\phi| < 1$ are rejected,
+which imposes stationarity through the prior. We keep the prior on $\gamma$ vague but give
+$\sigma_h^2$ a moderately informative prior centred near $\sigma_h = 0.2$, because the
+data carry little information about the volatility of volatility and a flat prior lets the
+sampler drift towards implausibly jagged paths. The complete sampler follows: two
+Metropolis half-sweeps, then the two conjugate parameter draws.
+
+```{python}
+g0, G0 = np.array([0.0, 0.9]), np.diag([10.0, 0.25])
+G0_inv = np.linalg.inv(G0)
+c0, d0 = 6.0, 0.20                       # prior mean of sigma_h^2 equals 0.04
+n_iter, burn = 8000, 3000
+h, phi, s2 = np.full(T, np.log(r.var())), 0.9, 0.05
+alpha = np.log(r.var()) * (1 - phi)
+even, odd, r2 = np.arange(0, T, 2), np.arange(1, T, 2), r**2
+par_draws, h_draws = np.empty((n_iter - burn, 3)), np.empty((n_iter - burn, T))
+acc = n_prop = 0
+
+for it in range(n_iter):
+    mu = alpha / (1 - phi)
+    for grp in (even, odd):              # two conditionally independent half-sweeps
+        m, v = np.empty(T), np.full(T, s2)
+        m[1:-1] = (alpha * (1 - phi) + phi * (h[:-2] + h[2:])) / (1 + phi**2)
+        v[1:-1] = s2 / (1 + phi**2)
+        m[0], m[-1] = mu * (1 - phi) + phi * h[1], alpha + phi * h[-2]
+        h_new, h_old = m[grp] + np.sqrt(v[grp]) * rng.standard_normal(grp.size), h[grp]
+        log_a = -0.5 * (h_new - h_old) \
+            - 0.5 * r2[grp] * (np.exp(-h_new) - np.exp(-h_old))
+        ok = np.log(rng.random(grp.size)) < log_a
+        h[grp] = np.where(ok, h_new, h_old)
+        acc += ok.sum(); n_prop += grp.size
+    Z, y = np.column_stack([np.ones(T - 1), h[:-1]]), h[1:]
+    G1 = np.linalg.inv(G0_inv + Z.T @ Z / s2)
+    L = np.linalg.cholesky(G1)
+    g1 = G1 @ (G0_inv @ g0 + Z.T @ y / s2)
+    for _ in range(100):                 # reject non-stationary candidates
+        cand = g1 + L @ rng.standard_normal(2)
+        if abs(cand[1]) < 1:
+            alpha, phi = cand
+            break
+    e = y - Z @ np.array([alpha, phi])
+    s2 = 1.0 / rng.gamma(c0 + (T - 1) / 2, 1.0 / (d0 + 0.5 * e @ e))
+    if it >= burn:
+        par_draws[it - burn] = [alpha / (1 - phi), phi, np.sqrt(s2)]
+        h_draws[it - burn] = h
+
+print(f"kept {par_draws.shape[0]} draws, acceptance rate {acc / n_prop:.3f}")
+```
+
+The acceptance rate is high, confirming that the state equation is an informative
+proposal: most candidate log-volatilities are compatible with the return observed on that
+date, so the Metropolis step only corrects a modest reweighting. That is not by itself
+evidence of good mixing, which we check next.
+
+## Posterior estimates of the state equation
+
+We summarise the marginal posteriors against the simulated values, adding an inefficiency
+factor: the ratio of the variance of the chain's sample mean to the variance under
+independent sampling, estimated as $1 + 2\sum_\ell \rho_\ell$ from the autocorrelations.
+
+```{python}
+def inefficiency(x, lag_max=250):
+    z = x - x.mean()
+    ac = np.correlate(z, z, "full")[len(z) - 1:] / (len(z) * z.var())
+    return 1.0 + 2.0 * ac[1:lag_max + 1].sum()
+
+q = np.quantile(par_draws, [0.05, 0.95], axis=0)
+print(pd.DataFrame({
+    "true": [mu_true, phi_true, sig_true],
+    "post mean": par_draws.mean(axis=0),
+    "5%": q[0], "95%": q[1],
+    "inefficiency": [inefficiency(par_draws[:, j]) for j in range(3)],
+}, index=["mu", "phi", "sigma_h"]).round(3))
+```
+
+All three true values lie comfortably inside their ninety per cent credible intervals and
+the posterior mean of $\sigma_h$ is close to the simulated value. The inefficiency factors
+are large, however: the path and the state-equation parameters are strongly dependent in
+the posterior, and a sampler that shifts one date at a time moves through that dependence
+slowly, so the nominal draw count overstates precision by roughly that factor and five
+thousand draws deliver only tens of effectively independent ones.
+
+## The posterior volatility path
+
+The chief output is not the parameter vector but the volatility path. For each retained
+draw we convert the log variance into a standard deviation, then take pointwise means and
+quantiles to obtain a credible band to compare with the truth.
+
+```{python}
+vol_draws = np.exp(h_draws / 2)
+vol_mean = vol_draws.mean(axis=0)
+vol_lo, vol_hi = np.quantile(vol_draws, [0.05, 0.95], axis=0)
+
+fig, ax = plt.subplots()
+ax.fill_between(np.arange(T), vol_lo, vol_hi, color="C0", alpha=0.25,
+                label="90% credible band")
+ax.plot(vol_mean, color="C0", lw=1.2, label="posterior mean")
+ax.plot(vol_true, color="black", lw=1.0, label="true volatility")
+ax.set_xlabel("time"); ax.set_ylabel(r"volatility $e^{h_t/2}$")
+ax.set_title("Estimated and true volatility path")
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+print(f"correlation with the truth {np.corrcoef(vol_mean, vol_true)[0, 1]:.3f}, "
+      f"coverage {np.mean((vol_true >= vol_lo) & (vol_true <= vol_hi)):.3f}")
+```
+
+The posterior mean tracks the broad movements of the true volatility closely and the band
+covers the truth at very nearly its nominal rate, so the sampler is calibrated as well as
+accurate. The band is nonetheless wide, often spanning a factor of two in volatility, and
+that width is intrinsic: a single return is a very noisy signal about the variance that
+generated it, since $r_t^2 / e^{h_t}$ is a $\chi^2_1$ variate with variance two. It is
+widest where volatility is high, because the log makes uncertainty multiplicative.
+
+## Why persistence is hard to pin down
+
+The parameter that matters most for forecasting is $\phi$, and it is the one the data
+identify least sharply. The next chunk plots the joint posterior of $\phi$ and $\sigma_h$.
+
+```{python}
+fig, ax = plt.subplots()
+ax.scatter(par_draws[:, 1], par_draws[:, 2], s=3, alpha=0.15, color="C0")
+ax.scatter([phi_true], [sig_true], color="black", s=70, marker="x",
+           label="true values")
+ax.set_xlabel(r"persistence $\phi$")
+ax.set_ylabel(r"volatility of volatility $\sigma_h$")
+ax.set_title("Joint posterior of persistence and volatility of volatility")
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+print(f"posterior correlation: {np.corrcoef(par_draws[:, 1], par_draws[:, 2])[0, 1]:.3f}")
+```
+
+The cloud is a pronounced ridge running from low persistence with high volatility of
+volatility to high persistence with low volatility of volatility, and the posterior
+correlation is strongly negative. The data speak mainly about how much the log variance
+moves in total, that is about the stationary variance $\sigma_h^2/(1-\phi^2)$, and not
+about its two ingredients separately: a jagged path with $\phi = 0.90$ and $\sigma_h =
+0.40$ and a smooth path with $\phi = 0.97$ and $\sigma_h = 0.20$ produce return series
+that are nearly indistinguishable over a few hundred observations. On top of this near
+non-identification sits measurement noise, since each $h_t$ is inferred from a single
+$\chi^2_1$ observation, so sampled paths are rougher than the true one and the posterior
+is nudged down the ridge towards lower $\phi$. Long samples, or informative priors, are
+the only remedies.
+
+## The mixture-of-normals alternative
+
+The single-move sampler is transparent but slow, and its slowness is intrinsic: adjacent
+log-volatilities are highly correlated when $\phi$ is near one, so moving one date at a
+time is like walking along a narrow ridge. The standard remedy, due to Kim, Shephard and
+Chib, restores linearity so the whole path can be drawn in one block. Squaring and taking
+logs of the measurement equation gives $\log r_t^2 = h_t + \log u_t^2$, which is linear in
+$h_t$ but has a left-skewed $\log \chi^2_1$ error with mean $-1.27$ and variance $\pi^2/2
+\approx 4.93$; they approximate that density by a fixed seven-component mixture of normals
+with known weights, means and variances. Conditional on an indicator selecting the
+component at each date the model is an exact linear Gaussian state-space model, so the
+entire path is drawn in one forward-filter backward-sample step with the indicators as one
+more Gibbs block, and a small offset inside the logarithm guards against returns near
+zero. Because the path is updated jointly, inefficiency factors fall by one or two orders
+of magnitude at essentially the same cost per sweep, which is why this approach is what
+practitioners use once a volatility component sits inside a larger model.
+
+## Takeaways
+
+Because the log variance enters the measurement equation nonlinearly, the likelihood is a
+$T$-dimensional integral with no closed form, and inference proceeds by sampling the path
+jointly with the parameters. The single-move sampler does this with one Metropolis step
+per date, proposing from the state equation and correcting with the measurement density,
+alternating with conjugate draws of the autoregressive parameters. The volatility path is
+recovered accurately up to a wide band, while persistence stays weakly identified.
+
+::: {.exercises}
+**Exercises**
+
+1. Rerun the sampler with $\phi = 0.99$ and with $\phi = 0.85$, holding $\sigma_h$ fixed,
+   and explain why the near-unit-root case gives the larger inefficiency factor.
+2. Replace the informative inverse-gamma prior on $\sigma_h^2$ by a nearly flat one, for
+   instance $c_0 = d_0 = 0.01$, and describe what happens to the posterior of $\phi$ and
+   to the smoothness of the estimated volatility path.
+3. Change the Metropolis step to a random-walk proposal $h_t^{\text{new}} = h_t + \tau
+   \varepsilon$, tune $\tau$ to an acceptance rate near one third, and compare the
+   inefficiency factor of a mid-sample $h_t$ with that of the sampler above.
+4. Compute the posterior predictive distribution of $h_{T+1}, \dots, h_{T+20}$ by
+   iterating the state equation forward for every retained draw and plot the forecast fan.
+   How much of the uncertainty is parameter rather than shock uncertainty?
+5. Derive the mean and variance of $\log u_t^2$ for $u_t \sim \mathcal{N}(0,1)$, verify
+   them by simulation, and use the variance to argue why one observation is so
+   uninformative about $h_t$ when $\sigma_h$ is small.
+:::
+
+## References
+
+Jacquier, Polson, and Rossi (1994), "Bayesian Analysis of Stochastic Volatility Models,"
+*Journal of Business and Economic Statistics*. Kim, Shephard, and Chib (1998), "Stochastic
+Volatility: Likelihood Inference and Comparison with ARCH Models," *Review of Economic
+Studies*. Chan, Koop, Poirier, and Tobias, *Bayesian Econometric Methods* (2nd ed.), ch.
+on state-space models and stochastic volatility. Koop, *Bayesian Econometrics*, ch. 8.

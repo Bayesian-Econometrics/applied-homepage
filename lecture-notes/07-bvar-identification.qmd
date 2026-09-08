@@ -1,0 +1,350 @@
+---
+title: "BVARs and identification"
+subtitle: "Lecture 7"
+---
+
+## Why VARs need a prior
+
+The vector autoregression is the standard reduced-form model for macroeconomic and financial dynamics,
+treating a vector of variables as a linear function of its own recent past and letting the data describe
+how shocks propagate without imposing a theory. The cost is parameters: a VAR with $m$ variables and $p$
+lags has $m(1 + mp)$ coefficients, a count growing with the square of the number of variables, so on the
+short samples typical of quarterly macro data least squares overfits badly and forecasts poorly.
+
+This is the high-dimensional problem of the previous lecture, and the Bayesian answer is again to shrink
+with a prior. For VARs the natural choice is the **Minnesota prior**, which centres the system on a
+random walk and shrinks own lags less than cross lags, with variance decaying in the lag. We write the
+VAR in regression form, simulate a stable trivariate VAR(1), estimate the posterior and forecast with
+credible bands, then turn to **structural identification** through the Cholesky factor and sign
+restrictions.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+Every random draw below comes from this one generator, so the printed numbers reproduce exactly.
+
+## The reduced-form VAR and its stacked regression form
+
+A VAR($p$) for the $m$-vector $y_t$ is
+$$
+y_t = c + A_1 y_{t-1} + \dots + A_p y_{t-p} + u_t,
+\qquad u_t \sim \mathcal{N}(0, \Sigma),
+$$
+with $c$ an $m$-vector of intercepts, each $A_\ell$ an $m \times m$ coefficient matrix and $\Sigma$ the
+residual covariance. Given the lags this is a system of linear regressions sharing the same right-hand
+side, so collecting the regressors for period $t$ into $x_t = (1,\; y_{t-1}^\top, \dots, y_{t-p}^\top)$,
+which has $k = 1 + mp$ entries, and stacking the $T - p$ usable observations into $Y$ and $X$ gives the
+multivariate regression $Y = XB + U$, where $B$ is the $k \times m$ matrix whose columns hold each
+equation's coefficients.
+
+## Simulating a stable trivariate VAR(1)
+
+We generate data from a known VAR(1) so the estimator can be checked against the truth, reading the three
+variables as output growth, inflation and a policy rate. A VAR is stable, meaning shocks die out, when
+all eigenvalues of the companion matrix lie inside the unit circle, which for a VAR(1) means those of
+$A_1$. The chunk fixes the coefficients, checks stability, simulates the series, builds the stacked
+regressors and reports the sample correlations.
+
+```{python}
+m, p, T = 3, 1, 200
+names = ["output", "inflation", "rate"]
+c_true = np.array([0.3, 0.2, 0.1])
+A_true = np.array([[0.55, -0.10, -0.20],
+                   [0.10,  0.60, -0.15],
+                   [0.15,  0.20,  0.70]])
+Sigma_true = np.array([[ 1.00,  0.20, -0.30],
+                       [ 0.20,  0.60, -0.15],
+                       [-0.30, -0.15,  0.50]])
+
+eig = np.abs(np.linalg.eigvals(A_true))
+chol_true = np.linalg.cholesky(Sigma_true)
+y = np.zeros((T, m))
+y[0] = np.linalg.solve(np.eye(m) - A_true, c_true)      # unconditional mean
+for t in range(1, T):
+    y[t] = c_true + A_true @ y[t - 1] + chol_true @ rng.standard_normal(m)
+
+def build_xy(y, p):
+    T, m = y.shape
+    Y = y[p:]
+    X = np.ones((T - p, 1 + m * p))
+    for ell in range(1, p + 1):
+        X[:, 1 + (ell - 1) * m: 1 + ell * m] = y[p - ell:T - ell]
+    return X, Y
+
+X, Y = build_xy(y, p)
+k = X.shape[1]
+print(f"eigenvalues of A1 (modulus): {np.round(eig, 3)},  stable: {np.all(eig < 1)}")
+print(f"X is {X.shape[0]} by {k} = 1 + m*p;  sample means: {np.round(y.mean(axis=0), 2)}")
+print(pd.DataFrame(np.corrcoef(y.T), index=names, columns=names).round(2))
+```
+
+All three eigenvalues sit comfortably inside the unit circle, so the series fluctuate around their
+unconditional means rather than wandering off, and the sample means are close to $(I - A_1)^{-1}c$. The
+correlations show output and inflation moving together and both moving against the rate, the sort of
+co-movement a VAR is meant to capture and a reflection of the correlated innovations we simulated.
+
+## The Minnesota prior and the conjugate posterior
+
+We place an independent Normal prior on each coefficient with the Minnesota structure: own first lags
+centred at one, so each variable a priori follows a random walk, all others at zero, own lags loose and
+cross lags tighter, variance decaying with the lag and the intercept nearly diffuse. With $\lambda_1$ the
+overall tightness, $\lambda_2 < 1$ the cross-lag shrinkage and $\sigma_i$ the scale of variable $i$, the
+prior variance on lag $\ell$ of variable $j$ in equation $i$ is $\lambda_1/\ell^2$ when $i = j$ and
+$\lambda_1 \lambda_2 \sigma_i^2 / (\ell^2 \sigma_j^2)$ otherwise, a scale ratio making the prior
+unit-invariant. Conditional on $\Sigma$ the prior is conjugate and each equation's coefficients are
+Normal, with prior mean $b_{0,i}$, precision $\mathrm{diag}(1/V_i)$ and residual variance $\Sigma_{ii}$,
+$$
+\beta_i \mid y, \Sigma \sim \mathcal{N}(\bar b_i,\; \bar V_i),\qquad
+\bar V_i = \left(\frac{X^\top X}{\Sigma_{ii}} + \mathrm{diag}(1/V_i)\right)^{-1},\quad
+\bar b_i = \bar V_i \left(\frac{X^\top y_{\cdot i}}{\Sigma_{ii}} + \mathrm{diag}(1/V_i)\, b_{0,i}\right).
+$$
+This is the multivariate Bayesian ridge: prior precision adds to data precision and the posterior mean is
+a precision-weighted average of prior mean and least-squares fit. The chunk builds the prior, estimates
+$\Sigma$ from the least-squares residuals, and compares the two estimators for the output equation.
+
+```{python}
+lam1, lam2, lam_c = 0.2, 0.5, 100.0     # own tightness, cross factor, intercept variance
+sig = y.std(axis=0, ddof=1)
+
+def minnesota_prior(m, p, sig, lam1, lam2, lam_c):
+    k = 1 + m * p
+    B0 = np.zeros((k, m)); V = np.zeros((k, m)); V[0, :] = lam_c
+    for ell in range(1, p + 1):
+        for j in range(m):                            # regressor: lag ell of variable j
+            row = 1 + (ell - 1) * m + j
+            for i in range(m):                        # equation for variable i
+                V[row, i] = (lam1 / ell**2 if i == j else
+                             lam1 * lam2 / ell**2 * sig[i]**2 / sig[j]**2)
+            if ell == 1: B0[row, j] = 1.0             # random-walk prior mean
+    return B0, V
+
+B_prior, V_prior = minnesota_prior(m, p, sig, lam1, lam2, lam_c)
+B_ols = np.linalg.solve(X.T @ X, X.T @ Y)
+resid = Y - X @ B_ols
+Sigma_hat = resid.T @ resid / (X.shape[0] - k)
+
+def coef_posterior(Sigma):
+    Bbar = np.zeros((k, m)); Vbars = []
+    for i in range(m):
+        prec0 = np.diag(1.0 / V_prior[:, i])
+        Vb = np.linalg.inv(X.T @ X / Sigma[i, i] + prec0)
+        Bbar[:, i] = Vb @ (X.T @ Y[:, i] / Sigma[i, i] + prec0 @ B_prior[:, i])
+        Vbars.append(Vb)
+    return Bbar, Vbars
+
+Bbar, Vbar_list = coef_posterior(Sigma_hat)
+labels = ["const"] + [f"L1.{nm}" for nm in names]
+print(pd.DataFrame({"true": np.r_[c_true[0], A_true[0]], "OLS": B_ols[:, 0], "BVAR": Bbar[:, 0],
+                    "post_sd": np.sqrt(np.diag(Vbar_list[0]))}, index=labels).round(3))
+```
+
+The Bayesian estimates sit close to the truth and are pulled gently towards the random-walk prior
+relative to least squares, most visibly on the own first lag. The posterior standard deviations are small
+because 199 observations are plenty for four coefficients per equation; the prior would bite far harder
+with six variables and four lags, where $k = 25$.
+
+## Forecasting with predictive credible bands
+
+The usual point of a BVAR is forecasting, and we want a band that reflects two sources of uncertainty:
+the coefficients are not known exactly and future shocks are random. Both are captured by simulation.
+Draw a coefficient matrix from its posterior, iterate the VAR forward adding fresh Gaussian shocks with
+covariance $\Sigma$, and repeat; the quantiles of the paths are the predictive credible bands.
+
+```{python}
+H, n_fc = 16, 2000
+chol_S = np.linalg.cholesky(Sigma_hat)
+fcast = np.zeros((n_fc, H, m))
+for d in range(n_fc):
+    Bd = np.column_stack([rng.multivariate_normal(Bbar[:, i], Vbar_list[i]) for i in range(m)])
+    hist = y[-p:][::-1].copy()                     # most recent lags, newest first
+    for h in range(H):
+        ynew = np.concatenate([[1.0], hist.ravel()]) @ Bd + chol_S @ rng.standard_normal(m)
+        fcast[d, h] = ynew
+        hist = np.vstack([ynew, hist[:-1]])        # roll the lag window forward
+q = np.quantile(fcast, [0.05, 0.5, 0.95], axis=0)
+print(f"90% band width at h=1:  {np.round(q[2, 0] - q[0, 0], 2)}")
+print(f"90% band width at h={H}: {np.round(q[2, -1] - q[0, -1], 2)}")
+
+fig, ax = plt.subplots()
+t_hist, t_fut = np.arange(T - 40, T), np.arange(T, T + H)
+for i, nm in enumerate(names):
+    ax.plot(t_hist, y[-40:, i], color=f"C{i}", lw=0.9)
+    ax.plot(t_fut, q[1, :, i], color=f"C{i}", ls="--", label=f"{nm} forecast")
+    ax.fill_between(t_fut, q[0, :, i], q[2, :, i], color=f"C{i}", alpha=0.15)
+ax.axvline(T - 0.5, color="grey", lw=1, ls=":")
+ax.set_xlabel("t"); ax.set_ylabel("level")
+ax.set_title("Iterated BVAR forecasts with 90% predictive bands")
+ax.legend(fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+The forecasts settle towards the unconditional mean and the bands fan out with the horizon, widening by
+a quarter to a half between the first step and the sixteenth, as errors compound. The variables are
+handled jointly, so forecasts respect the cross-dependence, and because coefficients were drawn from
+the posterior rather than fixed the bands carry parameter as well as shock uncertainty, which matters
+most when the sample is short.
+
+## Structural shocks and the identification problem
+
+Everything so far is reduced form. The innovations $u_t$ are one-step forecast errors, correlated across
+equations, and none is a monetary policy or technology shock: a policy surprise raises the residual of
+the interest-rate equation but, through the correlation, moves the others too. **Structural shocks**
+$\varepsilon_t$ are by construction mutually uncorrelated with unit variance and are linked to the
+innovations by an impact matrix,
+$$
+u_t \;=\; B_0\,\varepsilon_t, \qquad \varepsilon_t \sim \mathcal{N}(0, I_m),
+\qquad\text{so that}\qquad \Sigma \;=\; B_0 B_0^\top .
+$$
+Structural impulse responses follow: with $\Psi_h$ the reduced-form moving-average coefficients, simply
+$A_1^h$ for a VAR(1), the response at horizon $h$ is $\Psi_h B_0 = A_1^h B_0$, whose $(i, j)$ entry is
+the response of variable $i$ to shock $j$.
+
+The identification problem is that $\Sigma$ does not pin down $B_0$. Being symmetric, $\Sigma$ gives only
+$m(m+1)/2$ equations for the $m^2$ unknowns, leaving $m(m-1)/2$ dimensions free, three here. The
+redundancy is exact: if $B_0$ satisfies $\Sigma = B_0 B_0^\top$ then so does $B_0 Q$ for any orthogonal
+$Q$, since $B_0 Q Q^\top B_0^\top = B_0 B_0^\top$. Every rotation implies different impulse responses
+with exactly the same likelihood, so identification must come from outside the data.
+
+## Recursive identification and the ordering
+
+**Recursive identification** resolves the ambiguity by requiring $B_0$ to be lower triangular with a
+positive diagonal, which selects the unique **Cholesky factor** of $\Sigma$. Triangularity is an economic
+assumption, not a convenience: the first variable in the ordering reacts to no other within the period,
+the second only to the first, so the last shock alone may move everything on impact. It is a statement
+about the timing of decisions and it changes with the ordering. The chunk codes impulse responses and a
+Cholesky impact matrix for a given ordering, then compares the impact effects of the rate shock under two
+orderings.
+
+```{python}
+Hi = 12
+def impulse_responses(A, impact, H):
+    out = np.zeros((H + 1, m, m))                  # [horizon, variable, shock]
+    Ah = np.eye(m)
+    for h in range(H + 1):
+        out[h] = Ah @ impact
+        Ah = Ah @ A
+    return out
+
+def cholesky_impact(Sigma, order):
+    P = np.linalg.cholesky(Sigma[np.ix_(order, order)])
+    B = np.zeros((m, m))
+    B[np.ix_(order, order)] = P                    # undo the permutation
+    return B
+
+A_mean = Bbar[1:1 + m, :].T                        # posterior-mean A1
+order_a, order_b = np.array([0, 1, 2]), np.array([2, 0, 1])
+irf_a = impulse_responses(A_mean, cholesky_impact(Sigma_hat, order_a), Hi)
+irf_b = impulse_responses(A_mean, cholesky_impact(Sigma_hat, order_b), Hi)
+print(pd.DataFrame({"rate ordered last": irf_a[0, :, 2], "rate ordered first": irf_b[0, :, 2]},
+                   index=names).round(3))
+```
+
+The two columns describe the same shock under two timing assumptions and disagree completely on impact.
+With the rate ordered last, output and inflation are zero at horizon zero by construction, so a rate
+surprise appears to have no immediate effect; ordered first, the same surprise lowers output by four
+tenths and inflation by rather less. Nothing in the data chose between them, since both impact matrices
+reproduce $\Sigma$ exactly, so a recursive scheme is a genuine identifying assumption to be argued in
+economic terms.
+
+## Sign restrictions
+
+**Sign restrictions**, developed for Bayesian VARs by Rubio-Ramírez, Waggoner and Zha, replace the timing
+assumption with a weaker one: the qualitative direction of the responses. A contractionary policy shock
+should raise the rate and lower output and inflation, and we impose exactly that over the first three
+horizons. The algorithm exploits the rotation ambiguity directly: for each posterior draw of
+$(B, \Sigma)$, form the Cholesky factor $P$ of $\Sigma$, draw a random orthogonal $Q$ from the QR
+decomposition of a Gaussian matrix, sign-normalised so $Q$ is uniform on the orthogonal group, compute
+the candidate responses $A_1^h P Q$, and keep the draw only if the column of interest matches the imposed
+pattern, trying both signs since $-q$ is a rotation whenever $q$ is. Coefficients come from the Normal
+posterior conditional on each $\Sigma$, itself drawn from an inverse-Wishart posterior under a diffuse
+prior; a full Gibbs sampler is left to the exercises.
+
+```{python}
+n_draws, hz = 4000, 3
+nu_bar, S_bar = X.shape[0] - k, resid.T @ resid
+accepted = []
+for d in range(n_draws):
+    Sigma_d = stats.invwishart.rvs(df=nu_bar, scale=S_bar, random_state=rng)
+    Bb, Vb = coef_posterior(Sigma_d)
+    Bd = np.column_stack([rng.multivariate_normal(Bb[:, i], Vb[i]) for i in range(m)])
+    Qm, Rm = np.linalg.qr(rng.standard_normal((m, m)))
+    Qm = Qm * np.sign(np.diag(Rm))                 # uniform on the orthogonal group
+    cand = impulse_responses(Bd[1:1 + m, :].T, np.linalg.cholesky(Sigma_d) @ Qm, Hi)
+    for s in (1.0, -1.0):
+        r = s * cand[:hz, :, 0]                    # first column: candidate policy shock
+        if (r[:, 2] > 0).all() and (r[:, 1] < 0).all() and (r[:, 0] < 0).all():
+            accepted.append(s * cand[:, :, 0])
+            break
+accepted = np.array(accepted)
+band = np.quantile(accepted, [0.16, 0.5, 0.84], axis=0)
+print(f"accepted {len(accepted)}/{n_draws} ({len(accepted)/n_draws:.1%}), NaN: {np.isnan(band).any()}")
+print(pd.DataFrame(band[1, :4].T, index=names, columns=[f"h={h}" for h in range(4)]).round(3))
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+hor = np.arange(Hi + 1)
+for lab, r in [("rate ordered last", irf_a), ("rate ordered first", irf_b)]:
+    axes[0].plot(hor, r[:, 0, 2], ".-", label=lab)
+for i, nm in enumerate(names):
+    axes[1].plot(hor, band[1, :, i], color=f"C{i}", label=nm)
+    axes[1].fill_between(hor, band[0, :, i], band[2, :, i], color=f"C{i}", alpha=0.2)
+for ax, ttl, yl in [(axes[0], "Recursive responses depend on the ordering", "response of output"),
+                    (axes[1], "Sign-restricted policy shock, 68% bands", "response")]:
+    ax.axhline(0, color="black", lw=0.8); ax.set_xlabel("horizon"); ax.set_ylabel(yl)
+    ax.set_title(ttl); ax.legend(fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+About an eighth of the candidate rotations survive, still leaving several hundred admissible models. The
+median responses are economically coherent: the rate rises by roughly two thirds of a percentage point on
+impact and returns to zero within three or four periods, while output and inflation fall by about a third
+and recover slowly, inflation more persistently than output. The left panel repeats the recursive result:
+the band contains the rate-first path throughout, but not the rate-last zero on impact, which the
+restriction that output falls excludes outright.
+
+That width mixes two things. Part is ordinary **estimation uncertainty**, the posterior uncertainty about
+$B$ and $\Sigma$ that widened the forecast bands. The rest is **identification uncertainty**: sign
+restrictions select not a single impact matrix but an admissible set, every element of which fits the
+data equally well, so even with an infinite sample the bands would not collapse to a line. They deliver
+**set identification**, and the band mixes a credible interval with the range of models the assumptions
+failed to exclude. Reading it as a confidence interval is a mistake, and an honest summary reports how
+many restrictions were imposed, over how many horizons, and what share of rotations they eliminated.
+
+## Takeaways
+
+A reduced-form VAR is heavily parameterised, so least squares overfits and the Minnesota prior earns its
+place. Written as $Y = XB + U$ the model has a conjugate Normal posterior per equation given $\Sigma$,
+whose mean blends the random-walk prior with the data, and simulating forward through posterior draws and
+fresh shocks gives bands carrying parameter and shock uncertainty. Structural analysis is separate,
+because $\Sigma$ leaves $m(m-1)/2$ rotations free: recursive identification removes them by triangularity
+at the price of an ordering-dependent timing assumption, while sign restrictions keep every rotation
+consistent with the assumed signs and return a set of admissible models.
+
+::: {.exercises}
+**Exercises**
+
+1. Re-estimate with a much tighter prior ($\lambda_1 = 0.02$) and a much looser one ($\lambda_1 = 2.0$),
+   reporting how the posterior means and the width of the forecast bands change.
+2. Extend the simulation and estimation to a VAR(2), verifying that `build_xy` and the Minnesota prior
+   handle the extra lag and that the lag-2 coefficients are shrunk harder than the lag-1 coefficients.
+3. Replace the two-block scheme by a Gibbs sampler over $\Sigma$ and $B$, and compare the bands.
+4. Impose one restriction fewer, dropping the requirement that output falls, and report how the accepted
+   share and the width of the bands respond. What does that say about the price of weak assumptions?
+5. Compute recursive output responses under all six orderings; how many lie in the sign-restricted band?
+:::
+
+## References
+
+Bańbura, Giannone and Reichlin (2010), "Large Bayesian Vector Auto Regressions," *Journal of Applied
+Econometrics*. Rubio-Ramírez, Waggoner and Zha (2010), "Structural Vector Autoregressions: Theory of
+Identification and Algorithms for Inference," *Review of Economic Studies*. Koop, *Bayesian
+Econometrics*, ch. 6. Chan, Koop, Poirier and Tobias, *Bayesian Econometric Methods* (2nd ed.), ch. 18.

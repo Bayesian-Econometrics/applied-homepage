@@ -1,0 +1,331 @@
+---
+title: "The linear regression model"
+subtitle: "Lecture 2"
+---
+
+## Regression with a conjugate prior
+
+The first lecture introduced Bayes' theorem on a one-parameter model, where prior,
+likelihood and posterior could all be drawn on one picture. Applied work rarely lives in
+one dimension, so this lecture moves the machinery to the linear regression model, the
+block from which the later chapters are built.
+
+With the right prior the whole problem is solvable with pen and paper: the
+**Normal-Inverse-Gamma** prior is conjugate to the Gaussian likelihood, so the posterior
+stays in the same family and the update is a few matrix operations. Our example is a
+**CAPM** regression of a simulated asset's excess return on a market and a size factor.
+
+We import the usual libraries and fix a seed.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## The model in matrix form
+
+Stack the $n$ observations of the dependent variable into $y$ and the $k$ regressors into
+the $n \times k$ matrix $X$, whose first column is ones. With Gaussian, homoskedastic and
+serially uncorrelated errors, $y = X\beta + \varepsilon$ with $\varepsilon \sim
+\mathcal{N}(0, \sigma^2 I_n)$, so $y \mid \beta, \sigma^2 \sim \mathcal{N}(X\beta, \sigma^2
+I_n)$ and
+
+$$
+p(y \mid \beta, \sigma^2) = (2\pi\sigma^2)^{-n/2}
+\exp\!\left\{-\tfrac{1}{2\sigma^2}(y - X\beta)^\top (y - X\beta)\right\}.
+$$
+
+The unknowns are $\beta \in \mathbb{R}^k$ and $\sigma^2 > 0$. The exponent is a quadratic
+form in $\beta$, the signature of a Gaussian kernel, so a Gaussian prior and completing
+the square return another Gaussian, while $(\sigma^2)^{-n/2}$ signals an inverse-Gamma.
+
+Here $y$ holds the asset's excess returns and $X$ a constant, the market return and a size
+factor, so $\beta_1$ is its **beta** and $\beta_0$ its **alpha**. We simulate and fit OLS.
+
+```{python}
+n, k = 60, 3
+theta_true = np.array([0.002, 1.15, 0.25])   # alpha, market beta, size loading
+sigma2_true = 0.04**2                        # 4% monthly idiosyncratic sd
+eps = np.sqrt(sigma2_true) * rng.standard_normal(n)
+F = rng.normal(size=(n, 2))
+X = np.column_stack([np.ones(n), 0.005 + 0.045 * F[:, 0], 0.001 + 0.030 * F[:, 1]])
+y = X @ theta_true + eps
+b_ols = np.linalg.solve(X.T @ X, X.T @ y)
+ssr = (y - X @ b_ols) @ (y - X @ b_ols)
+s2_ols, names = ssr / (n - k), ["alpha", "beta_mkt", "gamma_smb"]
+se_ols = np.sqrt(s2_ols * np.diag(np.linalg.inv(X.T @ X)))
+print(pd.DataFrame({"true": theta_true, "OLS": b_ols, "OLS se": se_ols},
+                   index=names).round(4))
+print(f"\ntrue sigma^2 {sigma2_true:.6f}    OLS s^2 {s2_ols:.6f}")
+```
+
+The standard errors are large relative to the coefficients: the market beta is pinned
+down only to within about $\pm 0.22$, the size loading is indistinguishable from zero, and
+the estimated alpha is five times the truth. Prior information has something to add here.
+
+## The Normal-Inverse-Gamma prior
+
+Conjugacy requires the prior on $\beta$ to be scaled by the same $\sigma^2$ that appears
+in the likelihood, so the **Normal-Inverse-Gamma** (NIG) prior is hierarchical,
+
+$$
+\beta \mid \sigma^2 \sim \mathcal{N}\!\left(b_0, \sigma^2 B_0\right), \qquad
+\sigma^2 \sim \text{Inverse-Gamma}(\alpha_0, \delta_0),
+$$
+
+the inverse-Gamma in the shape-scale parameterisation $p(\sigma^2) \propto
+(\sigma^2)^{-\alpha_0-1}\exp(-\delta_0/\sigma^2)$, exactly `scipy.stats.invgamma(a=alpha0,
+scale=delta0)`, with mean $\bar\sigma^2 = \delta_0/(\alpha_0-1)$ for $\alpha_0>1$.
+
+The $\sigma^2$ inside $\sigma^2 B_0$ is the price of conjugacy: prior uncertainty about the
+coefficients is proportional to the noise, so $B_0$ is not in the units of $\beta$. To give
+coefficient $j$ the prior sd $\tau_j$ we set $B_{0,jj} = \tau_j^2/\bar\sigma^2$.
+
+## The posterior update
+
+Multiplying likelihood by prior gives a joint kernel proportional to
+$(\sigma^2)^{-(n+k)/2-\alpha_0-1}\exp\{-\frac{1}{2\sigma^2}[\,\cdot\,]\}$, where the
+bracket collects $(y-X\beta)^\top(y-X\beta) + (\beta-b_0)^\top B_0^{-1}(\beta-b_0) +
+2\delta_0$. That is a quadratic in $\beta$ with second-order term $\beta^\top(X^\top X +
+B_0^{-1})\beta$ and first-order term $-2\beta^\top(X^\top y + B_0^{-1}b_0)$, so completing
+the square gives the posterior precision matrix and posterior mean
+
+$$
+B_1^{-1} = B_0^{-1} + X^\top X, \qquad
+b_1 = B_1\left(B_0^{-1} b_0 + X^\top y\right),
+$$
+
+and turns the first two terms into $(\beta - b_1)^\top B_1^{-1}(\beta - b_1) + Q$ with the
+remainder $Q = y^\top y + b_0^\top B_0^{-1}b_0 - b_1^\top B_1^{-1}b_1$. Precisions add, and
+$b_1$ is a matrix-weighted average of the prior mean and the least-squares fit.
+
+Integrating $\beta$ out contributes a factor $(\sigma^2)^{k/2}$ cancelling the
+$(\sigma^2)^{-k/2}$ from the prior, leaving an inverse-Gamma kernel whose shape becomes
+$\alpha_1 = \alpha_0 + n/2$ and whose scale becomes $\delta_1 = \delta_0 + Q/2$.
+
+We now set the prior and encode the four formulas as one function, taking $B_0^{-1}$ as an
+argument so that we can later pass a matrix of zeros. The prior is the CAPM itself: alpha
+zero, beta one, no size exposure, tight on alpha.
+
+```{python}
+a0, d0 = 3.0, 0.0032                         # Inverse-Gamma(3, 0.0032)
+sigma2_bar = d0 / (a0 - 1.0)                 # prior mean of sigma^2, i.e. 0.04^2
+tau = np.array([0.010, 0.500, 0.500])        # prior sd of alpha, beta, gamma
+b0 = np.array([0.0, 1.0, 0.0])               # the CAPM as a prior mean
+B0_inv = np.linalg.inv(np.diag(tau**2 / sigma2_bar))
+
+def nig_update(y, X, b0, B0_inv, a0, d0):
+    """Posterior parameters of the Normal-Inverse-Gamma conjugate regression."""
+    P1 = B0_inv + X.T @ X                    # posterior precision B1^{-1}
+    B1 = np.linalg.inv(P1)
+    b1 = B1 @ (B0_inv @ b0 + X.T @ y)
+    Q = y @ y + b0 @ (B0_inv @ b0) - b1 @ (P1 @ b1)
+    return {"b1": b1, "B1": B1, "a1": a0 + y.size / 2.0, "d1": d0 + Q / 2.0}
+
+post = nig_update(y, X, b0, B0_inv, a0, d0)
+sd_beta = np.sqrt(post["d1"] / (post["a1"] - 1.0) * np.diag(post["B1"]))
+print(pd.DataFrame({"true": theta_true, "prior mean": b0, "OLS": b_ols,
+                    "post mean": post["b1"], "post sd": sd_beta},
+                   index=names).round(4))
+print(f"\na1 = {post['a1']:.1f}   d1 = {post['d1']:.6f}   "
+      f"E[sigma^2|y] = {post['d1']/(post['a1']-1):.6f}")
+```
+
+Each posterior mean sits between the prior mean and the OLS estimate. The intercept is the
+clearest case: OLS puts alpha at one percent, the prior insists on zero with a standard
+deviation of one percent, and the posterior lands between them. The market beta barely
+moves, since a prior sd of $0.5$ is wide next to an OLS standard error of $0.11$.
+
+Drawing $\sigma^2$ from its inverse-Gamma marginal and then $\beta$ from
+$\mathcal{N}(b_1, \sigma^2 B_1)$ samples the posterior exactly, so such a composition
+sample must reproduce the analytic moments.
+
+```{python}
+n_draw = 200_000
+sig2_draws = stats.invgamma(a=post["a1"], scale=post["d1"]).rvs(
+    n_draw, random_state=rng)
+beta_draws = post["b1"] + np.sqrt(sig2_draws)[:, None] * (
+    rng.standard_normal((n_draw, k)) @ np.linalg.cholesky(post["B1"]).T)
+print(pd.DataFrame({"analytic mean": post["b1"], "MC mean": beta_draws.mean(axis=0),
+                    "analytic sd": sd_beta, "MC sd": beta_draws.std(axis=0)},
+                   index=names).round(4))
+```
+
+The simulated moments match the analytic ones to four decimals, so formulas and
+implementation agree. We keep the draws for the sample-based summaries below.
+
+## Marginal posteriors
+
+Integrating $\beta$ out leaves $\sigma^2 \mid y \sim \text{Inverse-Gamma}(\alpha_1,
+\delta_1)$, already derived. Integrating $\sigma^2$ out leaves a **multivariate Student
+$t$**: since $\sigma^2 \sim \text{IG}(\alpha_1,\delta_1)$ is the same as
+$2\delta_1/\sigma^2 \sim \chi^2_{2\alpha_1}$, the representation $\beta = b_1 + \sigma L z$
+with $LL^\top = B_1$, $z \sim \mathcal{N}(0, I_k)$ divides a Gaussian by a root chi-square:
+
+$$
+\beta \mid y \sim t_\nu\!\left(b_1, \; \Sigma_1\right), \qquad
+\nu = 2\alpha_1, \qquad \Sigma_1 = \frac{\delta_1}{\alpha_1} B_1 .
+$$
+
+Here $\Sigma_1$ is the scale matrix, not the variance: the variance is
+$\frac{\nu}{\nu-2}\Sigma_1 = \mathbb{E}[\sigma^2\mid y]\,B_1$, printed above. Coefficient
+$j$ has a univariate $t_\nu$ marginal with location $b_{1,j}$ and scale
+$\sqrt{\Sigma_{1,jj}}$, the heavy tails coming from not knowing $\sigma^2$. We plot it
+against its Normal approximation and against the classical OLS sampling distribution.
+
+```{python}
+nu, j = 2 * post["a1"], 1                    # degrees of freedom, market beta
+Sigma1 = post["d1"] / post["a1"] * post["B1"]
+t_post = stats.t(df=nu, loc=post["b1"][j], scale=np.sqrt(Sigma1[j, j]))
+gb = np.linspace(0.7, 1.8, 500)
+fig, ax = plt.subplots()
+ax.plot(gb, t_post.pdf(gb), lw=1.8, label=f"posterior  $t_{{{nu:.0f}}}$")
+ax.plot(gb, stats.norm(post["b1"][j], sd_beta[j]).pdf(gb), "--",
+        label="Normal approximation")
+ax.plot(gb, stats.t(df=n - k, loc=b_ols[j], scale=se_ols[j]).pdf(gb), ":", lw=1.6,
+        label="OLS sampling dist.")
+ax.axvline(theta_true[j], color="black", lw=1, label="true beta 1.15")
+ax.set_xlabel(r"market beta $\beta_1$")
+ax.set_ylabel("density")
+ax.legend(fontsize=9)
+ax.set_title("Marginal posterior of the CAPM beta")
+plt.tight_layout()
+plt.show()
+```
+
+The posterior and its Normal approximation are almost indistinguishable, because $\nu =
+66$ degrees of freedom is enough for the $t$ to look Gaussian; it would be poor with
+fifteen observations. The OLS sampling distribution is slightly wider and shifted right,
+since the prior pulls toward $\beta_1 = 1$ and removes a little uncertainty.
+
+## Summarising the marginals
+
+Decision theory supplies the point estimate: we report the value minimising the posterior
+expected loss $\mathbb{E}[L(\theta,\hat\theta)\mid y]$. Squared-error loss is minimised by
+the posterior **mean**, absolute-error loss by the **median**, and 0-1 loss by the
+**mode**. For a symmetric unimodal $t$ all three coincide; the right-skewed inverse-Gamma
+has mean $\delta_1/(\alpha_1-1)$ and mode $\delta_1/(\alpha_1+1)$.
+
+The **equal-tailed interval** cuts $\alpha/2$ of the mass from each tail, so its endpoints
+are posterior quantiles, while the **highest-posterior-density (HPD) interval** is the
+shortest interval carrying the target mass, every point inside having higher density than
+every point outside. They coincide on a symmetric posterior; on a skewed one the HPD is
+narrower. It has no closed form, so we take it from draws.
+
+```{python}
+def hpd_interval(draws, cred_mass=0.95):
+    x = np.sort(np.asarray(draws))
+    w = int(np.floor(cred_mass * x.size))    # number of points inside
+    i = int(np.argmin(x[w:] - x[:x.size - w]))
+    return x[i], x[i + w]
+
+def summarise(dist, draws, mode):
+    et, hp = dist.ppf([0.025, 0.975]), hpd_interval(draws)
+    return {"mean": dist.mean(), "median": dist.median(), "mode": mode,
+            "ET lo": et[0], "ET hi": et[1], "ET width": et[1] - et[0],
+            "HPD lo": hp[0], "HPD hi": hp[1], "HPD width": hp[1] - hp[0]}
+
+sig_post = stats.invgamma(a=post["a1"], scale=post["d1"])
+print(pd.DataFrame({
+    "beta_mkt": summarise(t_post, beta_draws[:, j], post["b1"][j]),
+    "sigma^2": summarise(sig_post, sig2_draws,
+                         post["d1"] / (post["a1"] + 1.0))}).round(5))
+```
+
+For the market beta the three point estimates agree and the two intervals match up to
+Monte Carlo error, as symmetry demands. For $\sigma^2$ the mode lies below the median and
+the median below the mean, and the HPD is the shorter interval because it trades away part
+of the long right tail; both contain the true variance of $0.0016$.
+
+## The noninformative limit
+
+The diffuse limit is $B_0^{-1} \to 0$ with $\alpha_0 \to -k/2$ and $\delta_0 \to 0$, the
+improper prior $p(\beta, \sigma^2) \propto 1/\sigma^2$, flat in $\beta$ and in
+$\log\sigma^2$; the shape $-k/2$ removes the $(\sigma^2)^{-k/2}$ the conjugate prior
+contributes. Substituting gives $B_1 = (X^\top X)^{-1}$, $b_1 = \hat\beta_{\text{OLS}}$,
+$\alpha_1 = (n-k)/2$ and $\delta_1 = \text{SSR}/2$, hence $\delta_1/\alpha_1 = s^2$ and
+$\beta \mid y \sim t_{n-k}(\hat\beta_{\text{OLS}}, s^2 (X^\top X)^{-1})$, the classical
+sampling distribution of OLS.
+
+```{python}
+diffuse = nig_update(y, X, np.zeros(k), np.zeros((k, k)), -k / 2.0, 0.0)
+scale_diff = np.sqrt(diffuse["d1"] / diffuse["a1"] * np.diag(diffuse["B1"]))
+print(pd.DataFrame({"OLS": b_ols, "diffuse post mean": diffuse["b1"],
+                    "OLS se": se_ols, "diffuse post scale": scale_diff},
+                   index=names).round(6))
+print(f"\ndf 2*a1 = {2*diffuse['a1']:.1f}   n-k = {n-k}   "
+      f"2*d1 = {2*diffuse['d1']:.8f}   SSR = {ssr:.8f}   "
+      f"d1/a1 = {diffuse['d1']/diffuse['a1']:.8f}   s^2 = {s2_ols:.8f}")
+```
+
+Every pair agrees to eight decimals: the diffuse posterior mean is the OLS estimate, the
+$t$ scale is the classical standard error, the degrees of freedom are $n-k$, and
+$2\delta_1$ is the residual sum of squares. Confidence and credible interval therefore
+coincide numerically, though one is about the parameter and the other about the procedure.
+
+## Prior sensitivity in a small sample
+
+The harder question is what happens when the prior is strong and the sample short. We keep
+the first twenty-four months and tighten the prior sd on the market beta around one, while
+the truth is $1.15$.
+
+```{python}
+ys, Xs = y[:24], X[:24]
+b_ols_s = np.linalg.solve(Xs.T @ Xs, Xs.T @ ys)
+gb = np.linspace(0.6, 1.9, 500)
+fig, ax = plt.subplots()
+for tb in [0.02, 0.05, 0.10, 0.25, 1.00]:
+    Bi = np.linalg.inv(np.diag(np.array([0.010, tb, 0.500])**2 / sigma2_bar))
+    ps = nig_update(ys, Xs, b0, Bi, a0, d0)
+    sc = np.sqrt(ps["d1"] / ps["a1"] * np.diag(ps["B1"]))
+    d = stats.t(df=2 * ps["a1"], loc=ps["b1"][1], scale=sc[1])
+    lo, hi = d.ppf([0.025, 0.975])
+    print(f"prior sd {tb:4.2f}:  post mean {ps['b1'][1]:.3f}   "
+          f"95% [{lo:.3f}, {hi:.3f}]   width {hi - lo:.3f}")
+    ax.plot(gb, d.pdf(gb), label=rf"prior sd $= {tb:.2f}$")
+ax.axvline(theta_true[1], color="black", lw=1.2, label="true 1.15")
+ax.axvline(b_ols_s[1], color="grey", ls=":", label=f"24m OLS {b_ols_s[1]:.2f}")
+ax.set_xlabel(r"market beta $\beta_1$")
+ax.set_ylabel("posterior density")
+ax.legend(fontsize=9)
+ax.set_title("Prior tightness and the posterior beta, 24 months of data")
+plt.tight_layout()
+plt.show()
+```
+
+With a prior standard deviation of $0.02$ the posterior mean is essentially the prior value
+of one and the interval is seven times narrower than the data alone would justify: the
+prior has replaced the sample. Loosening it lets the twenty-four observations dominate and
+the mean drifts toward the short-sample OLS estimate of $1.28$. A narrow posterior around
+the wrong centre is false confidence, not precision, so such a sweep belongs alongside any
+small-sample result. The next lecture replaces this closed-form posterior with Monte Carlo
+integration, which is what we must do once the prior is no longer conjugate.
+
+::: {.exercises}
+**Exercises**
+
+1. Derive $B_1^{-1} = B_0^{-1} + X^\top X$ and $b_1 = B_1(B_0^{-1}b_0 + X^\top y)$ by
+   expanding the two quadratic forms and matching coefficients, then show that $Q$ is the
+   constant left over.
+2. Write $b_1$ as the matrix-weighted average $W b_0 + (I - W)\hat\beta_{\text{OLS}}$,
+   identify $W$, and verify your expression numerically with the prior and data above.
+3. Rewrite `nig_update` with a Cholesky factorisation and `scipy.linalg.cho_solve` in
+   place of `np.linalg.inv`. Why is an explicit inverse a bad idea when $X^\top X$ is
+   ill-conditioned?
+4. Using the composition draws, estimate the posterior probability that alpha is positive
+   and that beta exceeds one, under the informative and the diffuse prior. Which pair
+   would you report to a portfolio manager, and why?
+5. Raise $\alpha_0$ while holding $\bar\sigma^2$ fixed, and describe what happens to $\nu$
+   and to the width of the marginal posterior of $\beta_1$.
+:::
+
+## References
+
+Koop, *Bayesian Econometrics*, ch. 2-4. Box and Tiao, *Bayesian Inference in Statistical
+Analysis* (1973), ch. 2 and 8. Chan et al., *Bayesian Econometric Methods*, ch. 2-4.

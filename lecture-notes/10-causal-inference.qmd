@@ -1,0 +1,330 @@
+---
+title: "Causal inference"
+subtitle: "Lecture 10"
+---
+
+## From prediction to causation
+
+Almost everything so far has treated estimation as learning a distribution that describes the data
+well. A causal question is different in kind. We do not want to know what a treated firm looks like;
+we want to know what that same firm would have looked like had it not been treated. That comparison
+is never observed for any single unit, which is why causal inference is often called a missing-data
+problem wearing econometric clothing. Once the causal effect is an unknown parameter, a posterior
+gives a whole distribution over it, and the assumptions that make it learnable sit in the
+likelihood.
+
+Two obstacles recur in applied work and this lecture takes them in turn. The first is
+**confounding**: units select into treatment on characteristics that also drive the outcome, so the
+raw treated-minus-control contrast mixes the policy effect with composition. Conditioning on those
+characteristics turns the causal problem into a regression problem, which makes the flexibility of
+that regression the binding constraint. The second is **endogeneity** of a continuous policy
+variable, determined jointly with the outcome, where conditioning cannot help and we need an
+instrument that shifts the policy without touching the outcome.
+
+The Bayesian answers share a shape. For endogeneity we write a small simultaneous system and sample
+its posterior with a Gibbs sampler, so the error correlation that breaks least squares becomes just
+another parameter with a posterior. For confounding we make the conditional mean flexible enough
+that no curvature is left to be blamed on the treatment, for which Bayesian additive regression
+trees after Chipman, George and McCulloch (2010) and Hill (2011) are the standard tool.
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(2026)
+plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
+                     "grid.alpha": 0.3, "font.size": 11})
+```
+
+## Potential outcomes and the treatment effect
+
+Fix a binary treatment $D_i \in \{0, 1\}$. For each unit there are two potential outcomes, $Y_i(1)$
+if treated and $Y_i(0)$ if not, with unit-level effect $\tau_i = Y_i(1) - Y_i(0)$. Only one arm is
+ever realised, $Y_i = D_i Y_i(1) + (1 - D_i) Y_i(0)$, so $\tau_i$ is unavailable for any single unit
+and we settle for the **average treatment effect** $\tau = \mathbb{E}[Y_i(1) - Y_i(0)]$.
+
+Comparing mean outcomes across arms is unbiased only under random assignment, and in observational
+data it is not: firms that adopt a policy and countries that liberalise differ from those that do
+not, so any variable $X$ driving both selection and outcome is a confounder. The assumption that
+restores identification is **unconfoundedness**, $(Y(0), Y(1)) \perp D \mid X$, together with the
+overlap condition $0 < \Pr(D = 1 \mid X) < 1$. The average effect then becomes the adjusted contrast
+$\tau = \mathbb{E}_X[\mathbb{E}[Y \mid D = 1, X] - \mathbb{E}[Y \mid D = 0, X]]$, as set out by Imbens
+and Rubin (2015). Estimation is now the problem of getting $\mathbb{E}[Y \mid D, X]$ right: whatever
+the model cannot represent is correlated with $D$ and is charged to the treatment.
+
+## A confounded policy experiment
+
+The chunk below simulates a confounder that drives selection through a non-linear propensity and
+also enters the outcome non-linearly, with a constant true effect of two.
+
+```{python}
+n, tau_true = 600, 2.0
+X = rng.normal(0.0, 1.0, size=n)                       # confounder
+prop = 1.0 / (1.0 + np.exp(-(0.8 * X**2 - 1.0)))       # non-linear propensity
+D = rng.binomial(1, prop)
+f_X = 1.5 * np.sin(1.5 * X) + 0.7 * X**2               # non-linear confounding
+Y = 1.0 + tau_true * D + f_X + rng.normal(0.0, 1.0, size=n)
+print(f"share treated {D.mean():.3f}   true ATE {tau_true:.3f}   "
+      f"naive difference in means {Y[D == 1].mean() - Y[D == 0].mean():.3f}")
+```
+
+The naive contrast overstates the effect by roughly forty per cent. Both tails of $X$ are more
+likely to be treated and both carry large values of $f(X)$, so the treated group is drawn
+disproportionately from high-outcome regions of covariate space: treatment and outcome are linked
+through the *curvature* of $f$.
+
+## Bayesian adjustment with a linear model
+
+The natural first response is to add $X$ to the regression. With design matrix $Z$ collecting an
+intercept, the treatment and the covariates, prior $\beta \sim \mathcal{N}(0, \tau_0^2 I)$ and
+likelihood $Y \mid \beta \sim \mathcal{N}(Z\beta, \sigma^2 I)$, the conjugate posterior of Lecture 2
+applies unchanged: $\beta \mid Y \sim \mathcal{N}(m, V)$ with $V = (\sigma^{-2} Z^\top Z +
+\tau_0^{-2} I)^{-1}$ and $m = \sigma^{-2} V Z^\top Y$, so the treatment coefficient has a univariate
+Gaussian marginal read straight off $m$ and $V$. We compute it twice, ignoring the confounder and
+then with a linear term in $X$.
+
+```{python}
+def bayes_linreg(Z, y, sigma2=1.0, tau0=10.0):
+    """Posterior mean and covariance of a conjugate Gaussian linear model."""
+    V = np.linalg.inv(Z.T @ Z / sigma2 + np.eye(Z.shape[1]) / tau0**2)
+    return V @ (Z.T @ y) / sigma2, V
+
+one, Z_lin = np.ones(n), np.column_stack([np.ones(n), D, X])
+s2_hat = np.var(Y - Z_lin @ np.linalg.lstsq(Z_lin, Y, rcond=None)[0], ddof=3)
+m_raw, V_raw = bayes_linreg(np.column_stack([one, D]), Y, s2_hat)
+m_lin, V_lin = bayes_linreg(Z_lin, Y, s2_hat)
+post_raw = stats.norm(m_raw[1], np.sqrt(V_raw[1, 1]))
+post_lin = stats.norm(m_lin[1], np.sqrt(V_lin[1, 1]))
+for name, p in [("no adjustment", post_raw), ("linear in X", post_lin)]:
+    print(f"{name:>14}: mean {p.mean():.3f}  95% CI "
+          f"[{p.ppf(0.025):.3f}, {p.ppf(0.975):.3f}]")
+```
+
+Adjustment helps a little and nowhere near enough; both credible intervals sit well above two. The
+reason is structural. The propensity depends on $X^2$ and is symmetric about zero, so treatment is
+almost uncorrelated with $X$ itself and a linear term removes almost none of the relevant
+confounding: a straight line cannot absorb curvature. The posterior is silent about this
+misspecification: a narrow credible interval speaks about noise, not about whether the model is
+right.
+
+## Bayesian instrumental variables
+
+Confounding by observables is only one way a comparison fails. Suppose the policy variable is
+continuous and determined jointly with the outcome. Write the **triangular simultaneous system**, a
+first stage for the endogenous regressor $x_i$ and a structural equation for the outcome $y_i$,
+
+$$
+x_i = z_i^\top \gamma + v_i , \qquad
+y_i = \beta\, x_i + w_i^\top \delta + u_i , \qquad
+\begin{pmatrix} v_i \\ u_i \end{pmatrix} \sim \mathcal{N}\!\left( 0, \;
+\Sigma = \begin{pmatrix} \sigma_v^2 & \sigma_{vu} \\ \sigma_{vu} & \sigma_u^2 \end{pmatrix}
+\right) .
+$$
+
+The instruments $z_i$ enter the first stage but not the structural equation, which is the exclusion
+restriction, and they must actually move $x_i$, which is relevance. The system is triangular, so the
+map from $(v, u)$ to $(x, y)$ has unit Jacobian and the likelihood is just the bivariate normal
+density of the two residuals.
+
+Least squares fails as soon as $\sigma_{vu} \neq 0$. Since $x_i$ contains $v_i$, which is correlated
+with the structural error, regressor and error are correlated, and the estimator converges to
+$\beta + \operatorname{Cov}(x_i, u_i)/\operatorname{Var}(x_i)$, that is to
+$\beta + \sigma_{vu} / (\gamma^\top \operatorname{Var}(z) \gamma + \sigma_v^2)$. The bias carries the
+sign of $\sigma_{vu}$ and shrinks only as the instruments explain more of $x$. No prior repairs it,
+because it is a property of the wrong likelihood; the fix is to model both equations at once.
+
+To build a Gibbs sampler we factor the bivariate normal rather than stacking it. Conditional on
+$\Sigma$, the regression of $u$ on $v$ has slope $\sigma_{vu} / \sigma_v^2$ and residual variance
+$\sigma_u^2 (1 - \rho^2)$ with $\rho = \sigma_{vu} / (\sigma_v \sigma_u)$, which turns the
+structural equation into a **control-function** form,
+
+$$
+y_i - \frac{\sigma_{vu}}{\sigma_v^2}\, v_i \;=\; \beta\, x_i + w_i^\top \delta + \eta_i ,
+\qquad \eta_i \sim \mathcal{N}\!\big(0, \sigma_u^2 (1 - \rho^2)\big),
+$$
+
+in which the first-stage residual $v_i = x_i - z_i^\top \gamma$ is a known regressor and the
+remaining error is independent of $x_i$. That is why the endogeneity disappears: once the part of
+$u_i$ predictable from $v_i$ is subtracted, what is left is orthogonal to the regressor. Reversing
+the roles gives the first-stage conditional, regressing $x_i - (\sigma_{vu} / \sigma_u^2) u_i$ on
+$z_i$ with variance $\sigma_v^2 (1 - \rho^2)$. Both are ordinary Gaussian linear models, so with
+Gaussian priors both draws are Gaussian.
+
+The third block is the error covariance. With prior $\Sigma \sim \mathcal{IW}(\nu_0, S_0)$ and
+residual matrix $E = [\,v \;\; u\,]$ of dimension $n \times 2$, conjugacy gives
+$\Sigma \mid \gamma, \beta, \delta \sim \mathcal{IW}(\nu_0 + n, S_0 + E^\top E)$. We draw it
+ourselves. If $W \sim \mathcal{W}(\nu, S^{-1})$ then $W^{-1} \sim \mathcal{IW}(\nu, S)$, and a
+Wishart draw follows from the **Bartlett decomposition**: let $C$ be the Cholesky factor of $S^{-1}$
+and $A$ be lower triangular with $A_{ii} = \sqrt{\chi^2_{\nu - i + 1}}$ and standard normals below
+the diagonal, and set $W = (CA)(CA)^\top$. The chunk below implements both draws.
+
+```{python}
+def draw_gaussian(Xd, yd, s2, prec0, rng):
+    """Draw from the Gaussian posterior of a linear model with known variance s2."""
+    V = np.linalg.inv(Xd.T @ Xd / s2 + prec0)
+    return V @ (Xd.T @ yd / s2) + np.linalg.cholesky(V) @ rng.standard_normal(Xd.shape[1])
+
+def draw_inv_wishart(nu, S, rng):
+    """Inverse-Wishart draw via a Bartlett-decomposed Wishart of the inverse."""
+    A = np.zeros(S.shape)
+    for i in range(S.shape[0]):
+        A[i, i] = np.sqrt(rng.chisquare(nu - i))
+        A[i, :i] = rng.standard_normal(i)
+    CA = np.linalg.cholesky(np.linalg.inv(S)) @ A
+    return np.linalg.inv(CA @ CA.T)
+
+n_iv, beta_iv, alpha_iv, rho_iv = 500, 1.0, 0.5, 0.7
+gamma_iv = np.array([0.3, 0.8])                    # first stage: intercept and slope
+Zi = np.column_stack([np.ones(n_iv), rng.normal(size=n_iv)])
+err = rng.standard_normal((n_iv, 2)) @ np.linalg.cholesky(
+    np.array([[1.0, rho_iv], [rho_iv, 1.0]])).T
+x_end = Zi @ gamma_iv + err[:, 0]
+y_iv = alpha_iv + beta_iv * x_end + err[:, 1]
+Xs = np.column_stack([x_end, np.ones(n_iv)])       # coefficients (beta, alpha)
+b_ols = np.linalg.solve(Xs.T @ Xs, Xs.T @ y_iv)
+res = y_iv - Xs @ b_ols
+se_ols = np.sqrt((res @ res / (n_iv - 2)) * np.linalg.inv(Xs.T @ Xs)[0, 0])
+print(f"true beta {beta_iv:.3f}   OLS beta {b_ols[0]:.3f}   95% interval "
+      f"[{b_ols[0] - 1.96 * se_ols:.3f}, {b_ols[0] + 1.96 * se_ols:.3f}]")
+```
+
+The least-squares interval is tight and wrong, missing the truth by many multiples of its own
+standard error, the signature of bias rather than imprecision. The sampler below cycles the three
+blocks derived above under diffuse priors.
+
+```{python}
+prec0, nu0, S0, n_draw, burn = np.eye(2) / 100.0, 4.0, np.eye(2), 6000, 2000
+gamma = np.linalg.solve(Zi.T @ Zi, Zi.T @ x_end)
+theta, Sigma = b_ols.copy(), np.eye(2)
+th_draws, rho_draws = np.empty((n_draw, 2)), np.empty(n_draw)
+for t in range(n_draw):
+    sv2, su2, svu = Sigma[0, 0], Sigma[1, 1], Sigma[0, 1]
+    rho = svu / np.sqrt(sv2 * su2)
+    u = y_iv - Xs @ theta                          # structural residual
+    gamma = draw_gaussian(Zi, x_end - (svu / su2) * u, sv2 * (1 - rho**2), prec0, rng)
+    v = x_end - Zi @ gamma                         # first-stage residual
+    theta = draw_gaussian(Xs, y_iv - (svu / sv2) * v, su2 * (1 - rho**2), prec0, rng)
+    E = np.column_stack([x_end - Zi @ gamma, y_iv - Xs @ theta])
+    Sigma = draw_inv_wishart(nu0 + n_iv, S0 + E.T @ E, rng)
+    th_draws[t] = theta
+    rho_draws[t] = Sigma[0, 1] / np.sqrt(Sigma[0, 0] * Sigma[1, 1])
+beta_post, rho_post = th_draws[burn:, 0], rho_draws[burn:]
+for nm, dr, tv in [("beta", beta_post, beta_iv), ("error corr", rho_post, rho_iv)]:
+    lo, hi = np.quantile(dr, [0.025, 0.975])
+    print(f"{nm:>11}: mean {dr.mean():.3f}   95% CI [{lo:.3f}, {hi:.3f}]   true {tv:.3f}")
+```
+
+The posterior for the structural coefficient is centred essentially on the truth and its credible
+interval covers it, while the least-squares interval lies entirely above it. The sampler also
+recovers the error correlation, the parameter that diagnoses the endogeneity in the first place: had
+its posterior concentrated near zero we would have concluded that least squares was fine. The wider
+Bayesian interval is the correct price of instrumenting, and it widens as the instrument weakens.
+
+## A runnable stand-in for BART
+
+Return to the confounding problem, where the failure was the rigidity of the adjustment. Bayesian
+additive regression trees write the conditional mean as a sum of many shallow trees,
+$\mathbb{E}[Y \mid D, X] = \sum_{m=1}^{M} g(D, X; T_m, \mu_m)$, under regularising priors that keep
+every tree weak, with leaf values shrunk hard towards zero so that no single tree dominates.
+The posterior is explored by **Bayesian backfitting**, updating each learner against the residual
+left by all the others.
+
+Sampling over tree topologies is more machinery than we want from scratch, so we simplify: keep the
+logic, drop the search. It must be said plainly that what follows is a stand-in, not BART: the split
+points are fixed in advance rather than learned, and the learners are stumps in one variable rather
+than trees. What it shares with BART is the mechanism, many weak additive learners tied down by a
+shrinkage prior and fitted by backfitting. We fix $M = 40$ cut-points on a coarse grid across the
+confounder and make the $m$-th learner a constant stump,
+
+$$
+Y_i = \mu + \tau D_i + \sum_{m=1}^{M} a_m \mathbb{1}\{X_i > c_m\} + \varepsilon_i , \qquad
+a_m \sim \mathcal{N}\!\left(0, \; \frac{(0.8\, s_Y)^2}{M}\right), \qquad
+\varepsilon_i \sim \mathcal{N}(0, \sigma^2) .
+$$
+
+The prior variance of each amplitude is divided by $M$, exactly as in BART's leaf prior, so the sum
+keeps a sensible scale however many stumps we use while each is individually pulled towards doing
+nothing. Every full conditional is standard: $a_m$ given the rest is a one-dimensional Gaussian,
+$(\mu, \tau)$ given the ensemble is Gaussian, and $\sigma^2$ is inverse-Gamma.
+
+```{python}
+M = 40
+cuts = np.linspace(X.min(), X.max(), M + 2)[1:-1]
+B = (X[:, None] > cuts[None, :]).astype(float)     # n x M stump basis
+Bsq, Zc = (B * B).sum(0), np.column_stack([one, D])
+sa2 = (0.8 * Y.std()) ** 2 / M                     # shrinkage prior on amplitudes
+c0 = d0 = 0.01                                     # diffuse inverse-Gamma on sigma^2
+n_bf, burn_bf = 4000, 1000
+a, sigma2, g = np.zeros(M), Y.var(), np.zeros(n)
+tau_draws, fit_draws = np.empty(n_bf), np.empty((n_bf, n))
+for t in range(n_bf):
+    theta_c = draw_gaussian(Zc, Y - g, sigma2, np.eye(2) / 100.0, rng)
+    base = Y - Zc @ theta_c                        # Bayesian backfitting sweep
+    r = base - g
+    for m in range(M):
+        r = r + a[m] * B[:, m]                     # add stump m back in
+        prec = Bsq[m] / sigma2 + 1.0 / sa2
+        a[m] = (B[:, m] @ r / sigma2) / prec + rng.standard_normal() / np.sqrt(prec)
+        r = r - a[m] * B[:, m]                     # take the new stump out
+    g = base - r
+    e = Y - Zc @ theta_c - g
+    sigma2 = 1.0 / rng.gamma(c0 + n / 2, 1.0 / (d0 + 0.5 * e @ e))
+    tau_draws[t], fit_draws[t] = theta_c[1], theta_c[0] + g
+tau_bf, fit_draws = tau_draws[burn_bf:], fit_draws[burn_bf:]
+print(f"stump ensemble tau: mean {tau_bf.mean():.3f}   95% CI "
+      f"[{np.quantile(tau_bf, 0.025):.3f}, {np.quantile(tau_bf, 0.975):.3f}]")
+print(f"posterior sigma^2 {sigma2:.3f} (true 1.000)   true ATE {tau_true:.3f}")
+```
+
+The ensemble recovers the treatment effect. Where the linear adjustment left a bias of about three
+quarters of a unit, the additive stumps put the posterior mean within a few hundredths of two and
+the credible interval brackets it. The residual variance also lands near its true value of one,
+direct evidence that the curvature in $X$ was absorbed by the learners rather than charged to the
+treatment.
+
+```{python}
+order, fit_mean, tgrid = np.argsort(X), fit_draws.mean(0), np.linspace(1.6, 3.2, 400)
+fit_lo, fit_hi = np.quantile(fit_draws, [0.025, 0.975], axis=0)
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].plot(X[order], (1.0 + f_X)[order], "k", lw=1.8, label="true 1 + f(X)")
+axes[0].plot(X[order], fit_mean[order], color="steelblue", lw=1.6, label="stump ensemble")
+axes[0].fill_between(X[order], fit_lo[order], fit_hi[order], color="steelblue", alpha=0.3)
+axes[0].set(xlabel="confounder X", ylabel="response", title="Learned adjustment surface")
+axes[0].legend(fontsize=9)
+axes[1].hist(tau_bf, bins=50, density=True, color="steelblue", alpha=0.85, label="stumps")
+axes[1].plot(tgrid, post_lin.pdf(tgrid), color="darkorange", lw=1.8, label="linear in X")
+axes[1].axvline(tau_true, color="black", ls=":", lw=1.6, label="true ATE = 2")
+axes[1].set(xlabel=r"$\tau$", ylabel="posterior density", title="Bias removed by flexibility")
+axes[1].legend(fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+The left panel explains the right one. The ensemble traces the sine-plus-quadratic shape closely in
+the middle of the covariate range and widens its band in the sparse tails, as a regularised fit
+should. Nothing curved is left for $D$ to explain, and the wider credible interval is the price of
+not assuming a functional form. Real BART learns where to split, handles many covariates and their
+interactions, and lets the treatment interact with them, so that averaging the posterior contrast
+$\hat{f}(1, X_i) - \hat{f}(0, X_i)$ over the sample gives an average effect even under heterogeneity.
+
+::: {.exercises}
+**Exercises**
+
+1. Weaken the instrument by setting the slope in `gamma_iv` to $0.15$ and rerun the Gibbs sampler.
+   Describe what happens to the width and coverage of the posterior for $\beta$, and why.
+2. Set `rho_iv` to zero, so the regressor is exogenous. Compare the Bayesian IV posterior with the
+   least-squares interval and explain why instrumenting is now a cost rather than a cure.
+3. Multiply `sa2` by one hundred to remove most of the shrinkage, then describe what happens to the
+   fitted surface in the sparse tails of $X$ and to the credible interval for $\tau$.
+4. Make the treatment effect heterogeneous, say $\tau_i = 2 + 0.8 X_i$, and explain why the
+   constant-$\tau$ specification then estimates a weighted average of the individual effects.
+:::
+
+## References
+
+Imbens and Rubin, *Causal Inference for Statistics, Social, and Biomedical Sciences* (2015), ch. 1-3
+and 23-24. Hill, *Bayesian Nonparametric Modeling for Causal Inference*, JCGS (2011). Chipman,
+George and McCulloch, *BART: Bayesian Additive Regression Trees*, Ann. Appl. Stat. (2010). Rossi,
+Allenby and McCulloch, *Bayesian Statistics and Marketing* (2005), ch. 4.
