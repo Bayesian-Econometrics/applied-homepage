@@ -36,6 +36,7 @@ The code implements the model above in a reproducible standalone example. Identi
 import time
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from scipy.special import expit
 
 SEED, N, ITER, BURN = 2026, 250, 2500, 500
@@ -55,7 +56,7 @@ point, eps = np.array([.2,-.1,.3]), 1e-5
 numerical = np.array([(log_target(point+eps*e, X, y, TAU)-log_target(point-eps*e, X, y, TAU))/(2*eps)
                       for e in np.eye(3)])
 assert np.allclose(gradient(point, X, y, TAU), numerical, rtol=1e-5, atol=1e-6)
-rows = []
+rows, chains = [], {}
 for method in ['MH', 'HMC']:
     beta, chain, accepted = np.zeros(3), np.empty((ITER,3)), 0
     start = time.perf_counter()
@@ -82,9 +83,22 @@ for method in ['MH', 'HMC']:
     kept = chain[BURN:]
     batches = kept.reshape(40, -1, 3).mean(axis=1)
     mcse = batches.std(axis=0,ddof=1)/np.sqrt(40)
+    ess = kept.var(axis=0,ddof=1) / mcse**2
     rows.append({'method':method, 'accept':accepted/ITER, 'seconds':elapsed,
-                 'mean beta1':kept[:,1].mean(), 'MCSE beta1':mcse[1]})
+                 'mean beta1':kept[:,1].mean(), 'MCSE beta1':mcse[1], 'ESS beta1':ess[1]})
+    chains[method] = kept
 pd.DataFrame(rows)
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(chains['MH'][:, 1], lw=.5, color='tab:blue', alpha=.8, label='MH beta1')
+ax.plot(chains['HMC'][:, 1], lw=.5, color='tab:orange', alpha=.8, label='HMC beta1')
+ax.set(xlabel='retained iteration', ylabel='coefficient 1',
+       title='MH versus HMC traces on the same logistic target')
+ax.legend()
+plt.tight_layout()
+plt.show()
 ```
 
 Batch means estimate simulation error only when batches are long enough
@@ -92,6 +106,18 @@ relative to dependence. Use the lecture's trace and multi-chain checks too.
 Sampler speed depends on this target and implementation; the table is an
 experiment, not a claim that one method always wins.
 :::
+
+## What the result looks like
+
+```{python}
+ess_table = pd.DataFrame(rows).set_index('method')
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.bar(ess_table.index, ess_table['ESS beta1'], color=['tab:blue', 'tab:orange'])
+ax.set(xlabel='sampler', ylabel='effective sample size for coefficient 1',
+       title='Effective sample size: MH versus HMC')
+plt.tight_layout()
+plt.show()
+```
 
 ## Discuss the results
 
@@ -104,20 +130,20 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following items extend this week's comparison of MH against HMC on the logistic target.
 
-1. Re-run the logistic sampler with a tighter prior, $\tau = 0.5$, and compare posterior means, standard
-   deviations and effective sample sizes with the $\tau = 5$ case. Which coefficients move most, and why?
-2. Scale per-coordinate steps in `rw_metropolis` to pilot standard deviations; report the ESS gain.
-3. Sweep $\epsilon$ at fixed $L = 10$, recording acceptance and effective sample size per gradient, and
-   relate the point where the energy error dominates to the 0.65 to 0.9 guideline.
-4. Fix $\epsilon = 0.15$ and vary $L$ from 1 to 40, plotting effective sample size per gradient against
-   $L$, and explain the shape using the U-turn argument behind the no-U-turn sampler.
-5. **HMC vs MH: comparing sampling efficiency for a non-conjugate logistic model.** Simulate a logistic
-   model with fifteen strongly correlated covariates, tune both samplers on it and rebuild the efficiency
-   comparison table from this lecture. At what dimension does Hamiltonian Monte Carlo overtake the random
-   walk per second rather than only per posterior evaluation?
-6. Fix $\beta$ in the Challenger model at its posterior mean and apply the slice sampler of this lecture
-   to $\alpha$ alone, holding $\beta$ fixed. Compare its autocorrelation and effective sample size to the
-   marginal chain for $\alpha$ produced by the joint random-walk sampler, and comment on whether the
-   tuning-free property of slice sampling was worth the extra bookkeeping here.
+1. Re-run both samplers with a much tighter prior, $\tau = 0.5$, instead of $\tau = 3$, and
+   compare posterior means, MCSE and effective sample size for coefficient 1 with the
+   reference case above. Which sampler's ranking changes least, and why?
+2. Sensitivity check: regenerate $X$ with its two covariates correlated at 0.9 rather than
+   independent, rerun the same MH-versus-HMC comparison, and report how the acceptance
+   rate and effective sample size of each sampler respond to the added correlation.
+3. Derive the leapfrog step's time-reversibility (that negating momentum and repeating the
+   same steps returns to the start), then confirm it numerically by running the HMC
+   integrator forward for $L$ steps from the reference implementation's starting point,
+   negating momentum, running it forward another $L$ steps, and checking you land back at
+   the start to numerical precision.
+4. A risk model must be refreshed every second on live data, so the decision is which
+   sampler to deploy under that time budget. Using `seconds` and `ESS beta1` from the
+   reference table, compute the effective sample size produced per second by each sampler
+   and state which one the risk model should use.

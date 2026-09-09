@@ -61,9 +61,11 @@ fig, ax = plt.subplots()
 ax.plot(truth[:,1],color='black',lw=1,label='true beta')
 ax.plot(means[:,1],color='steelblue',label='filtered beta')
 ax.fill_between(range(T),means[:,1]-1.96*np.sqrt(variances[:,1]),
-                means[:,1]+1.96*np.sqrt(variances[:,1]),alpha=.2)
-ax.set(xlabel='month',ylabel='market beta')
+                means[:,1]+1.96*np.sqrt(variances[:,1]),alpha=.2,color='steelblue',
+                label='95% band')
+ax.set(xlabel='month',ylabel='market beta',title='Filtered beta tracks the simulated true path')
 ax.legend(loc='upper left')
+plt.tight_layout()
 plt.show()
 ```
 
@@ -71,6 +73,45 @@ The covariance update is written in Joseph form, algebraically equivalent to
 the usual Gaussian update and helpful for retaining numerical symmetry.
 The bands condition on the chosen noise variances; estimating those variances
 would require additional posterior integration.
+
+The chunk below reruns the same filter with the beta state-noise variance scaled by
+one tenth and by ten, holding the simulated data fixed, to show how the assumed $Q$
+trades off responsiveness against smoothness.
+
+```{python}
+def run_filter(q_beta):
+    Q_alt = np.diag([.000001, q_beta])
+    mean_f, covariance_f = np.array([0.,1.]), np.diag([.01,.5])
+    out = np.empty((T,2))
+    for t in range(T):
+        if t > 0:
+            covariance_f = covariance_f + Q_alt
+        innovation = returns[t]-X[t] @ mean_f
+        F = X[t] @ covariance_f @ X[t] + H
+        gain = covariance_f @ X[t]/F
+        mean_f = mean_f + gain*innovation
+        update = np.eye(2)-np.outer(gain,X[t])
+        covariance_f = update @ covariance_f @ update.T + H*np.outer(gain,gain)
+        out[t] = mean_f
+    return out
+
+q_true = Q[1,1]
+paths = {f'x0.1 (q={q_true*.1:.2e})': run_filter(q_true*.1),
+         f'true (q={q_true:.2e})': run_filter(q_true),
+         f'x10 (q={q_true*10:.2e})': run_filter(q_true*10)}
+mse_by_q = {name: np.mean((path[:,1]-truth[:,1])**2) for name, path in paths.items()}
+print('Mean squared error of filtered beta by state-noise variance:', mse_by_q)
+
+fig, ax = plt.subplots()
+ax.plot(truth[:,1],color='black',lw=1.4,label='true beta')
+for name, path in paths.items():
+    ax.plot(path[:,1], lw=1.2, label=name)
+ax.set(xlabel='month',ylabel='market beta',
+       title='Smaller state noise smooths; larger state noise chases the data')
+ax.legend(fontsize=8)
+plt.tight_layout()
+plt.show()
+```
 :::
 
 ## Discuss the results
@@ -84,16 +125,24 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the beta-tracking filter above.
 
-1. Estimate the variances by maximum likelihood: write the negative of `kalman_filter_ll`'s
-   log-likelihood as a function of $(\sigma_\varepsilon, \sigma_\eta)$ and minimise it over a
-   grid (or with `scipy.optimize.minimize`). How close are the estimates to the true values?
-2. Add a deterministic drift to the state, $\alpha_{t+1} = \alpha_t + c + \eta_t$, so the
-   trend grows. Modify the filter and check that it still tracks the simulated state.
-3. Implement the backward smoothing recursion for the local level model and compare the
-   smoothed path and its variance band to the filtered ones. Confirm the smoother is more
-   accurate in the interior of the sample.
-4. Vary the true signal-to-noise ratio used to *simulate* the data and, for each, plot the
-   mean squared error of the filtered state against the assumed $q$. Verify that the error is
-   minimised when the assumed $q$ matches the truth.
+1. Rerun `run_filter` on a finer grid of multipliers, say
+   $\{0.01, 0.1, 1, 10, 100\}$ times the true beta state-noise variance, and plot the
+   resulting mean squared error against the multiplier on a log axis. Confirm the minimum
+   sits at or near the multiplier of one, and report how much worse the filter is at the
+   two extremes.
+2. Keep the state-noise variance fixed at its true value but double the measurement
+   variance $H$ used inside the filter (while simulating with the original $H$). Report the
+   new mean squared error of the filtered beta and explain, from the gain formula
+   $K_t = P_t^- x_t/F_t$, why overstating $H$ makes the filter respond more sluggishly to
+   genuine breaks in beta.
+3. Derive the steady-state gain for this local-level-in-beta model: for large $t$ the
+   prediction variance settles at a fixed point $\bar P$ solving
+   $\bar P = (\bar P + q_\eta)\,\bar P x^2/((\bar P+q_\eta)x^2+H) + q_\eta$ for a
+   representative $x$. Confirm numerically that the filtered gain in the reference
+   implementation approaches a stable value once $t$ is large.
+4. A risk desk re-hedges a portfolio using the filtered beta at each date. Using the three
+   state-noise multipliers from question 1, argue which multiplier a desk that re-hedges
+   daily should prefer versus one that re-hedges monthly, connecting the choice to the
+   trade-off between tracking a genuine drift and reacting to measurement noise.

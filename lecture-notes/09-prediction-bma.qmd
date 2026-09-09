@@ -323,6 +323,42 @@ and models adding a spurious one. That residual spread is model uncertainty, and
 the single best model throws away. The log Bayes factor against the full model shows the razor at
 work, and the inclusion probabilities recover the truth from a prior of $1/2$ each.
 
+Both quantities are easier to read as bars than as a table. The two figures below plot the posterior
+probability of the five best-supported models and the inclusion probability of each predictor,
+reusing `w_all`, `labels` and `pip` from the block above.
+
+**Reading the computation.** `order` ranks models by posterior probability, largest first. The bars are the same numbers already printed, only easier to compare at a glance.
+
+```{python}
+order = np.argsort(w_all)[::-1][:5]
+fig, ax = plt.subplots()
+ax.bar(range(5), w_all[order], tick_label=[labels[i] for i in order])
+ax.set_xlabel("model"); ax.set_ylabel("posterior probability")
+ax.set_title("Posterior probability of the five best-supported models")
+plt.xticks(rotation=20, ha="right")
+plt.tight_layout()
+plt.show()
+```
+
+**Reading the computation.** Each bar sums the weight of every model containing that predictor. The dotted line is the prior inclusion probability implied by a uniform prior over all sixteen models.
+
+```{python}
+fig, ax = plt.subplots()
+ax.bar([f"x{v+1}" for v in range(p_cand)], pip, color="C2")
+ax.axhline(0.5, color="grey", ls=":", label="prior inclusion probability")
+ax.set_xlabel("predictor"); ax.set_ylabel("posterior inclusion probability")
+ax.legend()
+ax.set_title("Posterior inclusion probability by predictor")
+plt.tight_layout()
+plt.show()
+```
+
+The leading model carries roughly three quarters of the posterior mass, with the next four models
+sharing most of the rest in small pieces, a picture of genuine but not overwhelming model uncertainty.
+The inclusion bars tell the same story predictor by predictor: $x_1$ and $x_2$, the true signals, sit
+close to one, while $x_3$ and $x_4$, one a proxy and one pure noise, sit well below the prior line of
+one half rather than above it.
+
 ## Backtesting: BMA against selection and benchmarks
 
 The real question is whether averaging helps out of sample. We run an expanding-window backtest: at
@@ -379,6 +415,40 @@ Cumulative differences show where the gains accrue, which matters because an edg
 months is not an edge. All three curves drift upwards fairly steadily, the signature of a real
 improvement, with the BMA line at or above the others through most of the sample. The per-period gains
 are a few hundredths of a log point, reflecting how small the predictable component is, but they add up.
+
+The mean top weight of about $0.44$ reported above hides how much the leading model's own weight moved
+through the backtest. The block below reruns the same expanding-window fit, this time keeping the full
+weight path of the three models that ended up best supported, reusing `fit_all`, `models`, `labels`
+and the `order` ranking computed earlier.
+
+**Reading the computation.** Each row of `W` is one date's full set of sixteen posterior model weights; only three columns of it are plotted. Early weights are noisy because they condition on very little data.
+
+```{python}
+top3 = order[:3]
+W = np.zeros((n_obs - n0, len(models)))
+for i, t in enumerate(range(n0, n_obs)):
+    w, _, _ = fit_all(np.arange(t), Z[t], r[t])
+    W[i] = w
+
+fig, ax = plt.subplots()
+for j in top3:
+    ax.plot(np.arange(n0, n_obs), W[:, j], label=labels[j])
+ax.set_xlabel("time  t"); ax.set_ylabel("posterior model weight")
+ax.legend()
+ax.set_title("Posterior model weights evolving over the backtest")
+plt.tight_layout()
+plt.show()
+
+print(f"weight on {labels[top3[0]]}: {W[:, top3[0]].min():.3f} to {W[:, top3[0]].max():.3f}, "
+      f"ending at {W[-1, top3[0]].max():.3f}")
+```
+
+Early in the backtest, with only a few dozen observations to go on, the three curves are close
+together and none dominates. As the sample grows the true model's weight climbs and the other two
+fade, though never to zero, and the ordering of the curves stays unsettled for a good part of the
+sample. This is why the mean top weight was well under one: the winner was rarely a foregone
+conclusion, which is exactly the situation in which BMA has something to offer over picking a single
+model early and never revisiting it.
 
 ## When averaging helps, and when it does not
 

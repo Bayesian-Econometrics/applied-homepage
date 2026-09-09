@@ -690,6 +690,27 @@ has, whereas a gradient-guided trajectory follows the ridge and pays for dimensi
 the crossover in favour of Hamiltonian Monte Carlo shows up only once dimension or curvature grows, which
 is exactly what the exercises at the end of this lecture ask you to locate.
 
+The autocorrelation plot already showed the efficiency gap in one number per lag; the same
+gap is visible directly in how the two chains move through parameter space, which the next
+block draws for the same three hundred kept sweeps used above.
+
+**Reading the computation.** Both panels trace the same number of kept sweeps of the two logistic-regression coefficients. A path that revisits the same neighbourhood repeatedly covers less ground per sweep than one that keeps moving to new territory.
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].plot(mh_post[:300, 0], mh_post[:300, 1], lw=0.6, color="steelblue")
+axes[0].set_title("Random-walk MH"); axes[0].set_xlabel(r"$\beta_0$"); axes[0].set_ylabel(r"$\beta_1$")
+axes[1].plot(hmc_post[:300, 0], hmc_post[:300, 1], lw=0.6, color="darkorange")
+axes[1].set_title("Hamiltonian Monte Carlo"); axes[1].set_xlabel(r"$\beta_0$")
+fig.suptitle("300 kept sweeps in the (beta0, beta1) plane")
+plt.tight_layout(); plt.show()
+```
+
+The random-walk path is a dense, tangled scribble confined to a small patch, consistent
+with its slower-decaying autocorrelation, while the Hamiltonian path covers a visibly
+larger area of the same two coordinates in the same number of kept sweeps, the geometric
+counterpart of the larger effective sample size reported in the efficiency table above.
+
 ## Case study: the Challenger disaster
 
 On 28 January 1986 the Space Shuttle Challenger broke apart 73 seconds into flight, killing all seven crew
@@ -737,6 +758,34 @@ print(f"alpha: mean {alpha_draws.mean():.3f}, sd {alpha_draws.std(ddof=1):.3f}")
 print(f"beta:  mean {beta_draws.mean():.4f}, sd {beta_draws.std(ddof=1):.4f}")
 print(f"P(beta < 0 | data) = {(beta_draws < 0).mean():.3f}")
 ```
+
+This posterior is genuinely two-dimensional, so its shape and the chain's path through it
+can both be drawn on one plot: the next block contours the unnormalised posterior in the
+centred parameters and overlays the first four hundred sweeps of the chain.
+
+**Reading the computation.** The shading is the target density on a grid of centred alpha and beta; the red line is the sequence of kept states the chain actually visited. A flat segment of the line is a run of rejected proposals; a jump is an accepted move.
+
+```{python}
+a_grid = np.linspace(chain_c[:, 0].min(), chain_c[:, 0].max(), 150)
+b_grid = np.linspace(chain_c[:, 1].min(), chain_c[:, 1].max(), 150)
+AG, BG = np.meshgrid(a_grid, b_grid)
+eta_grid = AG[:, :, None] + BG[:, :, None] * temp_c[None, None, :]
+logZ = ((fail * eta_grid - np.logaddexp(0.0, eta_grid)).sum(axis=2)
+        - 0.5 * AG**2 / tau2_c - 0.5 * BG**2 / tau2_c)
+
+fig, ax = plt.subplots()
+ax.contourf(AG, BG, np.exp(logZ - logZ.max()), levels=25, cmap="Blues")
+ax.plot(chain_c[:400, 0], chain_c[:400, 1], color="firebrick", lw=0.8)
+ax.set_xlabel(r"$\alpha$ (centred)"); ax.set_ylabel(r"$\beta$ (centred)")
+ax.set_title("Random-walk path over the Challenger posterior surface")
+plt.tight_layout(); plt.show()
+```
+
+The path threads back and forth across the ridge of high density, with visible flat
+stretches where a proposal was rejected and the chain sat still for several sweeps in a
+row, exactly the mechanism described when the acceptance ratio was first derived: rejected
+moves are not wasted iterations, they are the chain spending the extra time in a state
+that the posterior says it deserves.
 
 The slope on temperature is clearly negative and the posterior puts almost all of its mass there, so
 warmer launches are safer: on the log-odds scale each extra degree Fahrenheit changes the log-odds of an

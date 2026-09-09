@@ -293,6 +293,52 @@ factor out, which is why that pair's posterior standard deviations are several t
 that *at least one* of the pair is included stays close to one, and that is the honest summary: the posterior is
 nearly certain the shared risk source is priced and close to agnostic about which column stands for it.
 
+## What does an included coefficient's posterior look like next to an excluded one?
+
+The PIP table already tells us which factors are in and which are out; it is worth seeing the two kinds of posterior
+directly. The chunk below overlays the coefficient draws for a genuinely priced factor against those of the noise
+factor with the lowest inclusion probability.
+
+**Reading the computation.** Both histograms come from the same MCMC output as the PIP table above; nothing new is estimated, only displayed.
+
+```{python}
+noise_j = int(np.argmin(pip[7:]) + 7)          # the noise factor with the lowest PIP
+fig, ax = plt.subplots()
+ax.hist(beta_post[:, 0], bins=40, density=True, alpha=0.7,
+        label=f"{names[0]} (true factor, PIP {pip[0]:.2f})")
+ax.hist(beta_post[:, noise_j], bins=40, density=True, alpha=0.7,
+        label=f"{names[noise_j]} (noise, PIP {pip[noise_j]:.2f})")
+ax.set_xlabel("coefficient value"); ax.set_ylabel("posterior density")
+ax.set_title("Slab (included factor) versus spike (excluded factor)")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+```
+
+The true factor's draws spread widely around a coefficient well away from zero, the visible **slab**; the noise
+factor's draws pile up in a narrow **spike** hugging zero, and the two histograms barely overlap. This is the
+mixture prior made visible: the same two Normal components introduced in the derivation above, now shown as the
+posterior they actually produced.
+
+Model uncertainty is not only about which factors are in; it is also about how many. The next figure shows the
+posterior distribution of model size already summarised numerically above.
+
+**Reading the computation.** The model-size vector `size` was already computed for the printed summary; this histogram only displays its distribution.
+
+```{python}
+fig, ax = plt.subplots()
+ax.hist(size, bins=np.arange(size.min(), size.max() + 2) - 0.5, density=True,
+        color="0.5", alpha=0.8)
+ax.axvline(4, color="black", ls="--", lw=1, label="true number of priced factors")
+ax.set_xlabel("number of included factors"); ax.set_ylabel("posterior probability")
+ax.set_title("Posterior distribution of model size")
+ax.legend()
+plt.tight_layout(); plt.show()
+```
+
+The sampler visits a handful of sizes clustered around four, the true number of priced factors, rather than
+settling on one size with certainty: model-size uncertainty survives even though the median-probability model
+happens to recover the truth exactly.
+
 ## Dense shrinkage on the same data
 
 The dense alternative replaces the mixture with a single Normal prior $\beta \sim \mathcal{N}(0, \tau_r^2 I_p)$, whose
@@ -354,6 +400,33 @@ below the prior inclusion probability of 0.2: the data have actively argued the 
 red bar is the near-twin of factor 4. In the right panel the SSVS estimates track the genuine coefficients and then
 collapse onto the axis, while ridge leaves a carpet of small weights everywhere.
 
+### How much does the shrinkage strength matter?
+
+The ridge column above fixed $\lambda$ at its best in-sample value out of the forty tried; the next figure plots the
+whole sweep already computed for that table, so we can see how sharp that optimum really is, against the
+model-averaged SSVS $R^2$ for reference.
+
+**Reading the computation.** The predictive $R^2$ curve reuses the ridge sweep computed for the table above; only the plotting and the reference line are new.
+
+```{python}
+fig, ax = plt.subplots()
+ax.plot(lams, r2_ridge, color="C1", label="ridge, varying lambda")
+ax.axhline(pred_r2(post_mean), color="C0", ls="--", label="SSVS (model averaged)")
+ax.axvline(lams[np.argmax(r2_ridge)], color="grey", lw=1, ls=":",
+           label=f"best lambda = {lams[np.argmax(r2_ridge)]:.1f}")
+ax.set_xscale("log")
+ax.set_xlabel(r"ridge penalty $\lambda$"); ax.set_ylabel("out-of-sample predictive $R^2$")
+ax.legend(fontsize=8)
+ax.set_title("Ridge needs its penalty tuned; SSVS needs none")
+plt.tight_layout(); plt.show()
+```
+
+The ridge curve peaks gently around the marked value and degrades slowly on either side, so a moderately wrong
+penalty costs little, whereas an aggressively small one lets the noise factors back in and an aggressively large one
+shrinks the true factors away too. SSVS reaches a comparable $R^2$ without any such tuning, because its spike-and-slab
+prior chooses the effective shrinkage separately for each coefficient from the data rather than from one shared
+penalty.
+
 ## The illusion of sparsity
 
 The sparse posterior is the one that looks like the truth, since the truth we simulated is sparse, and it forecasts
@@ -372,6 +445,67 @@ performance is typically best when many coefficients contribute a little, and th
 set with confidence. Kozak, Nagel and Santosh reach a compatible conclusion for returns, where a dense combination of
 characteristic portfolios prices the cross-section better than any sparse model. So report a selected set as one
 summary of a posterior over models, alongside the model-size distribution and a dense benchmark, not as a discovery.
+
+### Does the predictive margin depend on how sparse the truth really is?
+
+The comparison above used one simulated truth with four active factors out of twenty-five. The next chunk
+resimulates the same design while varying the number of truly non-zero coefficients, refits a posterior-mean version
+of the SSVS sampler and a ridge regression at the penalty selected above for each, and scores both out of sample.
+
+**Reading the computation.** Each sparsity level draws a fresh true coefficient vector and a fresh sample, so the comparison is not conditional on one lucky draw. The ridge penalty is held fixed at the value selected earlier, to isolate the effect of sparsity rather than of retuning.
+
+```{python}
+def fit_ssvs_mean(Xd, yd, n_it=2000, bn=500):
+    pd_ = Xd.shape[1]
+    XtXd, Xtyd = Xd.T @ Xd, Xd.T @ yd
+    b = np.zeros(pd_); g = np.ones(pd_, dtype=bool); s2 = float(np.var(yd))
+    b_sum = np.zeros(pd_)
+    for t in range(n_it):
+        d = np.where(g, (c_slab * tau) ** 2, tau ** 2)
+        L = np.linalg.cholesky(XtXd / s2 + np.diag(1.0 / d))
+        b1 = np.linalg.solve(L.T, np.linalg.solve(L, Xtyd / s2))
+        b = b1 + np.linalg.solve(L.T, rng.standard_normal(pd_))
+        resid = yd - Xd @ b
+        s2 = 1.0 / rng.gamma(a0 + Xd.shape[0] / 2, 1.0 / (b0 + 0.5 * resid @ resid))
+        g = rng.random(pd_) < 1.0 / (1.0 + np.exp(-(log_prior_odds + slab_gain * b ** 2)))
+        if t >= bn:
+            b_sum += b
+    return b_sum / (n_it - bn)
+```
+
+```{python}
+sparsities = [1, 3, 5, 10, 15, 20]
+lam_fix = lams[np.argmax(r2_ridge)]
+r2_sparse, r2_dense = [], []
+for s in sparsities:
+    bt = np.zeros(p)
+    idx = rng.choice(p, s, replace=False)
+    bt[idx] = rng.choice([-0.4, 0.4], s)
+    yw = X_all @ bt + rng.normal(0, 1.0, n_all)
+    Xw_tr, yw_tr, Xw_te, yw_te = X_all[:n_train], yw[:n_train], X_all[n_train:], yw[n_train:]
+    b_s = fit_ssvs_mean(Xw_tr, yw_tr)
+    b_r = np.linalg.solve(Xw_tr.T @ Xw_tr + lam_fix * np.eye(p), Xw_tr.T @ yw_tr)
+    ref = yw_te - yw_tr.mean()
+    err_s, err_r = yw_te - Xw_te @ b_s, yw_te - Xw_te @ b_r
+    r2_sparse.append(1 - err_s @ err_s / (ref @ ref))
+    r2_dense.append(1 - err_r @ err_r / (ref @ ref))
+
+fig, ax = plt.subplots()
+ax.plot(sparsities, r2_sparse, "o-", label="SSVS (posterior mean)")
+ax.plot(sparsities, r2_dense, "s-", label="ridge (fixed lambda)")
+ax.set_xlabel("number of truly non-zero coefficients (out of 25)")
+ax.set_ylabel("out-of-sample predictive $R^2$")
+ax.legend(); ax.set_title("The sparse-versus-dense margin depends on how sparse the truth is")
+plt.tight_layout(); plt.show()
+
+print(f"SSVS minus ridge R^2 at sparsity {sparsities[0]}: {r2_sparse[0]-r2_dense[0]:.4f}; "
+      f"at sparsity {sparsities[-1]}: {r2_sparse[-1]-r2_dense[-1]:.4f}")
+```
+
+With very few truly active factors SSVS's advantage over ridge is at its widest; as more coefficients become
+genuinely non-zero the simulated truth itself turns dense and the printed gap narrows, illustrating from the other
+direction the point Giannone, Lenza and Primiceri make about real data: a sparse prior's apparent edge is a property
+of how sparse the world actually is, not of the method, so it must be checked rather than assumed.
 
 ## Takeaways
 

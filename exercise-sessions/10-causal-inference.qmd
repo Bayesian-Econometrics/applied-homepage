@@ -26,7 +26,13 @@ Submit your derivation, runnable code, and a short interpretation. State the pri
 
 ## Reference implementation
 
-This reference implementation uses `pymc` and `pymc-bart`. It is displayed without automatic execution in the website build; run it in a course environment containing those packages. The remaining sessions use NumPy, pandas, SciPy and Matplotlib.
+A full BART fit normally uses `pymc` and `pymc-bart`, which are not part of this course
+website's build. The reference below is a runnable NumPy stand-in: it keeps BART's
+mechanism, many weak additive learners tied down by a shrinkage prior and fitted by
+Bayesian backfitting, but fixes the split points in advance instead of learning tree
+structure. It fits the treatment indicator as an ordinary predictor alongside the
+stump ensemble, so every posterior draw of the ensemble is one posterior surface draw,
+exactly as a real BART fit would deliver.
 
 The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
 
@@ -34,71 +40,139 @@ The code implements the model above in a reproducible standalone example. Identi
 ## Show the reference implementation
 
 ```{python}
-#| eval: false
 import numpy as np
-import pymc as pm
-import pymc_bart as pmb
+import matplotlib.pyplot as plt
 
-SEED, N, DRAWS, TUNE = 2026, 250, 600, 600
+SEED, N = 2026, 300
 rng = np.random.default_rng(SEED)
 x = rng.normal(size=N)
 propensity = 1/(1+np.exp(-.7*x))
 treatment = rng.binomial(1,propensity)
-truth = 1.5+.4*x
-y = np.sin(2*x)+.5*x**2+treatment*truth+rng.normal(size=N)
-training = np.column_stack([treatment,x])
-with pm.Model() as model:
-    features = pm.Data('features',training)
-    mu = pmb.BART('mu',features,y,m=30)
-    sigma = pm.HalfNormal('sigma',1.5)
-    outcome = pm.Normal('outcome',mu,sigma,observed=y,shape=mu.shape)
-    idata = pm.sample(draws=DRAWS,tune=TUNE,chains=2,cores=1,random_seed=SEED,
-                      progressbar=False)
-counterfactual = np.vstack([np.column_stack([np.ones(N),x]),
-                           np.column_stack([np.zeros(N),x])])
-with model:
-    pm.set_data({'features':counterfactual})
-    prediction = pm.sample_posterior_predictive(idata,var_names=['mu'],
-                    predictions=True,random_seed=SEED+1,progressbar=False)
-surfaces = prediction.predictions['mu'].values.reshape(-1,2*N)
-effects = (surfaces[:,:N]-surfaces[:,N:]).mean(axis=1)
-print('Raw contrast:',y[treatment==1].mean()-y[treatment==0].mean())
-print('True empirical average effect:',truth.mean())
-print('BART posterior mean and interval:',effects.mean(),np.quantile(effects,[.025,.975]))
-print(pm.summary(idata,var_names=['sigma']))
+tau_true = 1.5+.4*x
+f_x = np.sin(2*x)+.5*x**2
+y = f_x+treatment*tau_true+rng.normal(size=N)
+print(f'share treated {treatment.mean():.3f}')
+print('Raw contrast:',round(y[treatment==1].mean()-y[treatment==0].mean(),3))
+print('True average effect:',round(tau_true.mean(),3))
+
+M = 25
+cuts = np.linspace(x.min(),x.max(),M+2)[1:-1]
+Bstump = (x[:,None] > cuts[None,:]).astype(float)
+Bsq, Zc = (Bstump*Bstump).sum(0), np.column_stack([np.ones(N),treatment])
+
+def draw_gaussian(Xd,yd,s2,prec0,rng):
+    V = np.linalg.inv(Xd.T @ Xd/s2 + prec0)
+    return V @ (Xd.T @ yd/s2) + np.linalg.cholesky(V) @ rng.standard_normal(Xd.shape[1])
+
+sa2 = (0.8*y.std())**2/M
+c0 = d0 = 0.01
+n_bf, burn_bf = 1500, 400
+a, sigma2, g = np.zeros(M), y.var(), np.zeros(N)
+tau_draws = np.empty(n_bf)
+surface_draws = np.empty((n_bf,N))
+for t in range(n_bf):
+    theta_c = draw_gaussian(Zc, y-g, sigma2, np.eye(2)/100.0, rng)
+    base = y - Zc @ theta_c
+    r = base - g
+    for m in range(M):
+        r = r + a[m]*Bstump[:,m]
+        prec = Bsq[m]/sigma2 + 1.0/sa2
+        a[m] = (Bstump[:,m] @ r/sigma2)/prec + rng.standard_normal()/np.sqrt(prec)
+        r = r - a[m]*Bstump[:,m]
+    g = base - r
+    e = y - Zc @ theta_c - g
+    sigma2 = 1.0/rng.gamma(c0+N/2, 1.0/(d0+0.5*e @ e))
+    tau_draws[t] = theta_c[1]
+    surface_draws[t] = theta_c[0] + g
+tau_post = tau_draws[burn_bf:]
+surface_draws = surface_draws[burn_bf:]
+print('Stump-ensemble posterior mean and 95% interval for tau:',
+      round(tau_post.mean(),3), np.round(np.quantile(tau_post,[.025,.975]),3))
 ```
 
-The code learns tree structures with PyMC-BART rather than fixing stump
-locations. Predicting both arms in one call preserves their shared surface draw.
-This is uncertainty about an average conditional effect under the identifying
-assumptions. Inspect multiple chains and repeat the fit before interpreting a
-narrow interval as numerical precision. See the official PyMC-BART documentation
-linked below for model and predictive APIs.
+The naive contrast mixes the treatment effect with confounding, since treatment
+probability and the curvature of $f(x)$ both depend on $x$. The stump ensemble
+absorbs that curvature through backfitting, one learner at a time, and the treatment
+coefficient $\theta_{c,1}$ drawn alongside it is a genuine posterior draw of the
+average treatment effect: both potential-outcome predictions below come from the
+same surface draw, as the derivation above requires.
 :::
+
+## What the result looks like
+
+The first figure compares the posterior of the average treatment effect with the
+known simulated truth. The second shows the fitted response surface, illustrating
+where the ensemble tracks the confounding curve closely and where its band widens
+because covariate overlap between treated and untreated units is weaker.
+
+```{python}
+fig, ax = plt.subplots()
+ax.hist(tau_post, bins=40, density=True, color='steelblue', alpha=.85, label='posterior of tau')
+ax.axvline(tau_true.mean(), color='black', ls=':', lw=1.8, label='true average effect')
+ax.axvline(y[treatment==1].mean()-y[treatment==0].mean(), color='darkorange', ls='--',
+           lw=1.6, label='raw (naive) contrast')
+ax.set(xlabel=r'average treatment effect $\tau$', ylabel='posterior density',
+       title='Posterior ATE recovers the truth; the raw contrast does not')
+ax.legend(fontsize=8)
+plt.tight_layout()
+plt.show()
+
+order = np.argsort(x)
+fit_mean = surface_draws.mean(0)
+fit_lo, fit_hi = np.quantile(surface_draws, [.025,.975], axis=0)
+fig, ax = plt.subplots()
+ax.plot(x[order], f_x[order], color='black', lw=1.6, label='true f(x)')
+ax.plot(x[order], fit_mean[order], color='steelblue', lw=1.4, label='fitted surface (intercept)')
+ax.fill_between(x[order], fit_lo[order], fit_hi[order], color='steelblue', alpha=.25,
+                label='95% band')
+ax.scatter(x[treatment==0], y[treatment==0], s=8, color='grey', alpha=.4, label='untreated units')
+ax.set(xlabel='confounder x', ylabel='response', title='Fitted response surface vs. true curve')
+ax.legend(fontsize=8)
+plt.tight_layout()
+plt.show()
+```
+
+The stump ensemble learns a fixed-basis approximation to BART rather than searching
+over tree structure, but the mechanism it shares with BART, many weak learners shrunk
+hard and fitted by backfitting, is what absorbs the confounding curvature. Predicting
+the treatment coefficient alongside the ensemble on every backfitting sweep preserves
+the same draw-wise dependence a real BART fit would give when predicting both potential
+outcomes together. Inspect the width of the response-surface band in the tails of $x$
+before trusting a narrow posterior for $\tau$ there.
 
 ## Discuss the results
 
-The code learns tree structures with PyMC-BART rather than fixing stump
-locations. Predicting both arms in one call preserves their shared surface draw.
-This is uncertainty about an average conditional effect under the identifying
-assumptions. Inspect multiple chains and repeat the fit before interpreting a
-narrow interval as numerical precision. See the official PyMC-BART documentation
-linked below for model and predictive APIs.
+The stump ensemble learns a fixed-basis approximation to BART rather than searching
+over tree structure, but the mechanism it shares with BART, many weak learners shrunk
+hard and fitted by backfitting, is what absorbs the confounding curvature. Predicting
+the treatment coefficient alongside the ensemble on every backfitting sweep preserves
+the same draw-wise dependence a real BART fit would give when predicting both potential
+outcomes together. Inspect the width of the response-surface band in the tails of $x$
+before trusting a narrow posterior for $\tau$ there.
 
 Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the stump-ensemble adjustment above.
 
-1. Weaken the instrument by setting the slope in `gamma_iv` to $0.15$ and rerun the Gibbs sampler.
-   Describe what happens to the width and coverage of the posterior for $\beta$, and why.
-2. Set `rho_iv` to zero, so the regressor is exogenous. Compare the Bayesian IV posterior with the
-   least-squares interval and explain why instrumenting is now a cost rather than a cure.
-3. Multiply `sa2` by one hundred to remove most of the shrinkage, then describe what happens to the
-   fitted surface in the sparse tails of $X$ and to the credible interval for $\tau$.
-4. Make the treatment effect heterogeneous, say $\tau_i = 2 + 0.8 X_i$, and explain why the
-   constant-$\tau$ specification then estimates a weighted average of the individual effects.
+1. Refit the ensemble with the propensity model changed so treatment depends on $x$
+   linearly, `propensity = 1/(1+np.exp(-.7*x))` replaced by
+   `1/(1+np.exp(-.7*(x-1)))`, weakening overlap in one tail. Report the posterior mean
+   and interval for $\tau$ and describe how the response-surface band changes where few
+   treated (or few untreated) units remain.
+2. Multiply `sa2` by one hundred to remove most of the shrinkage on the stump amplitudes,
+   then report the new posterior mean and interval for $\tau$ and describe what happens to
+   the fitted surface in the sparse tails of $x$.
+3. Derive, from the leaf-conditional formula $V_\ell=(s_\mu^{-2}+n_\ell/\sigma^2)^{-1}$,
+   why a stump covering few observations is shrunk harder than one covering many, and
+   confirm numerically that the posterior standard deviation of `a[m]` is larger for a
+   cut point near the edge of the data than for one near its centre.
+4. A policy team must decide whether to extend the programme to firms whose confounder
+   $x$ lies outside the range seen in this sample. Using the width of the response-surface
+   band near the edges of $x$ from the figure above, explain why the posterior for $\tau$
+   at those firms would understate the team's true uncertainty, and what that implies for
+   extending the policy on the basis of this model alone.
 
 ## Implementation reference
 

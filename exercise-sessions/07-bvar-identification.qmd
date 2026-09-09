@@ -76,12 +76,20 @@ accepted = np.asarray(accepted)
 assert len(accepted) > 0
 band = np.quantile(accepted,[.16,.5,.84],axis=0)
 print(f'Accepted rotations: {len(accepted)}/{ITER-BURN}')
+
+recursive = np.array([np.linalg.matrix_power(B[1:].T,h) @ np.linalg.cholesky(Sigma)[:,0]
+                      for h in range(H+1)])
+
 fig, axes = plt.subplots(1,3,figsize=(11,3.2))
 for j,name in enumerate(['output','inflation','rate']):
-    axes[j].plot(range(H+1),band[1,:,j],color='steelblue')
-    axes[j].fill_between(range(H+1),band[0,:,j],band[2,:,j],alpha=.2)
+    axes[j].plot(range(H+1),band[1,:,j],color='steelblue',label='sign-restricted median')
+    axes[j].fill_between(range(H+1),band[0,:,j],band[2,:,j],alpha=.2,color='steelblue',
+                         label='68% band')
+    axes[j].plot(range(H+1),recursive[:,j],color='darkorange',ls='--',label='recursive (Cholesky)')
     axes[j].axhline(0,color='grey',lw=.7)
-    axes[j].set(title=name,xlabel='horizon')
+    axes[j].set(title=name,xlabel='horizon',ylabel='response')
+axes[0].legend(fontsize=8)
+fig.suptitle('Policy-shock impulse responses: sign-restricted band vs. recursive path')
 plt.tight_layout()
 plt.show()
 ```
@@ -91,6 +99,45 @@ additional stability restriction. Check the posterior eigenvalues before long-ho
 interpretation. One proposed rotation per draw gives a joint parameter/rotation
 sample conditioned on admissibility; repeatedly searching until every parameter
 draw has an admissible rotation changes the implied weighting.
+
+The chunk below reuses the stored posterior draws to ask how sensitive the accepted
+share is to the restriction horizon: imposing the signs at horizons 0–2 only, versus
+extending them to horizons 0–4.
+
+```{python}
+def acceptance_share(horizon_span, n_check=400):
+    hits = 0
+    for Sigma_draw in covariance_draws[:n_check]:
+        rotation, triangular = np.linalg.qr(rng.standard_normal((M,M)))
+        rotation *= np.sign(np.diag(triangular))
+        impact = np.linalg.cholesky(Sigma_draw) @ rotation
+        responses = np.array([np.linalg.matrix_power(B[1:].T,h) @ impact[:,0]
+                              for h in range(horizon_span+1)])
+        for sign in [1.,-1.]:
+            candidate = sign*responses
+            if (candidate[:,:2] < 0).all() and (candidate[:,2] > 0).all():
+                hits += 1
+                break
+    return hits/min(n_check,len(covariance_draws))
+
+spans = [1,2,4]
+shares = [acceptance_share(h) for h in spans]
+print('Acceptance share by restriction horizon:',
+      {f'0-{h}':round(s,3) for h,s in zip(spans,shares)})
+
+fig, ax = plt.subplots()
+ax.bar([f'0–{h}' for h in spans], shares, color='steelblue')
+ax.set_xlabel('sign-restriction horizon window')
+ax.set_ylabel('acceptance share')
+ax.set_title('Longer restriction horizons accept fewer rotations')
+plt.tight_layout()
+plt.show()
+```
+
+Extending the restriction to more horizons is a stronger joint requirement, so it
+mechanically accepts a smaller share of proposed rotations: this is the identification
+uncertainty referred to above, made visible as a shrinking admissible set rather than
+a change in the underlying parameter posterior.
 :::
 
 ## Discuss the results
@@ -105,13 +152,22 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the sign-restricted BVAR lab above.
 
-1. Re-estimate with a much tighter prior ($\lambda_1 = 0.02$) and a much looser one ($\lambda_1 = 2.0$),
-   reporting how the posterior means and the width of the forecast bands change.
-2. Extend the simulation and estimation to a VAR(2), verifying that `build_xy` and the Minnesota prior
-   handle the extra lag and that the lag-2 coefficients are shrunk harder than the lag-1 coefficients.
-3. Replace the two-block scheme by a Gibbs sampler over $\Sigma$ and $B$, and compare the bands.
-4. Impose one restriction fewer, dropping the requirement that output falls, and report how the accepted
-   share and the width of the bands respond. What does that say about the price of weak assumptions?
-5. Compute recursive output responses under all six orderings; how many lie in the sign-restricted band?
+1. Re-run the sign-restriction search imposing the signs only at horizon 0 (instead of
+   horizons 0–2) and again at horizons 0–4. Report the acceptance share in each case
+   alongside the ones already printed, and describe how the width of the output band
+   changes as the restriction window grows.
+2. Multiply the prior standard deviations `Vdiag` by ten (a much looser Minnesota prior)
+   and rerun the sampler. Report the new acceptance share and the posterior median
+   response of output at horizon 2, and explain why a looser coefficient prior changes
+   how often a randomly rotated shock satisfies the signs.
+3. Derive, for a single retained coefficient draw, why $CC^\top = \Sigma$ for any
+   orthogonal $Q$ in $C = PQ$ with $PP^\top = \Sigma$, and confirm numerically that the
+   accepted impact matrices in the reference code all satisfy `impact @ impact.T` equal
+   to the corresponding `Sigma` draw to numerical precision.
+4. A trading desk wants to know how much of the estimated output response is really
+   pinned down by the sign restrictions rather than by the data. Using the acceptance
+   shares from question 1, argue whether the desk should treat the 0–4 horizon result as
+   more or less reliable than the 0–2 horizon result, and connect the answer to the price
+   of imposing more identifying assumptions than the data alone can adjudicate.

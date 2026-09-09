@@ -37,6 +37,7 @@ The code implements the model above in a reproducible standalone example. Identi
 import numpy as np
 import pandas as pd
 from scipy import stats
+import matplotlib.pyplot as plt
 
 SEED, N = 2026, 60
 rng = np.random.default_rng(SEED)
@@ -56,10 +57,25 @@ assert np.isclose(Q, residual @ residual + (b1-b0) @ P0 @ (b1-b0))
 a1, d1 = a0 + N/2, d0 + Q/2
 scale = np.sqrt(d1/a1 * np.diag(B1))
 beta_dist = stats.t(df=2*a1, loc=b1[1], scale=scale[1])
+ols_beta = np.linalg.lstsq(X, y, rcond=None)[0][1]
 pd.DataFrame({'mean': b1, 'posterior sd': np.sqrt(d1/(a1-1)*np.diag(B1)),
               'lower': b1 + stats.t.ppf(.025, 2*a1)*scale,
               'upper': b1 + stats.t.ppf(.975, 2*a1)*scale}, index=['alpha', 'beta'])
 print(f'P(beta > 1 | data) = {beta_dist.sf(1):.3f}')
+```
+
+```{python}
+beta_grid = np.linspace(b1[1] - 5*scale[1], b1[1] + 5*scale[1], 400)
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(beta_grid, beta_dist.pdf(beta_grid), color='steelblue', label='marginal posterior')
+prior_scale = np.sqrt(d0/(a0-1) * B0[1, 1])
+ax.plot(beta_grid, stats.norm.pdf(beta_grid, b0[1], prior_scale), color='grey', ls='--', label='prior')
+ax.axvline(ols_beta, color='black', ls=':', label='OLS estimate')
+ax.set(xlabel=r'$\beta$', ylabel='density',
+       title='Marginal posterior for the CAPM beta')
+ax.legend()
+plt.tight_layout()
+plt.show()
 ```
 
 The Student-t scale uses d1/a1, whereas its variance uses d1/(a1−1).
@@ -67,6 +83,30 @@ The posterior mean need not equal the simulated true beta. The simulation is a
 known-data-generating-process example for learning the update, not real CAPM evidence.
 The two expressions for Q provide an independent algebraic implementation check.
 :::
+
+## What the result looks like
+
+```{python}
+tightness = np.array([0.05, 0.1, 0.25, 0.5, 1.0, 2.0])
+posterior_sd = []
+for tau in tightness:
+    B0_t = np.diag(np.array([0.01, tau])**2 / (d0/(a0-1)))
+    P0_t = np.linalg.inv(B0_t)
+    P1_t = P0_t + X.T @ X
+    B1_t = np.linalg.inv(P1_t)
+    b1_t = np.linalg.solve(P1_t, P0_t @ b0 + X.T @ y)
+    Q_t = y @ y + b0 @ P0_t @ b0 - b1_t @ P1_t @ b1_t
+    a1_t, d1_t = a0 + N/2, d0 + Q_t/2
+    posterior_sd.append(np.sqrt(d1_t/(a1_t-1) * B1_t[1, 1]))
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(tightness, posterior_sd, marker='o', color='darkorange', label='posterior sd of beta')
+ax.set(xlabel='prior sd of beta', ylabel='posterior sd of beta',
+       title='Prior-tightness sweep for the CAPM beta')
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
 
 ## Discuss the results
 
@@ -79,18 +119,19 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following items extend this week's manual NIG update for the CAPM beta.
 
-1. Derive $B_1^{-1} = B_0^{-1} + X^\top X$ and $b_1 = B_1(B_0^{-1}b_0 + X^\top y)$ by
-   expanding the two quadratic forms and matching coefficients, then show that $Q$ is the
-   constant left over.
-2. Write $b_1$ as the matrix-weighted average $W b_0 + (I - W)\hat\beta_{\text{OLS}}$,
-   identify $W$, and verify your expression numerically with the prior and data above.
-3. Rewrite `nig_update` with a Cholesky factorisation and `scipy.linalg.cho_solve` in
-   place of `np.linalg.inv`. Why is an explicit inverse a bad idea when $X^\top X$ is
-   ill-conditioned?
-4. Using the composition draws, estimate the posterior probability that alpha is positive
-   and that beta exceeds one, under the informative and the diffuse prior. Which pair
-   would you report to a portfolio manager, and why?
-5. Raise $\alpha_0$ while holding $\bar\sigma^2$ fixed, and describe what happens to $\nu$
-   and to the width of the marginal posterior of $\beta_1$.
+1. Repeat the NIG update above for a design with two market factors (add a size-factor
+   column to $X$, drawn independently from the same normal as the market factor) and
+   report all four posterior parameters and dimensions for the enlarged matrix problem.
+2. Sensitivity check: recompute $b_1$, $B_1$, $a_1$ and $d_1$ after halving the sample to
+   the first thirty observations, both for the prior above and for a prior ten times
+   tighter on beta. Separate how much of the change in the posterior sd comes from less
+   data against a tighter prior.
+3. Derive $b_1$ as the matrix-weighted average $W b_0 + (I - W)\hat\beta_{\text{OLS}}$,
+   identify $W$ in terms of $P_0$ and $X^\top X$, and confirm the identity numerically
+   against the $b_1$ computed by the matrix update above.
+4. A risk manager will only treat a stock as market-neutral hedge material if
+   $P(\beta > 1 \mid y)$ falls below 0.1. Recompute this probability under the diffuse
+   prior ($B_0$ scaled up tenfold) and under the informative prior used above, and state
+   which prior the risk manager should insist on and why.

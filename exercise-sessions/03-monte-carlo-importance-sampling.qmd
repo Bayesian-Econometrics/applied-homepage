@@ -38,6 +38,7 @@ The code implements the model above in a reproducible standalone example. Identi
 import numpy as np
 import pandas as pd
 from scipy import stats
+import matplotlib.pyplot as plt
 
 SEED, N, S = 2026, 252, 30000
 DT, HORIZON = 1/252, 0.5
@@ -57,7 +58,8 @@ def conditional_call(v: np.ndarray | float, spot: float, strike: float, rate: fl
     return spot*stats.norm.cdf(d_1)-strike*np.exp(-rate*horizon)*stats.norm.cdf(d_1-sd)
 
 prices = conditional_call(variance, SPOT, STRIKE, RATE, HORIZON)
-table = pd.DataFrame({'value': [payoffs.mean(), prices.mean(), conditional_call(d1/(a1-1), SPOT, STRIKE, RATE, HORIZON)],
+plugin_price = conditional_call(d1/(a1-1), SPOT, STRIKE, RATE, HORIZON)
+table = pd.DataFrame({'value': [payoffs.mean(), prices.mean(), plugin_price],
                       'MCSE': [payoffs.std(ddof=1)/np.sqrt(S),
                                prices.std(ddof=1)/np.sqrt(S), 0]},
                      index=['nested simulation', 'conditional expectation', 'plug-in'])
@@ -65,11 +67,41 @@ print(table.round(4))
 print('95% posterior interval for conditional price:', np.quantile(prices, [.025, .975]))
 ```
 
+```{python}
+running_mean = np.cumsum(payoffs) / np.arange(1, S+1)
+running_se = np.array([payoffs[:s].std(ddof=1)/np.sqrt(s) for s in range(2, S+1)])
+sample_index = np.arange(2, S+1)
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(sample_index, running_mean[1:], color='steelblue', label='running MC price')
+ax.fill_between(sample_index, running_mean[1:]-1.96*running_se, running_mean[1:]+1.96*running_se,
+                color='steelblue', alpha=0.25, label='95% MCSE band')
+ax.axhline(plugin_price, color='black', ls=':', label='plug-in price')
+ax.set(xlabel='number of simulations', ylabel='option price',
+       title='Monte Carlo price converging with its standard-error band')
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
 The two Monte Carlo methods target the same posterior-averaged conditional
 price. The second integrates out the terminal-price shock analytically. Its
 MCSE is numerical error, while the interval across conditional prices describes
 parameter uncertainty. Neither interval is a prediction interval for the option payoff.
 :::
+
+## What the result looks like
+
+```{python}
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.hist(prices, bins=60, density=True, color='steelblue', alpha=0.7, label='predictive price distribution')
+ax.axvline(plugin_price, color='black', ls=':', label='plug-in price')
+ax.set(xlabel='conditional call price', ylabel='density',
+       title='Predictive price distribution against the plug-in price')
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
 
 ## Discuss the results
 
@@ -82,26 +114,17 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following items extend this week's vanilla Monte Carlo option-pricing simulator.
 
-1. For the $\text{Beta}(14, 8)$ posterior, derive and then verify numerically the number
-   of direct Monte Carlo draws needed so that the MCSE of the estimated posterior mean
-   is below $0.001$.
-2. Estimate $\Pr(\theta > 0.9 \mid y)$ for the same posterior by direct Monte Carlo with
-   $S = 5000$. Explain, using the Bernoulli variance $p(1-p)$, why the *relative* Monte
-   Carlo error of a small tail probability is so much larger than that of the posterior
-   mean at the same $S$.
-3. Repeat the truncated-normal coin importance-sampling example with a
-   $\text{Beta}(5, 3)$ proposal and report the effective sample size. Then choose a
-   proposal that is far too narrow and show the ESS collapsing, as with
-   $\text{Beta}(2, 10)$ above.
-4. Show algebraically that as a self-normalised importance-sampling proposal $q$
-   approaches the target $p$, every importance weight approaches a constant and the ESS
-   approaches $S$. Confirm this numerically by proposing from $\text{Beta}(9, 5)$, close
-   to the true posterior, and comparing its ESS with the uniform proposal's.
-5. Vanilla Monte Carlo option pricing. Extend the option-pricing simulator to a put
-   option, and compute by simulation the probability that the option with parameter
-   uncertainty finishes in the money, comparing it with the plug-in probability that
-   uses only the posterior mean volatility. Then repeat the price comparison with a
-   posterior for $\sigma^2$ that is twice as uncertain (halve $a_0$) and comment on how
-   the price gap responds.
+1. Extend the simulator above to a European put option with the same strike and horizon,
+   and report its nested-simulation price, its conditional-expectation price and its
+   plug-in price, alongside the MCSE for each Monte Carlo estimate.
+2. Sensitivity check: halve $a_0$ so the variance posterior is twice as uncertain, rerun
+   the simulator, and report how the gap between the conditional-expectation price and the
+   plug-in price responds. Repeat once more with $a_0$ doubled and summarise the pattern.
+3. Derive the number of simulations $S$ needed so that the MCSE of the conditional-expectation
+   price falls below one cent, using the sample standard deviation of `prices` from the
+   reference implementation, then confirm your value by rerunning the simulator at that $S$.
+4. A trading desk will only quote the option if the 95% interval across conditional prices
+   is narrower than 0.50. Using the reference implementation's posterior interval, decide
+   whether the desk can quote at $a_0=4$, and repeat the check after halving $a_0$.

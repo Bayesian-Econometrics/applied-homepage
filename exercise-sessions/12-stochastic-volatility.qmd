@@ -34,6 +34,7 @@ The code implements the model above in a reproducible standalone example. Identi
 
 ```{python}
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy import stats
 
 SEED, T = 2026, 160
@@ -138,6 +139,37 @@ are densities with respect to variance ds, evaluated at log(s). Mixing measures
 must not silently compare a density in ds with one in dlog(s).
 :::
 
+## What the result looks like
+
+```{python}
+h_mean = h_draws.mean(0)
+h_lower, h_upper = np.quantile(h_draws, [.05, .95], axis=0)
+fig, ax = plt.subplots()
+ax.plot(truth, color='black', lw=1, label='simulated true log-volatility')
+ax.plot(h_mean, color='tab:blue', lw=1.2, label='posterior mean')
+ax.fill_between(np.arange(T), h_lower, h_upper, color='tab:blue', alpha=.25,
+                 label='90% credible band')
+ax.set_xlabel('time'); ax.set_ylabel(r'log-volatility $h_t$')
+ax.set_title('JPR-filtered log-volatility path')
+ax.legend()
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots()
+ax.hist(par_draws[:, 1], bins=40, color='tab:orange', density=True,
+        label='posterior draws')
+ax.axvline(phi_true, color='black', linestyle='--', label='true persistence')
+ax.set_xlabel(r'persistence $\phi$'); ax.set_ylabel('density')
+ax.set_title('Posterior of the persistence parameter')
+ax.legend()
+plt.tight_layout(); plt.show()
+```
+
+The credible band covers the simulated path for most of the sample, with the
+usual occasional excursions of the truth outside a 90% interval that a short
+teaching run should show rather than hide. The persistence histogram is
+concentrated near the generating value of `phi_true`, though a run this short
+still leaves visible posterior spread.
+
 ## Discuss the results
 
 The teaching run is deliberately short enough to inspect. A true value need not
@@ -151,19 +183,20 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the JPR sampler and simulation used above.
 
-1. Rerun the sampler with $\phi = 0.99$ and with $\phi = 0.85$, holding $\sigma_h$ fixed,
-   and explain why the near-unit-root case gives the larger inefficiency factor.
-2. Replace the informative inverse-gamma prior on $\sigma_h^2$ by a nearly flat one, for
-   instance $c_0 = d_0 = 0.01$, and describe what happens to the posterior of $\phi$ and
-   to the smoothness of the estimated volatility path.
-3. Change the Metropolis step to a random-walk proposal $h_t^{\text{new}} = h_t + \tau
-   \varepsilon$, tune $\tau$ to an acceptance rate near one third, and compare the
-   inefficiency factor of a mid-sample $h_t$ with that of the sampler above.
-4. Compute the posterior predictive distribution of $h_{T+1}, \dots, h_{T+20}$ by
-   iterating the state equation forward for every retained draw and plot the forecast fan.
-   How much of the uncertainty is parameter rather than shock uncertainty?
-5. Derive the mean and variance of $\log u_t^2$ for $u_t \sim \mathcal{N}(0,1)$, verify
-   them by simulation, and use the variance to argue why one observation is so
-   uninformative about $h_t$ when $\sigma_h$ is small.
+1. Rerun the simulation and sampler with `phi_true = 0.99` and again with `phi_true = 0.85`,
+   holding `sig_true` fixed, and report how the width of the posterior of `phi` and the
+   credible band on `h` change between the near-unit-root and the more mean-reverting case.
+2. Replace the informative inverse-Gamma prior on $\sigma_h^2$ (`c0, d0`) by a much flatter
+   one, for instance `c0 = d0 = 0.01`, and describe what happens to the posterior mean of
+   `phi` and to the visual smoothness of the filtered path plotted above.
+3. Derive the moment-matching equations used to build the inverse-Gamma accept-reject
+   blanket, `a_ln = 2 + 1/expm1(variance)` and `b_ln = (a_ln - 1) * exp(mean + variance/2)`,
+   from setting the lognormal and inverse-Gamma means and variances equal, then confirm
+   numerically that a large sample from the resulting inverse-Gamma has mean and variance
+   within simulation error of the lognormal targets for several values of `variance`.
+4. A risk manager scales portfolio exposure inversely with $\exp(h_t/2)$. Using the
+   posterior mean path plotted above, compare the implied exposure at the highest- and
+   lowest-volatility dates in the sample, and state whether the 90% credible band would
+   change your willingness to act on the mean path alone.

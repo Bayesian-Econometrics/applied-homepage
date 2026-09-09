@@ -35,6 +35,7 @@ The code implements the model above in a reproducible standalone example. Identi
 ```{python}
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from scipy.special import expit
 
 SEED, N, K, ITER, BURN = 2026, 180, 12, 2500, 700
@@ -59,7 +60,8 @@ for s in range(ITER):
     variance = 1/rng.gamma(3+N/2,1/(2+residual @ residual/2))
     if s >= BURN:
         indicators[s-BURN], coefficients[s-BURN] = included,beta
-print(pd.DataFrame({'true':truth,'PIP':indicators.mean(0),'mean':coefficients.mean(0)}))
+pips = indicators.mean(0)
+print(pd.DataFrame({'true':truth,'PIP':pips,'mean':coefficients.mean(0)}))
 print('P(at least one of factors 1 and 2):',np.mean(indicators[:,:2].sum(1)>0))
 ```
 
@@ -68,6 +70,40 @@ The union probability is calculated from joint draws; adding PIPs would count
 joint inclusions twice. A PIP is conditional on the factor set and prior, so it
 is not a universal measure of a factor's economic truth.
 :::
+
+## What the result looks like
+
+```{python}
+fig, ax = plt.subplots()
+colours = ['tab:red' if truth[j] != 0 else 'tab:blue' for j in range(K)]
+ax.bar(np.arange(K), pips, color=colours)
+ax.axhline(PI, color='grey', linestyle='--', label='prior inclusion probability')
+ax.set_xlabel('factor index'); ax.set_ylabel('posterior inclusion probability')
+ax.set_title('SSVS posterior inclusion probabilities')
+ax.set_xticks(np.arange(K))
+handles = [plt.Rectangle((0, 0), 1, 1, color='tab:red'),
+           plt.Rectangle((0, 0), 1, 1, color='tab:blue'),
+           plt.Line2D([0], [0], color='grey', linestyle='--')]
+ax.legend(handles, ['truly relevant factor', 'noise factor', 'prior inclusion probability'])
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots()
+relevant, noise = [0, 4], [2, 7]
+for j in relevant:
+    ax.hist(coefficients[:, j], bins=40, alpha=.5, density=True, label=f'included, factor {j}')
+for j in noise:
+    ax.hist(coefficients[:, j], bins=40, alpha=.5, density=True, label=f'excluded, factor {j}')
+ax.set_xlabel(r'posterior draw of $\beta_j$'); ax.set_ylabel('density')
+ax.set_title('Coefficient shrinkage: included versus excluded factors')
+ax.legend()
+plt.tight_layout(); plt.show()
+```
+
+The bar chart shows the two truly relevant factors standing well above the
+prior inclusion probability, while the noise factors cluster near or below it.
+The histograms show why: coefficients for excluded factors are pulled tightly
+around zero by the spike, while the two relevant factors retain slab-width
+posterior spread centred away from zero.
 
 ## Discuss the results
 
@@ -80,16 +116,21 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the SSVS sampler and simulation used above.
 
-1. Derive the indicator full conditional: show that $\Pr(\gamma_j = 1 \mid \beta_j) = O_j/(1 + O_j)$ with
-   $O_j$ as in the text, and explain why it is free of $y$ and $\sigma^2$ once $\beta_j$ is known.
-2. Rerun the sampler with $c = 10$ and then $c = 200$, holding $\tau$ fixed. Report how the inclusion
-   probabilities respond, and relate the pattern to the $1/c$ Occam term in the odds ratio.
-3. Replace the fixed $\pi$ with a hierarchical $\pi \sim \text{Beta}(1, 1)$, adding the draw $\pi \mid \gamma
-   \sim \text{Beta}\big(1 + \sum_j \gamma_j, 1 + p - \sum_j \gamma_j\big)$, and say why this aids
-   multiplicity control.
-4. Simulate a dense truth on the same design matrix, all 25 coefficients non-zero and rescaled to the
-   same signal variance, and rerun both procedures. Does the predictive ranking reverse?
-5. Reduce the estimation sample to $n = 80$ and rerun both comparisons. Discuss which procedure degrades
-   faster and whether the out-of-sample ranking survives.
+1. Rerun the sampler with the prior inclusion probability set to $\pi = 0.05$ and then
+   $\pi = 0.5$, holding the spike and slab variances fixed. Report how the PIPs of the
+   two relevant factors and of the noise factors respond, and relate the shift to the
+   $\pi/(1-\pi)$ term in the log-odds update.
+2. Widen the slab variance from 1 to 9, and shrink it to 0.25, and check whether the
+   union probability for the correlated pair (factors 1 and 2) is robust to this choice.
+   Explain in one sentence what a large change in the union probability would mean for
+   how much you trust the sampler's factor screening.
+3. Derive the exact form of the log-odds update used in the code, $\log O_j = \log[\pi/(1-\pi)]
+   + \log(\tau_{\text{spike}}/\tau_{\text{slab}}) + \tfrac{1}{2}\beta_j^2(\tau_{\text{spike}}^{-2}
+   - \tau_{\text{slab}}^{-2})$, then confirm it numerically by recomputing `log_odds` from a
+   stored draw of `beta` and checking it against the value the loop actually used.
+4. A portfolio manager can only afford to monitor factors with PIP above some threshold.
+   Using the PIPs printed above, find the lowest threshold that still keeps both truly
+   relevant factors on the monitored list, and state which noise factors would be
+   included as false positives at that threshold.

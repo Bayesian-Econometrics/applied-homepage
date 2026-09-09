@@ -37,6 +37,7 @@ The code implements the model above in a reproducible standalone example. Identi
 ```{python}
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 SEED, N, ITER, BURN = 2026, 80, 3500, 1000
 rng = np.random.default_rng(SEED)
@@ -77,6 +78,34 @@ different from the risk-neutral pricing exercise. To include model uncertainty,
 draw a model index using Week 9's posterior weights before drawing its return.
 :::
 
+## What the result looks like
+
+```{python}
+fig, ax = plt.subplots()
+ax.plot(weights, utility, color='tab:blue', label='posterior predictive')
+ax.plot(weights, plug_utility, color='tab:orange', label='plug-in')
+ax.scatter([best], [utility.max()], color='tab:blue', zorder=5)
+ax.scatter([best_plug], [plug_utility.max()], color='tab:orange', zorder=5)
+ax.set_xlabel('risky weight $w$'); ax.set_ylabel('average CRRA utility')
+ax.set_title('Expected utility by allocation')
+ax.legend()
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots()
+ax.hist(gross, bins=50, color='tab:green', density=True)
+ax.axvline(RF, color='black', linestyle='--', label='cash gross return')
+ax.set_xlabel('predictive risky gross return'); ax.set_ylabel('density')
+ax.set_title('Posterior predictive distribution of the risky return')
+ax.legend()
+plt.tight_layout(); plt.show()
+```
+
+Both utility curves are concave in the risky weight over the range considered
+here, with the posterior predictive optimum printed above as `best` and the
+plug-in optimum as `best_plug`. The predictive return histogram shows the
+right-skewed distribution induced by drawing $e^{g^*}$ from a Normal on the
+log scale, which is what gives the CRRA objective its curvature.
+
 ## Discuss the results
 
 The optimum can lie at a constraint. Its numerical stability depends on chain
@@ -89,9 +118,20 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the allocation exercise and simulation used above.
 
-1. Repeat the constrained allocation for risk aversion $\gamma=2,5,10$. Keep the return model and constraints fixed so that the comparison isolates preferences.
-2. Derive the mean–variance optimum for a conditionally Gaussian return and CARA utility. Explain why replacing the Gaussian by a Student-$t$ predictive distribution can make expected exponential utility undefined.
-3. Vary the cash floor from 10% to 20%. Compare utility using fresh predictive draws and report the sampling uncertainty of the utility difference.
-4. Simulate the model-uncertainty example with no predictability. Report model probabilities and the within-model and between-model predictive variance.
+1. Repeat the allocation for risk aversion $\gamma = 2$ and $\gamma = 10$, keeping `RF` and
+   the maximum weight of 0.9 fixed, and report how `best` and `best_plug` move as risk
+   aversion rises.
+2. Rerun the Gibbs sampler with a much weaker prior on the mean, `K0 = 0.05`, and a much
+   stronger one, `K0 = 20`, holding the simulated log returns fixed. Report whether the
+   posterior predictive optimal weight is sensitive to this change, and explain why a
+   stronger prior on the mean should matter more here than one on the variance.
+3. Derive the first-order condition for the risky weight that maximises average CRRA
+   utility over a fixed set of predictive draws, $\sum_i (e^{g_i^*}-R_f)\, W_i^{-\gamma}=0$,
+   then confirm numerically that a centred finite difference of `utility` with respect to
+   `weights` is close to zero at the grid point nearest `best`.
+4. Using the fresh-draw expected utilities printed above for the posterior predictive and
+   plug-in weights, convert the utility gap into a certainty-equivalent wealth difference,
+   and state in one sentence how large that gap would need to be before a risk manager
+   should bother modelling parameter uncertainty rather than using the plug-in weight.

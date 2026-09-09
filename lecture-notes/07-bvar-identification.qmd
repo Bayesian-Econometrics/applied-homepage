@@ -228,6 +228,31 @@ relative to least squares, most visibly on the own first lag. The posterior stan
 because 199 observations are plenty for four coefficients per equation; the prior would bite far harder
 with six variables and four lags, where $k = 25$.
 
+It is worth seeing that gentle pull across every coefficient at once rather than only the
+first equation printed above. The block below plots all twelve BVAR posterior means
+against their OLS counterparts, reusing `Bbar` and `B_ols`.
+
+**Reading the computation.** Each point compares one coefficient's BVAR posterior mean with its OLS estimate. Points on the 45-degree line are coefficients the prior barely touched; points off it show where shrinkage moved the estimate.
+
+```{python}
+fig, ax = plt.subplots()
+lims = [min(B_ols.min(), Bbar.min()) - 0.05, max(B_ols.max(), Bbar.max()) + 0.05]
+ax.plot(lims, lims, "k--", lw=1, label="45° line")
+ax.scatter(B_ols.ravel(), Bbar.ravel(), alpha=0.7)
+ax.set_xlabel("OLS coefficient"); ax.set_ylabel("BVAR posterior mean")
+ax.legend()
+ax.set_title("Shrinkage across all coefficients of the trivariate BVAR")
+plt.tight_layout()
+plt.show()
+
+print(f"largest |BVAR - OLS| across all coefficients: {np.max(np.abs(Bbar - B_ols)):.3f}")
+```
+
+With 199 observations for four coefficients per equation the points sit almost exactly on
+the 45-degree line: the Minnesota prior is present but overwhelmed by the data here. This
+is the same message as the closing remark above, now visible across the whole coefficient
+matrix rather than one column of it.
+
 ## Forecasting with predictive credible bands
 
 The usual point of a BVAR is forecasting, and we want a band that reflects two sources of uncertainty:
@@ -348,6 +373,31 @@ tenths and inflation by rather less. Nothing in the data chose between them, sin
 reproduce $\Sigma$ exactly, so a recursive scheme is a genuine identifying assumption to be argued in
 economic terms.
 
+The disagreement is not confined to impact. The figure below places the full response of
+every variable to the rate shock side by side under the two orderings, reusing `irf_a` and
+`irf_b`, so the ordering dependence is visible across the whole horizon rather than at
+$h = 0$ alone.
+
+**Reading the computation.** The left and right panels share the same reduced-form model and the same shock but differ only in which ordering produced the Cholesky factor. Any difference between the panels is due entirely to the identifying assumption.
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+for ax, irf, ttl in [(axes[0], irf_a, "rate ordered last"), (axes[1], irf_b, "rate ordered first")]:
+    for i, nm in enumerate(names):
+        ax.plot(hor := np.arange(Hi + 1), irf[:, i, 2], label=nm)
+    ax.axhline(0, color="black", lw=0.8)
+    ax.set_xlabel("horizon"); ax.set_ylabel("response to rate shock")
+    ax.set_title(ttl); ax.legend(fontsize=9)
+fig.suptitle("Impulse responses to the same shock under two Cholesky orderings")
+plt.tight_layout()
+plt.show()
+```
+
+The two panels tell different dynamic stories from the same data and the same reduced-form
+estimates: which variable moves first and by how much depends entirely on which ordering
+was assumed, confirming in pictures what the algebra already showed, that recursive
+identification is an assumption and not a discovery.
+
 ## Sign restrictions
 
 **Sign restrictions**, developed for Bayesian VARs by Rubio-Ramírez, Waggoner and Zha, replace the timing
@@ -412,6 +462,35 @@ direction by construction, so those signs are assumptions rather than discoverie
 Later responses reveal implications of the dynamics under those restrictions.
 Compare their persistence and dispersion rather than expecting a fixed numerical
 acceptance rate or a specific response magnitude.
+
+The band above summarises the accepted draws by their quantiles at each horizon; it is
+worth looking once at the full distribution behind one of those horizons, rather than
+only its 68% interval. The block below histograms the accepted output responses at
+horizon $h = 8$, reusing the `accepted` array already built.
+
+**Reading the computation.** Each entry is one admissible structural draw's output response at a single horizon. The spread of the histogram is the set-identification uncertainty at that horizon; it does not shrink with a larger sample.
+
+```{python}
+h_pick = 8
+draws_h = accepted[:, h_pick, 0]
+
+fig, ax = plt.subplots()
+ax.hist(draws_h, bins=40, color="C0", alpha=0.75)
+ax.axvline(np.median(draws_h), color="black", ls="--", label="median")
+ax.set_xlabel(f"output response to the policy shock at h={h_pick}")
+ax.set_ylabel("accepted draws")
+ax.legend()
+ax.set_title("Distribution of accepted sign-restricted responses at one horizon")
+plt.tight_layout()
+plt.show()
+
+print(f"accepted-draw median at h={h_pick}: {np.median(draws_h):.3f}, "
+      f"range [{draws_h.min():.3f}, {draws_h.max():.3f}]")
+```
+
+The histogram is the raw material behind the shaded band: no single value is picked out
+by the data, only a range of rotations consistent with the imposed signs, and the spread
+of this histogram is exactly the identification uncertainty the next paragraph names.
 
 That width mixes two things. Part is ordinary **estimation uncertainty**, the posterior uncertainty about
 $B$ and $\Sigma$ that widened the forecast bands. The rest is **identification uncertainty**: sign

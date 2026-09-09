@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.special import gammaln, logsumexp
+import matplotlib.pyplot as plt
 
 SEED, T, INITIAL = 2026, 120, 40
 rng = np.random.default_rng(SEED)
@@ -68,6 +69,23 @@ scores = pd.DataFrame(rows)
 scores['cumulative gain'] = (scores['BMA']-scores['benchmark']).cumsum()
 print(scores.tail())
 print(scores[['BMA','benchmark']].mean())
+
+fig, ax = plt.subplots()
+ax.plot(scores['time'], scores['cumulative gain'], color='steelblue')
+ax.axhline(0, color='grey', lw=.8)
+ax.set(xlabel='time', ylabel='cumulative log-score gain',
+       title='BMA cumulative log-predictive score minus intercept-only benchmark')
+plt.tight_layout()
+plt.show()
+
+fig, ax = plt.subplots()
+ax.plot(scores['time'], scores['predictor weight'], color='darkorange', label='predictor model')
+ax.plot(scores['time'], 1-scores['predictor weight'], color='steelblue', label='intercept-only model')
+ax.set(xlabel='time', ylabel='posterior model weight', ylim=(0,1),
+       title='Evolution of the BMA model weights over the backtest')
+ax.legend()
+plt.tight_layout()
+plt.show()
 ```
 
 Model priors are equal and coefficient priors proper. Each weight uses the
@@ -87,16 +105,20 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the backtest above.
 
-1. Derive the Student $t$ predictive from the two-step argument in the text: write
-   $y^* \mid \sigma^2, y$ as Normal, multiply by the inverse-Gamma posterior of $\sigma^2$ and
-   integrate $\sigma^2$ out, confirming the degrees of freedom and the scale.
-2. Show that $p(y \mid M) = \prod_t p(y_t \mid y_{1:t-1}, M)$ and explain in two sentences why
-   this makes the log marginal likelihood an in-sample log predictive score.
-3. Simulate $2000$ samples of size $n = 20$ from the true model, form the $90\%$ predictive and
-   plug-in intervals at `x_star` in each, and report how often each contains a fresh draw of $y^*$.
-4. Repeat the backtest with a much tighter slope prior (variance $0.1$) and a much looser one
-   (variance $100$), and relate the change in inclusion probabilities to $|\bar V| / |V_0|$.
-5. Replace the log score by mean squared forecast error in the summary table. Does the ranking of the
-   four strategies change, and which comparison would you show a risk manager?
+1. Rerun the backtest starting from `INITIAL = 20` instead of 40, keeping everything else
+   fixed, and report the final cumulative gain and the average predictor weight over the
+   backtest. Explain why a shorter training start makes the early log scores noisier.
+2. Repeat the backtest with the coefficient prior variance `V0` tightened to `np.eye(K)*0.5`
+   and loosened to `np.eye(K)*20`, and report the final cumulative gain in each case
+   alongside the one already printed. Does a tighter coefficient prior on the predictor
+   model help or hurt its case for a high posterior weight here?
+3. Derive, from $w_{j,t-1}\propto p(M_j)p(y_{1:t-1}\mid M_j)$, why the two weights in this
+   two-model backtest must sum to one at every $t$, and confirm the `assert` in the
+   reference code holds at every date rather than only at the final one.
+4. A portfolio manager can only use one model at a time but wants to choose which model to
+   trust based on this backtest. Using the printed cumulative gain and the model-weight
+   plot, explain at what point in the backtest the manager would have been better off
+   overriding BMA and just using the predictor-only model, and what risk that override
+   would have carried before that point in the sample.

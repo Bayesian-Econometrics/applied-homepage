@@ -137,6 +137,54 @@ future noise 4 to posterior mean uncertainty $2/3$. A 95% credible interval
 for $\mu$ is $2/3\pm1.96\sqrt{2/3}$; the predictive interval uses
 $2/3\pm1.96\sqrt{14/3}$. Explaining this difference matters as much as the algebra.
 
+### Three ways to the same posterior
+
+This tiny conjugate model is small enough to solve three ways: on a grid, as in Lecture 1; by importance sampling,
+as in Lecture 3; and by a Metropolis chain, as in Lecture 5. Seeing all three answers land on the same curve is the
+single most useful picture for tying the course together, because every later model just replaces "solve exactly"
+with one of these two simulation routes.
+
+**Reading the computation.** The grid curve evaluates the known Normal posterior directly. The importance sample draws from a wider Normal proposal and reweights by the ratio of target to proposal; the Metropolis chain proposes a local move and accepts or rejects it by the target ratio alone, since the proposal is symmetric.
+
+```{python}
+post_mean_ex, post_var_ex = 2/3, 2/3
+grid_mu = np.linspace(-2, 3, 400)
+dens_grid = stats.norm.pdf(grid_mu, post_mean_ex, np.sqrt(post_var_ex))
+
+def log_post_ex(m):                              # unnormalised log posterior
+    return (stats.norm.logpdf(1.0, m, 2.0) + stats.norm.logpdf(3.0, m, 2.0)
+             + stats.norm.logpdf(m, 0.0, 1.0))
+
+prop_sd = 2.0                                      # importance sampling
+draws_is = rng.normal(0.0, prop_sd, 20_000)
+log_w = log_post_ex(draws_is) - stats.norm.logpdf(draws_is, 0.0, prop_sd)
+w_is = np.exp(log_w - log_w.max()); w_is /= w_is.sum()
+
+chain_ex, cur_ex = np.empty(20_000), 0.0           # random-walk Metropolis
+for t in range(20_000):
+    prop = cur_ex + 0.8 * rng.standard_normal()
+    if np.log(rng.random()) < log_post_ex(prop) - log_post_ex(cur_ex):
+        cur_ex = prop
+    chain_ex[t] = cur_ex
+
+fig, ax = plt.subplots()
+ax.plot(grid_mu, dens_grid, "k-", lw=2, label="exact / grid")
+ax.hist(draws_is, bins=grid_mu, weights=w_is, density=True, alpha=0.5, label="importance sampling")
+ax.hist(chain_ex[2000:], bins=grid_mu, density=True, alpha=0.5, label="MCMC (Metropolis)")
+ax.set_xlabel(r"$\mu$"); ax.set_ylabel("posterior density")
+ax.legend(fontsize=9); ax.set_title("Grid, importance sampling and MCMC recover the same posterior")
+plt.tight_layout(); plt.show()
+
+print(f"posterior mean: exact {post_mean_ex:.3f}, importance sampling "
+      f"{np.sum(w_is * draws_is):.3f}, MCMC {chain_ex[2000:].mean():.3f}")
+```
+
+All three histograms sit on top of the same curve, and the three printed means agree to within a couple of
+hundredths, the residual simulation noise of the two sampling-based routes against the exact value. Nothing
+about the target changed between them; only the computational route did, which is the point of the middle third of
+the course: the grid does not scale past a handful of parameters, importance sampling needs a proposal that covers
+the target well, and MCMC needs to be checked for mixing, but all three are answering the identical question.
+
 ### Transfer questions
 
 - **Gibbs:** If the coefficient prior changes to
@@ -241,6 +289,66 @@ print(summary.round(3))
 Every credible interval covers its true value, which is the basic sanity check for a
 sampler. The next figure shows the marginal posteriors of the three coefficients with
 the true values overlaid.
+
+Before that, it is worth seeing what made this Gibbs sampler trustworthy in the first place, alongside a chain built
+to fail that same check.
+
+**Reading the computation.** A slowly mixing chain is built by targeting the same marginal with a random-walk Metropolis step deliberately much too small, so consecutive draws barely move; the healthy chain is the Gibbs sampler's own beta1 draws from above, no different code, just a different algorithm on the same target.
+
+```{python}
+def running_mean(z):
+    return np.cumsum(z) / np.arange(1, len(z) + 1)
+
+target_mean, target_sd = beta_post[:, 1].mean(), beta_post[:, 1].std()
+step_bad = 0.02 * target_sd
+chain_bad, cur = np.empty(4000), 0.0
+for t in range(4000):
+    prop = cur + step_bad * rng.standard_normal()
+    if np.log(rng.random()) < (-0.5 * ((prop - target_mean) / target_sd) ** 2
+                                + 0.5 * ((cur - target_mean) / target_sd) ** 2):
+        cur = prop
+    chain_bad[t] = cur
+
+fig, axes = plt.subplots(2, 2, figsize=(10, 6))
+axes[0, 0].plot(beta_draws[:, 1], lw=0.3, color="C0"); axes[0, 0].set_title("Healthy chain: trace")
+axes[0, 1].plot(running_mean(beta_draws[:, 1]), color="C0")
+axes[0, 1].axhline(target_mean, color="black", ls="--", lw=1)
+axes[0, 1].set_title("Healthy chain: running mean")
+axes[1, 0].plot(chain_bad, lw=0.3, color="C3"); axes[1, 0].set_title("Pathological chain: trace")
+axes[1, 1].plot(running_mean(chain_bad), color="C3")
+axes[1, 1].axhline(target_mean, color="black", ls="--", lw=1)
+axes[1, 1].set_title("Pathological chain: running mean")
+for ax_ in axes.ravel():
+    ax_.set_xlabel("iteration")
+plt.tight_layout(); plt.show()
+```
+
+The healthy trace looks like noise scattered around a stable level and its running mean flattens out almost
+immediately; the pathological trace instead wanders slowly, a random walk in all but name, and its running mean is
+still drifting after four thousand iterations. This is exactly why $\hat R$ and effective sample size exist: a
+single trace like the pathological one can look plausible at a glance while still being far from converged.
+
+**Reading the computation.** The autocorrelation function is the same finite-lag estimator introduced in the stochastic-volatility lecture, applied here to both chains so the pathological chain's slow decay is visible on the same axes as the healthy chain's fast one.
+
+```{python}
+def acf(z, lag_max=50):
+    z = z - z.mean()
+    ac = np.correlate(z, z, "full")[len(z) - 1:] / (len(z) * z.var())
+    return ac[:lag_max + 1]
+
+lags = np.arange(51)
+fig, ax = plt.subplots()
+ax.plot(lags, acf(beta_draws[:, 1]), "o-", color="C0", label="healthy chain")
+ax.plot(lags, acf(chain_bad), "o-", color="C3", label="pathological chain")
+ax.axhline(0, color="black", lw=0.8)
+ax.set_xlabel("lag"); ax.set_ylabel("autocorrelation")
+ax.legend(); ax.set_title("Slow mixing shows up as slowly decaying autocorrelation")
+plt.tight_layout(); plt.show()
+```
+
+The healthy chain's autocorrelation collapses to near zero within a handful of lags, while the pathological chain's
+autocorrelation is still close to one after fifty, the numerical signature behind the two running-mean pictures
+above and the reason effective sample size, not the raw draw count, is what should go on the cheat sheet.
 
 **Reading the computation.** A histogram removes time order and therefore cannot establish mixing. Use it to understand marginal shape alongside trace plots and independent-chain comparisons.
 

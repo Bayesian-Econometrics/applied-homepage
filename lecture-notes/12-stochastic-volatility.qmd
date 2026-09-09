@@ -377,6 +377,50 @@ the posterior, and a sampler that shifts one date at a time moves through that d
 slowly, so the nominal draw count overstates precision by roughly that factor and five
 thousand draws deliver only tens of effectively independent ones.
 
+The table already gives the interval; it is worth seeing the two marginal shapes directly, since a symmetric-looking
+interval can still hide a skewed posterior.
+
+**Reading the computation.** The two histograms come from the same retained draws as the summary table; only the display is new.
+
+```{python}
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(10, 4))
+axL.hist(par_draws[:, 0], bins=40, density=True, color="C0", alpha=0.75)
+axL.axvline(mu_true, color="black", ls="--", lw=1.3, label="true value")
+axL.set_xlabel(r"$\mu$"); axL.set_ylabel("posterior density"); axL.legend(fontsize=8)
+axL.set_title("Long-run level")
+axR.hist(par_draws[:, 1], bins=40, density=True, color="C1", alpha=0.75)
+axR.axvline(phi_true, color="black", ls="--", lw=1.3, label="true value")
+axR.set_xlabel(r"$\phi$"); axR.legend(fontsize=8)
+axR.set_title("Persistence")
+plt.tight_layout(); plt.show()
+```
+
+The long-run level is pinned down tightly and symmetrically around its true value. Persistence is comfortably
+covered too but its histogram is visibly wider relative to its range, the same weak identification the printed
+interval already showed and that the next section explains.
+
+A trace of the persistence draws makes the inefficiency number concrete. The chunk below plots the retained chain
+together with its running mean.
+
+**Reading the computation.** The running mean is the cumulative average of the chain up to each iteration; a well-mixed chain settles quickly, a slowly mixing one drifts for a long time.
+
+```{python}
+phi_chain = par_draws[:, 1]
+running_mean_phi = np.cumsum(phi_chain) / np.arange(1, len(phi_chain) + 1)
+
+fig, ax = plt.subplots()
+ax.plot(phi_chain, color="C1", lw=0.4, alpha=0.6, label="retained draws of phi")
+ax.plot(running_mean_phi, color="black", lw=1.5, label="running mean")
+ax.axhline(phi_true, color="grey", ls=":", lw=1, label="true value")
+ax.set_xlabel("retained iteration"); ax.set_ylabel(r"$\phi$")
+ax.legend(fontsize=9); ax.set_title("Persistence draws mix slowly")
+plt.tight_layout(); plt.show()
+```
+
+The running mean keeps drifting well into the chain rather than flattening out after a few hundred iterations,
+visual confirmation of the inefficiency factor printed above: consecutive draws of $\phi$ carry much less
+information than consecutive independent draws would.
+
 ## The posterior volatility path
 
 The chief output is not the parameter vector but the volatility path. For each retained
@@ -445,6 +489,38 @@ non-identification sits measurement noise, since each $h_t$ is inferred from a s
 $\chi^2_1$ observation, so sampled paths are rougher than the true one and the posterior
 is nudged down the ridge towards lower $\phi$. Long samples, or informative priors, are
 the only remedies.
+
+### Fat tails without any non-Gaussian ingredient
+
+Every shock in the model, $u_t$ and $\zeta_t$, is Gaussian, yet the return itself is not: a return is a Gaussian
+scaled by a random, time-varying standard deviation, and mixing over that randomness is exactly the mechanism the
+earlier kurtosis formula describes. We check that directly on the simulated returns already generated.
+
+**Reading the computation.** The histogram uses the same simulated returns from the opening chunk, standardised to unit variance so that the Gaussian benchmark is on the same scale. A logarithmic vertical axis makes the tails visible instead of letting them disappear near zero.
+
+```{python}
+r_std = (r - r.mean()) / r.std()
+grid_r = np.linspace(-6, 6, 400)
+
+fig, ax = plt.subplots()
+ax.hist(r_std, bins=60, density=True, alpha=0.6, color="C0",
+        label="simulated returns (standardised)")
+ax.plot(grid_r, stats.norm.pdf(grid_r), color="black", lw=1.5, label="Gaussian benchmark")
+ax.set_yscale("log")
+ax.set_xlabel("standardised return"); ax.set_ylabel("density (log scale)")
+ax.legend(); ax.set_title("Stochastic volatility generates fat tails from Gaussian shocks")
+plt.tight_layout(); plt.show()
+
+kurt_theory = 3 * np.exp(sig_true ** 2 / (1 - phi_true ** 2)) - 3
+print(f"excess kurtosis: sample {stats.kurtosis(r):.2f}, "
+      f"model-implied 3*exp(sigma_h^2/(1-phi^2))-3 = {kurt_theory:.2f}")
+```
+
+On the log scale the histogram sits visibly above the Gaussian curve away from the centre, exactly where the two
+would coincide if returns were really normal. The printed sample kurtosis and the model-implied value are both far
+above the Gaussian benchmark of zero, though they do not match closely, because seven hundred observations pin down
+a fourth moment only loosely; the fat tails are nonetheless not a modelling add-on but a direct, quantifiable
+consequence of letting the variance itself be random.
 
 ## The mixture-of-normals alternative
 

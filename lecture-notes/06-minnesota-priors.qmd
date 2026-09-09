@@ -245,8 +245,36 @@ Shrinkage introduces bias: by pulling coefficients toward zero we systematically
 underestimate the large ones. In exchange we cut the variance of the estimator
 dramatically. Out-of-sample error depends on both, so there is an optimal amount of
 shrinkage that minimises the total. The prior variance $\tau^2$ is the dial that sets
-it. Sweeping $\tau$ from very tight to very loose traces out the familiar U-shaped
-curve.
+it, and before aggregating into a single error curve it is worth watching what it does
+to one coefficient. The block below tracks the ridge estimate of the first coefficient,
+which has a genuine effect, as $\tau$ sweeps from very tight to very loose.
+
+**Reading the computation.** Reusing `fit_ridge`, `X_tr`, `y_tr` and `beta_ols` from the previous block, only the prior standard deviation changes along the horizontal axis. Watch how far the ridge line has to travel before it meets the OLS line.
+
+```{python}
+tau_grid = np.geomspace(0.02, 5.0, 40)
+idx = 0                                        # a coefficient with a genuine effect
+path = np.array([fit_ridge(X_tr, y_tr, sigma ** 2 / t ** 2)[idx] for t in tau_grid])
+
+fig, ax = plt.subplots()
+ax.plot(tau_grid, path, "-o", ms=3, label="Bayesian ridge")
+ax.axhline(beta_ols[idx], color="grey", ls="--", label="OLS")
+ax.axhline(beta_true[idx], color="black", ls=":", label="true value")
+ax.set_xscale("log")
+ax.set_xlabel(r"prior std. dev. $\tau$  (looser $\to$)")
+ax.set_ylabel(f"coefficient {idx}")
+ax.legend()
+ax.set_title("Shrinkage path of one coefficient as the prior tightens")
+plt.tight_layout()
+plt.show()
+```
+
+At the tightest prior in the sweep the ridge coefficient is pinned near $0.01$, far below
+both the OLS estimate of about $0.46$ and the true value of about $0.19$. As $\tau$ grows
+the path climbs and flattens out just under the OLS line, which it approaches but never
+quite reaches at finite $\tau$. The shrinkage curve therefore lies systematically closer
+to the truth than the noisy OLS estimate for a wide middle range of $\tau$, which is the
+individual-coefficient version of the aggregate error story that follows next.
 
 **Reading the computation.** This sensitivity curve varies prior spread while holding the dataset fixed. It illustrates the trade-off; selecting a final prior by this same test curve would consume the test set and require a fresh evaluation sample.
 
@@ -361,6 +389,35 @@ The bright entries along the own-lag positions show the loose prior on a variabl
 dynamics; the dimmer cross-lag entries show the extra shrinkage from $\lambda_2$; and
 the fading from left to right within each variable shows the lag decay. This single
 structured Normal prior is what tames the VAR.
+
+The heatmap shows the whole grid at once; it is easier to see the decay itself as a
+curve. The next block reads off the own-lag and one cross-lag column of `prior_var` for
+the equation of $y_1$ and converts variance to standard deviation, since it is the
+standard deviation that has natural units for the coefficient.
+
+**Reading the computation.** The two lines come from the same `prior_var` array built above, one held-out own-lag column ($j = i$) and one cross-lag column ($j \ne i$). Both fall with the lag, but from different starting heights.
+
+```{python}
+own_sd = np.sqrt([prior_var[0, (ell - 1) * m + 0] for ell in range(1, p + 1)])
+cross_sd = np.sqrt([prior_var[0, (ell - 1) * m + 1] for ell in range(1, p + 1)])
+
+fig, ax = plt.subplots()
+ax.plot(range(1, p + 1), own_sd, "-o", label="own lag (y1 on y1)")
+ax.plot(range(1, p + 1), cross_sd, "-s", label="cross lag (y2 on y1)")
+ax.set_xlabel("lag"); ax.set_ylabel("prior standard deviation")
+ax.legend()
+ax.set_title("Minnesota prior: standard deviation decays with lag length")
+plt.tight_layout()
+plt.show()
+
+print(f"own-lag prior sd: {own_sd[0]:.3f} at lag 1, {own_sd[-1]:.3f} at lag {p}")
+print(f"cross-lag prior sd: {cross_sd[0]:.3f} at lag 1, {cross_sd[-1]:.3f} at lag {p}")
+```
+
+Both curves decay, but the cross-lag curve sits below the own-lag curve at every lag,
+about $0.26$ against $0.45$ at lag one and about $0.07$ against $0.11$ at lag four. The
+own-lag prior is looser at every horizon, and the gap between the two lines is exactly
+$\lambda_2$ acting on top of the shared $1/\ell^2$ decay.
 
 ## The illusion of sparsity
 

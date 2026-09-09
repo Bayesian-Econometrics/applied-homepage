@@ -250,6 +250,47 @@ plt.tight_layout()
 plt.show()
 ```
 
+The gain $K_t$ that drove this update is itself worth watching. It starts at one, because
+the diffuse prior variance $P_1 = 10^6$ swamps the measurement variance and the filter
+simply believes the first observation, and it should settle down as the filter learns
+how much to trust new data relative to what it already knows. The block below reruns the
+same recursion, this time keeping the gain and the one-step-ahead predicted variance
+$P_{t|t-1}$ at every date.
+
+**Reading the computation.** This duplicates the update inside `kalman_filter_ll` only to expose two internal quantities it does not return. Both series should settle to the same steady-state values implied by the model's signal-to-noise ratio.
+
+```{python}
+a_g, P_g = 0.0, 1e6
+K_path = np.zeros(T); P_pred_path = np.zeros(T)
+for t in range(T):
+    P_pred_path[t] = P_g
+    F_g = P_g + sigma_eps**2
+    K_path[t] = P_g / F_g
+    a_g = a_g + K_path[t] * (y[t] - a_g)
+    P_g = (1 - K_path[t]) * P_g + sigma_eta**2
+
+fig, ax1 = plt.subplots()
+ax1.plot(t_axis, K_path, color="C0", label="Kalman gain $K_t$")
+ax1.set_xlabel("time"); ax1.set_ylabel("Kalman gain", color="C0")
+ax2 = ax1.twinx()
+ax2.plot(t_axis, P_pred_path, color="C1", ls="--", label="predicted variance $P_{t|t-1}$")
+ax2.set_ylabel("predicted state variance", color="C1")
+fig.legend(loc="upper right", bbox_to_anchor=(0.9, 0.88))
+ax1.set_title("The Kalman gain and predicted variance converge to a steady state")
+plt.tight_layout()
+plt.show()
+
+print(f"gain after 5 updates: {K_path[4]:.3f};  gain at t=T: {K_path[-1]:.3f}")
+print(f"predicted variance at t=T: {P_pred_path[-1]:.4f}")
+```
+
+Both series fall quickly from their diffuse starting point and flatten out after a few
+dozen observations, the gain settling near $0.26$ and the predicted variance near $0.35$.
+This is the Riccati recursion reaching its fixed point: once the filter has seen enough
+data, the balance between trusting the model and trusting new observations no longer
+changes, and the Kalman gain becomes a constant weight, exactly the picture behind an
+exponentially weighted moving average with a fixed smoothing parameter.
+
 ### Checking the filter
 
 If the model is correct, the standardised one-step-ahead errors $v_t / \sqrt{F_t}$
@@ -266,6 +307,28 @@ print(f"variance of standardised errors: {std_err[5:].var():.3f}")
 ```
 
 The mean is near zero and the variance near one, as it should be.
+
+It helps to see the whole distribution behind those two numbers rather than only its
+mean and variance. The block below histograms the standardised errors and overlays the
+standard Normal density they should match.
+
+**Reading the computation.** The histogram uses the same standardised errors just summarised. A close match to the overlaid density is what "the filter is well specified" means in this diagnostic.
+
+```{python}
+grid_z = np.linspace(-4, 4, 200)
+fig, ax = plt.subplots()
+ax.hist(std_err[5:], bins=30, density=True, alpha=0.65, label="standardised errors")
+ax.plot(grid_z, stats.norm.pdf(grid_z), "k-", label="N(0,1) density")
+ax.set_xlabel(r"$v_t / \sqrt{F_t}$"); ax.set_ylabel("density")
+ax.legend()
+ax.set_title("Standardised one-step-ahead errors against their Normal benchmark")
+plt.tight_layout()
+plt.show()
+```
+
+The histogram sits close to the bell curve, with no long tail or skew left over, which is
+the visual counterpart of the mean-zero, variance-one check above and is the diagnostic
+one would run on a real series before trusting the filtered estimates.
 
 ## Signal extraction and the signal-to-noise ratio
 
@@ -331,6 +394,46 @@ $P_{t|T}=P_{t|t}+J_t^2(P_{t+1|T}-P_{t+1|t})$.
 Alternatively, draw the terminal state from its filtered posterior and draw
 backwards from these conditionals. This is forward filtering, backward sampling:
 it generates a coherent state path, rather than independent draws from pointwise bands.
+
+The formulas above are enough to follow the mechanism without running any code, but the
+recursion is short enough that it is worth executing once, so the filtered and smoothed
+paths can be compared directly on the same data used throughout this lecture. The block
+below starts from the terminal filtered estimate and sweeps backward using exactly the
+$J_t$, $a_{t|T}$ and $P_{t|T}$ formulas just derived, reusing `res["a_filt"]` and
+`res["P_filt"]`.
+
+**Reading the computation.** The smoother needs nothing the filter did not already compute, only a backward pass over it. Each smoothed value can depend on observations after date $t$; each filtered value cannot.
+
+```{python}
+a_smooth = np.zeros(T); P_smooth = np.zeros(T)
+a_smooth[-1], P_smooth[-1] = res["a_filt"][-1], res["P_filt"][-1]
+for t in range(T - 2, -1, -1):
+    P_pred_t = res["P_filt"][t] + sigma_eta**2       # = P_{t+1|t}, mean unchanged
+    J_t = res["P_filt"][t] / P_pred_t
+    a_smooth[t] = res["a_filt"][t] + J_t * (a_smooth[t + 1] - res["a_filt"][t])
+    P_smooth[t] = res["P_filt"][t] + J_t**2 * (P_smooth[t + 1] - P_pred_t)
+
+fig, ax = plt.subplots()
+ax.plot(t_axis, alpha, color="black", lw=1.2, ls=":", label="true state")
+ax.plot(t_axis, res["a_filt"], color="C0", lw=1.4, label="filtered $a_{t|t}$")
+ax.plot(t_axis, a_smooth, color="C3", lw=1.4, label="smoothed $a_{t|T}$")
+ax.set_xlabel("time"); ax.set_ylabel("level")
+ax.legend()
+ax.set_title("Filtered and smoothed estimates of the same latent path")
+plt.tight_layout()
+plt.show()
+
+print(f"mean |filtered - true|: {np.mean(np.abs(res['a_filt'] - alpha)):.3f}")
+print(f"mean |smoothed - true|: {np.mean(np.abs(a_smooth - alpha)):.3f}")
+print(f"mean filtered variance: {res['P_filt'].mean():.3f}; mean smoothed variance: {P_smooth.mean():.3f}")
+```
+
+The smoothed line is visibly less jagged than the filtered one, especially early in the
+sample where the filter is still working off little data, and it tracks the true path
+more closely on average, since it has the whole sample to draw on rather than only the
+past. The smoothed variance is smaller than the filtered variance throughout, confirming
+in numbers what the picture shows: using more information never hurts precision in this
+Gaussian model.
 
 ## From the local level to time-varying parameters
 

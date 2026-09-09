@@ -39,10 +39,12 @@ import pandas as pd
 from scipy import stats
 from scipy.special import logsumexp
 
+import matplotlib.pyplot as plt
+
 N_TRIALS, SUCCESSES = 12, 9
 A_PRIOR, B_PRIOR = 5.0, 5.0
 exact = stats.beta(A_PRIOR + SUCCESSES, B_PRIOR + N_TRIALS - SUCCESSES)
-rows = []
+rows, grid_data = [], {}
 for size in [25, 100, 1000]:
     theta = (np.arange(size) + 0.5) / size
     log_mass = (stats.binom.logpmf(SUCCESSES, N_TRIALS, theta)
@@ -53,8 +55,23 @@ for size in [25, 100, 1000]:
                  'mean error': abs(mass @ theta - exact.mean()),
                  'lower': interval[0], 'upper': interval[1],
                  'P(theta > .5)': mass[theta > 0.5].sum()})
+    grid_data[size] = (theta, mass)
     assert np.isclose(mass.sum(), 1)
 pd.DataFrame(rows)
+```
+
+```{python}
+theta_grid = np.linspace(0.001, 0.999, 500)
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(theta_grid, exact.pdf(theta_grid), color='black', lw=2, label='analytic Beta posterior')
+for size, colour in zip([25, 100, 1000], ['tab:blue', 'tab:orange', 'tab:green']):
+    theta, mass = grid_data[size]
+    ax.plot(theta, mass * size, lw=1, color=colour, label=f'grid density, {size} points')
+ax.set(xlabel=r'$\theta$', ylabel='density',
+       title='Grid posterior approximations against the analytic Beta density')
+ax.legend()
+plt.tight_layout()
+plt.show()
 ```
 
 The mean should approach 14/22. Interval endpoints move in grid-sized steps,
@@ -62,6 +79,20 @@ so their error need not decrease smoothly at every refinement. The masses sum
 to one; plotted as a density, they must be divided by the cell width. A nonuniform
 grid needs different cell widths, which no longer cancel in normalisation.
 :::
+
+## What the result looks like
+
+```{python}
+sizes = [row['grid'] for row in rows]
+errors = [row['mean error'] for row in rows]
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.loglog(sizes, errors, marker='o', color='steelblue', label='|grid mean − analytic mean|')
+ax.set(xlabel='grid size', ylabel='absolute error in the posterior mean',
+       title='Grid approximation error as the grid is refined')
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
 
 ## Discuss the results
 
@@ -74,27 +105,22 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following items extend this week's grid-search exercise for the beta-binomial model.
 
-1. Repeat the coin analysis with a $\text{Beta}(1,1)$ prior and with a
-   $\text{Beta}(50,50)$ prior. Report the posterior mean in each case and check it against
-   the weighted-average formula $w\theta_0 + (1-w)\hat\theta$. At what prior sample size
-   does the conclusion $P(\theta > 0.5 \mid {\bf x}) > 0.9$ break down?
-2. Derive the beta-binomial predictive probability $P(Y = k \mid {\bf x})$ yourself,
-   showing the step where the beta kernel is integrated out. Then verify your expression
-   numerically against a simulation that draws $\theta$ from the posterior and $Y$ from
-   the binomial.
-3. A screening rule flags firms as likely to default. It flags 90% of firms that do
-   default and 20% of those that do not, and 3% of firms default. Using Bayes' theorem for
-   events, compute the probability that a flagged firm actually defaults, and explain in
-   one sentence why the answer is so much lower than 90%.
-4. Naive Bayesian classification by hand. Six emails are labelled: spam, "send us your
-   password"; ham, "send us your review"; ham, "password review"; spam, "review us"; spam,
-   "send your password"; spam, "send us your account". Estimate $P(\text{spam})$ and the
-   word probabilities from these counts, then classify the new message "review us now",
-   treating the words as conditionally independent given the class. Which single word
-   drives the answer?
-5. Extend the grid calculation to two parameters by putting a grid on the mean and the
-   variance of a normal sample. Count the number of density evaluations you need for a
-   grid of 200 points per dimension, and then for five parameters, and explain in one
-   sentence why grids are not the answer.
+1. Repeat the grid calculation for $y=9$ successes in $n=12$ trials with a
+   $\text{Beta}(1,1)$ prior and with a $\text{Beta}(50,50)$ prior, on the 1,000-point grid.
+   Report the posterior mean in each case and check it against the weighted-average formula
+   $w\theta_0 + (1-w)\hat\theta$. At what prior sample size does the conclusion
+   $P(\theta > 0.5 \mid y) > 0.9$ break down?
+2. Sensitivity check: redo the 25, 100 and 1,000-point comparison above on a grid that is
+   uniform in $\log\!\big(\theta/(1-\theta)\big)$ rather than in $\theta$, keeping track of
+   the varying cell width in the normalisation. Does the approximation error at 25 points
+   shrink or grow relative to the equally spaced grid, and why?
+3. Derive the exact posterior mode $\hat\theta_{\text{mode}} = (y+a-1)/(n+a+b-2)$ for the
+   $\text{Beta}(a,b)$ prior used above, then confirm it numerically as the grid point with
+   the largest posterior mass on the 1,000-point grid, and report how close the two values are.
+4. A lender uses the posterior probability $P(\theta > 0.5 \mid y)$ from the core assignment
+   as the trigger for continuing to extend credit to a borrower type. Recompute this
+   probability for a much smaller sample, $y=3$ successes in $n=4$ trials, under the same
+   $\text{Beta}(5,5)$ prior, and discuss whether the lender should treat five extra
+   observations as more or less decision-relevant than the prior.

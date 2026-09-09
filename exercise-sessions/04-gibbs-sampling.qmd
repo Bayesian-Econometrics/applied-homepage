@@ -61,9 +61,11 @@ print(pd.DataFrame({'exact mean': b1, 'Gibbs mean': kept.mean(0),
                     'lower': np.quantile(kept,.025,axis=0),
                     'upper': np.quantile(kept,.975,axis=0)}))
 fig, ax = plt.subplots()
-ax.plot(beta_draws[:,1], lw=.5, color='steelblue')
-ax.axhline(b1[1], color='black', ls=':')
+ax.plot(beta_draws[:,1], lw=.5, color='steelblue', label='sampled coefficient 1')
+ax.axhline(b1[1], color='black', ls=':', label='exact NIG mean')
 ax.set(xlabel='iteration', ylabel='coefficient 1', title='A known posterior as a sampler check')
+ax.legend()
+plt.tight_layout()
 plt.show()
 ```
 
@@ -72,6 +74,20 @@ trace. It tests the target and the implementation together. For independent
 priors, recompute the coefficient precision at the current variance and omit
 the prior quadratic and k/2 term from the variance update.
 :::
+
+## What the result looks like
+
+```{python}
+fig, axes = plt.subplots(1, K, figsize=(4*K, 3.2))
+for j, ax in enumerate(axes):
+    ax.hist(kept[:, j], bins=40, density=True, color='steelblue', alpha=0.7, label='Gibbs draws')
+    ax.axvline(b1[j], color='black', ls=':', label='exact NIG mean')
+    ax.set(xlabel=f'coefficient {j}', ylabel='density', title=f'Posterior of coefficient {j}')
+    if j == 0:
+        ax.legend()
+plt.tight_layout()
+plt.show()
+```
 
 ## Discuss the results
 
@@ -84,22 +100,20 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following items extend this week's Gibbs sampler for multiple regression.
 
-1. Rerun the semi-conjugate normal sampler with a strongly informative prior on $\mu$,
-   say $m = 0$ and $c = 50$, and describe how the posterior mean of $\mu$ moves away from
-   $\bar{x}$. Verify the shift against the closed-form conditional mean formula directly,
-   without touching the sampler.
-2. Derive the full conditional of $\sigma^2$ in the semi-conjugate model (rather than
-   $\tau$), by the change of variables $\sigma^2 = 1/\tau$, and check numerically that
-   $1/\tau^{(t)}$ from the sampler above has the distribution you derive.
-3. The workhorse exercise: implement the Gibbs sampler for the multiple regression model
-   from scratch (as above) for a design matrix with five regressors instead of three, and
-   report how the width of each 95% credible interval changes relative to the
-   three-regressor case, holding $n$ fixed.
-4. In the latent-class sampler, initialise $z$ at the *true* labels instead of at random,
-   rerun the chain, and check whether label switching still occurs. Explain in one
-   sentence why the answer does not depend on the initial value.
-5. Extend the latent-class sampler to $K = 3$ groups and $M = 8$ questions, simulate data
-   with three genuinely different usage profiles, and adapt the relabelling rule used
-   above (which only handles two classes) to work with three.
+1. Implement the same Gibbs sampler for a design matrix with five regressors instead of
+   three (keep $n=150$), and report how the width of each 95% credible interval changes
+   relative to the three-regressor case above.
+2. Sensitivity check: rerun the sampler with a much more informative prior on $\beta$
+   (replace $P_0=I$ by $P_0 = 100I$) and describe how the Gibbs mean for coefficient 1
+   moves away from the exact NIG mean of the original prior, verifying the new Gibbs mean
+   against the corresponding exact NIG update rather than only against the trace plot.
+3. Derive the full conditional $\sigma^2 \mid \beta, y$ used in the sampler by completing
+   the square in $\mathrm{RSS}(\beta)+(\beta-b_0)^\top B_0^{-1}(\beta-b_0)$, and confirm
+   numerically that the empirical shape and scale of `var_draws` (after burn-in) match your
+   derived $a_0+(n+k)/2$ and the corresponding scale, up to Monte Carlo error.
+4. An analyst wants to decide whether coefficient 1 is a reliable trading signal and will
+   only act on it if zero is excluded from its 95% credible interval. Using `kept`, report
+   this interval and the decision it implies, then repeat with only the first 30
+   observations and comment on whether the analyst should still act.

@@ -134,6 +134,33 @@ likely to be treated and both carry large values of $f(X)$, so the treated group
 disproportionately from high-outcome regions of covariate space: treatment and outcome are linked
 through the *curvature* of $f$.
 
+Before adjusting anything, it is worth checking whether the comparison is even supportable, which
+is what the **overlap** condition asks. The figure below plots the estimated propensity score
+separately for treated and control units, reusing `prop` and `D` from the simulation above.
+
+**Reading the computation.** The two histograms describe the same non-linear propensity function evaluated at the treated and the control sub-samples. Overlap holds where both histograms put mass, and fails where one of them is empty.
+
+```{python}
+fig, ax = plt.subplots()
+bins = np.linspace(0, 1, 30)
+ax.hist(prop[D == 0], bins=bins, alpha=0.6, density=True, label="control (D=0)")
+ax.hist(prop[D == 1], bins=bins, alpha=0.6, density=True, label="treated (D=1)")
+ax.set_xlabel("estimated propensity  P(D=1 | X)"); ax.set_ylabel("density")
+ax.legend()
+ax.set_title("Overlap: propensity scores by treatment status")
+plt.tight_layout()
+plt.show()
+
+print(f"propensity range, control: [{prop[D == 0].min():.3f}, {prop[D == 0].max():.3f}]")
+print(f"propensity range, treated: [{prop[D == 1].min():.3f}, {prop[D == 1].max():.3f}]")
+```
+
+Both groups occupy roughly the same range of propensity scores, with neither histogram empty where
+the other has mass, so the overlap assumption is not obviously violated here, and a flexible model
+has genuine treated-and-control pairs to compare at every covariate value. Overlap this good is a
+property of the simulation; in applied work it is common to find regions with only treated or only
+control units, where no amount of modelling can substitute for the missing comparison.
+
 ## Bayesian adjustment with a linear model
 
 The natural first response is to add $X$ to the regression. With design matrix $Z$ collecting an
@@ -169,6 +196,33 @@ almost uncorrelated with $X$ itself and a linear term removes almost none of the
 confounding: a straight line cannot absorb curvature. The posterior is silent about this
 misspecification: a narrow credible interval speaks about noise, not about whether the model is
 right.
+
+Seeing the raw comparison next to the two adjusted posteriors on one axis makes the point at a
+glance. The figure below reuses `post_raw` and `post_lin` from the block above alongside the naive
+difference in means.
+
+**Reading the computation.** The dashed vertical line is a single number, the raw contrast; the two curves are full posteriors for the same quantity under two adjustment models. Distance from the dotted true-effect line is the remaining bias in each case.
+
+```{python}
+naive_diff = Y[D == 1].mean() - Y[D == 0].mean()
+tgrid_lin = np.linspace(0.5, 3.5, 400)
+
+fig, ax = plt.subplots()
+ax.axvline(naive_diff, color="grey", ls="--", label=f"naive difference = {naive_diff:.2f}")
+ax.plot(tgrid_lin, post_raw.pdf(tgrid_lin), label="no adjustment (posterior)")
+ax.plot(tgrid_lin, post_lin.pdf(tgrid_lin), label="linear in X (posterior)")
+ax.axvline(tau_true, color="black", ls=":", label=f"true ATE = {tau_true:.1f}")
+ax.set_xlabel(r"treatment effect $\tau$"); ax.set_ylabel("density")
+ax.legend(fontsize=9)
+ax.set_title("Confounded comparison versus adjusted posteriors")
+plt.tight_layout()
+plt.show()
+```
+
+The raw comparison and the two posteriors are all bunched together, well to the right of the true
+effect, and adding a linear term in $X$ shifts the density only slightly. None of these three numbers
+comes close to the truth, which is the visual version of the "helps a little and nowhere near enough"
+verdict above, and it motivates the flexible surface built later in the chapter.
 
 ## Bayesian instrumental variables
 
@@ -286,6 +340,43 @@ interval covers it, while the least-squares interval lies entirely above it. The
 recovers the error correlation, the parameter that diagnoses the endogeneity in the first place: had
 its posterior concentrated near zero we would have concluded that least squares was fine. The wider
 Bayesian interval is the correct price of instrumenting, and it widens as the instrument weakens.
+
+Two pictures make this concrete: the corrected posterior against the biased OLS estimate, and the
+posterior of the correlation that caused the bias in the first place. Both reuse the `beta_post` and
+`rho_post` draws already retained from the sampler.
+
+**Reading the computation.** The dashed and dotted lines mark two single numbers, an estimate and the truth; the histogram is the full Bayesian IV posterior for the same coefficient.
+
+```{python}
+fig, ax = plt.subplots()
+ax.hist(beta_post, bins=50, density=True, alpha=0.75, label="Bayesian IV posterior")
+ax.axvline(b_ols[0], color="grey", ls="--", label=f"OLS = {b_ols[0]:.2f}")
+ax.axvline(beta_iv, color="black", ls=":", label=f"true beta = {beta_iv:.1f}")
+ax.set_xlabel(r"structural coefficient $\beta$"); ax.set_ylabel("posterior density")
+ax.legend()
+ax.set_title("Bayesian IV corrects the OLS endogeneity bias")
+plt.tight_layout()
+plt.show()
+```
+
+**Reading the computation.** This histogram is a diagnostic, not the target of the analysis: a posterior for $\rho$ concentrated away from zero is what tells us least squares needed correcting at all.
+
+```{python}
+fig, ax = plt.subplots()
+ax.hist(rho_post, bins=50, density=True, color="C2", alpha=0.8)
+ax.axvline(rho_iv, color="black", ls=":", label=f"true corr = {rho_iv:.1f}")
+ax.set_xlabel(r"error correlation $\rho$"); ax.set_ylabel("posterior density")
+ax.legend()
+ax.set_title("Posterior of the error correlation diagnoses the endogeneity")
+plt.tight_layout()
+plt.show()
+```
+
+The OLS line sits in the left tail of the Bayesian posterior, well outside where the corrected
+estimate puts most of its mass, while the true value sits comfortably inside it. The correlation
+posterior is concentrated well above zero and away from the true value of $\rho$ only by ordinary
+sampling variation, which is exactly the signature that would have been absent had least squares
+been valid to begin with.
 
 ### Interpret the IV conditionals before programming them
 

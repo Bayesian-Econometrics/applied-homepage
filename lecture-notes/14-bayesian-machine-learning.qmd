@@ -264,6 +264,33 @@ and the mean flattens towards the prior mean, which after undoing the standardis
 average of $y$. That flaring is the honest answer to an extrapolation question, and it is what a
 fitted polynomial refuses to give: a cubic extrapolates with total confidence and enormous error.
 
+It is worth putting a straight line on the same axes, since a straight line is the comparison a referee will always
+ask for.
+
+**Reading the computation.** The OLS line reuses the same observed $x$ and raw $y$ already simulated; only its two coefficients are new.
+
+```{python}
+Xd_ols = np.column_stack([np.ones(n), x])
+b_ols = np.linalg.solve(Xd_ols.T @ Xd_ols, Xd_ols.T @ y_raw)
+ols_line = np.column_stack([np.ones(len(xs)), xs]) @ b_ols
+
+fig, ax = plt.subplots()
+ax.scatter(x, y_raw, s=18, color="grey", alpha=0.7, label="observations")
+ax.plot(xs, f_true(xs), "k--", lw=1.4, label="true function")
+ax.plot(xs, mu_o, color="steelblue", lw=1.8, label="GP posterior mean")
+ax.fill_between(xs, mu_o - 1.96 * sd_o, mu_o + 1.96 * sd_o, color="steelblue", alpha=0.2,
+                label="95% band")
+ax.plot(xs, ols_line, color="firebrick", lw=1.6, label="OLS line")
+ax.set(xlabel="input x", ylabel="y",
+       title="A straight line cannot see the curvature the GP recovers")
+ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The OLS line is the best a linear model can do and it is not close: it misses the curvature entirely, understating
+the function where it bends up and overstating it where it bends down. The comparison matters because a linear
+benchmark is exactly what the predictive horse race further below pits the Gaussian process against.
+
 ## What the hyperparameters do
 
 The length scale is the distance over which the function is expected to change, so it controls how
@@ -417,6 +444,61 @@ close to one, so that it very nearly reproduces the linear model. Non-linear mac
 little in low-signal forecasting and a great deal in the higher-signal problems where finance also
 lives: derivative pricing surfaces, term-structure fitting and the conditional means on which causal
 adjustment depends. The Bayesian version tells you which regime you are in.
+
+The table already contains the whole story numerically; the next figure plots the log predictive density column
+against the population $R^2$ so the crossover is visible rather than merely tabulated.
+
+**Reading the computation.** The three points on each line are the three rows of the table already printed above, read out by amplitude rather than by label.
+
+```{python}
+true_r2_vals = [rw["true R2"] for rw in rows]
+fig, ax = plt.subplots()
+ax.plot(true_r2_vals, [rw["OLS log pd"] for rw in rows], "o-", label="OLS")
+ax.plot(true_r2_vals, [rw["GP log pd"] for rw in rows], "s-", label="Gaussian process")
+ax.set_xlabel("population $R^2$"); ax.set_ylabel("mean log predictive density")
+ax.legend(); ax.set_title("The predictive gap opens only once the signal is strong")
+plt.tight_layout(); plt.show()
+```
+
+The two lines are nearly on top of each other at the low end and fan apart only as the population $R^2$ rises,
+a picture of exactly the deflating message in words: flexibility is wasted until there is enough signal for it to
+find.
+
+A single replication also shows what "predicts better" means observation by observation, not only on average. We
+rerun one replication at the moderate signal strength and plot each method's out-of-sample prediction against what
+actually happened.
+
+**Reading the computation.** This reruns the same simulation design as `one_replication` at `amp = 0.3`, reusing the already selected hyperparameters `ell_hat` and `sn2_hat` rather than a fresh grid search, purely to keep the individual predictions available for plotting.
+
+```{python}
+amp_ex, T_ex, Tt_ex = 0.3, 300, 300
+xa_ex = rng.normal(0.0, 1.0, T_ex + Tt_ex)
+ra_ex = amp_ex * np.tanh(2.0 * xa_ex) + rng.normal(0.0, 1.0, T_ex + Tt_ex)
+xi_ex, yi_ex, xo_ex, yo_ex = xa_ex[:T_ex], ra_ex[:T_ex], xa_ex[T_ex:], ra_ex[T_ex:]
+
+Xd_ex = np.column_stack([np.ones(T_ex), xi_ex])
+b_ex = np.linalg.solve(Xd_ex.T @ Xd_ex, Xd_ex.T @ yi_ex)
+m_lin_ex = np.column_stack([np.ones(Tt_ex), xo_ex]) @ b_ex
+
+mi_ex, si_ex = yi_ex.mean(), yi_ex.std()
+Lg_ex, ag_ex, _ = gp_fit(xi_ex, (yi_ex - mi_ex) / si_ex, ell_hat, sn2_hat)
+m_gp_ex, _ = gp_predict(xi_ex, Lg_ex, ag_ex, xo_ex, ell_hat)
+m_gp_ex = m_gp_ex * si_ex + mi_ex
+
+fig, ax = plt.subplots()
+lims = [min(yo_ex.min(), m_lin_ex.min(), m_gp_ex.min()),
+        max(yo_ex.max(), m_lin_ex.max(), m_gp_ex.max())]
+ax.plot(lims, lims, "k--", lw=1, label="perfect prediction")
+ax.scatter(yo_ex, m_lin_ex, s=14, alpha=0.5, label="OLS")
+ax.scatter(yo_ex, m_gp_ex, s=14, alpha=0.5, label="Gaussian process")
+ax.set_xlabel("realised out-of-sample return"); ax.set_ylabel("predicted return")
+ax.legend(fontsize=9); ax.set_title("Both methods hug the same weak signal at return-like noise")
+plt.tight_layout(); plt.show()
+```
+
+Both clouds of predictions are compressed into a narrow band far from the dashed identity line, because neither
+method can move a prediction far from the unconditional mean when the signal is this weak; the two clouds all but
+overlap, which is the scatterplot version of the closely matched log predictive densities in the table.
 
 
 

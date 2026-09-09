@@ -345,6 +345,32 @@ sigma_post = 1.0 / np.sqrt(tau_post)
 print(f"kept {mu_post.size} draws after discarding {burn} for burn-in")
 ```
 
+Watching the chain move is the whole point of this lecture, so before summarising anything
+the next block traces both parameters against the sweep number and shades the burn-in
+segment that is about to be discarded.
+
+**Reading the computation.** Each line is one parameter's value at every sweep, in the order the sampler produced it. A trace that leaves the shaded region and settles into a stable band is the visual definition of the chain having converged.
+
+```{python}
+fig, axes = plt.subplots(2, 1, figsize=(9, 5), sharex=True)
+axes[0].plot(mu_draws, lw=0.5, color="steelblue")
+axes[0].axvspan(0, burn, color="grey", alpha=0.25, label="burn-in")
+axes[0].axhline(truemu, color="black", ls=":", label="true mu")
+axes[0].set_ylabel(r"$\mu$"); axes[0].legend(fontsize=8)
+axes[1].plot(tau_draws, lw=0.5, color="darkorange")
+axes[1].axvspan(0, burn, color="grey", alpha=0.25)
+axes[1].axhline(1 / truesigma**2, color="black", ls=":", label="true tau")
+axes[1].set_xlabel("sweep"); axes[1].set_ylabel(r"$\tau$"); axes[1].legend(fontsize=8)
+fig.suptitle("Gibbs sampler trace plots, with burn-in shaded")
+plt.tight_layout(); plt.show()
+```
+
+The mean trace starts at the deliberately poor value of $40$ and collapses towards the
+true mean within a handful of sweeps, well inside the shaded burn-in window, while the
+precision trace settles just as quickly into a stable band around its true value. Once a
+chain looks like this, the remaining draws can be treated as coming from the posterior
+itself rather than from wherever we happened to start it.
+
 Sampling $\tau$ before $\mu$ in each sweep, rather than the other order used in the
 derivation, changes nothing about the argument above: the two full conditionals are
 still exactly what we derived, and either visiting order leaves the joint posterior
@@ -382,6 +408,50 @@ sits close to the true value of $2$, with the visible remaining spread reflectin
 $n = 200$ is finite. This is precisely the ergodic theorem in action: a long, dependent
 sequence of draws has produced sample averages that match the target as reliably as an
 independent Monte Carlo sample would.
+
+The two histograms above look at each parameter alone; the block below scatters the kept
+draws of $\mu$ and $\tau$ against each other to show how they move together.
+
+**Reading the computation.** Each point is one kept sweep's joint value of mu and tau, thinned for plotting speed. A cloud with a visible tilt shows the two parameters are not sampled independently of one another.
+
+```{python}
+fig, ax = plt.subplots()
+ax.scatter(mu_post[::5], tau_post[::5], s=5, alpha=0.15, color="steelblue")
+ax.set_xlabel(r"$\mu$"); ax.set_ylabel(r"$\tau$")
+ax.set_title("Joint Gibbs draws of mu and tau")
+plt.tight_layout(); plt.show()
+
+corr_mt = np.corrcoef(mu_post, tau_post)[0, 1]
+print(f"correlation between mu and tau draws: {corr_mt:.3f}")
+```
+
+The cloud is close to circular and the printed correlation is small, which makes sense
+once we recall why the joint posterior was hard in the first place: the coupling term
+$\tau(\bar{x} - \mu)^2$ ties the two parameters together in the kernel, but with $n = 200$
+observations the data pin $\mu$ down so tightly around $\bar{x}$ that this coupling has
+little room left to act, and the two marginals end up looking nearly independent in the
+draws even though the model does not assume they are.
+
+The ergodic theorem promises convergence of a running average, which is worth seeing
+directly rather than only invoking by name.
+
+**Reading the computation.** The running mean at sweep t averages every kept draw of mu up to that sweep. A running mean that stabilises rather than continuing to wander is the ergodic theorem holding in this particular run.
+
+```{python}
+running_mean = np.cumsum(mu_post) / np.arange(1, mu_post.size + 1)
+fig, ax = plt.subplots()
+ax.plot(running_mean, lw=1, color="steelblue")
+ax.axhline(t_ref.mean(), color="black", ls=":", label="reference mean")
+ax.set_xlabel("sweep after burn-in"); ax.set_ylabel(r"running mean of $\mu$")
+ax.legend(fontsize=9)
+ax.set_title("The ergodic theorem: running mean of mu converges")
+plt.tight_layout(); plt.show()
+```
+
+After an initial swing the running mean settles onto the reference value and stays there,
+which is exactly the almost-sure convergence the ergodic theorem states: a long enough
+average along one dependent chain lands on the same number a large independent sample
+would have given.
 
 ## From two blocks to many: the regression model
 

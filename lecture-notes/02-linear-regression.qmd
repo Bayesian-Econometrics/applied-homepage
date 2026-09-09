@@ -279,6 +279,33 @@ print(pd.DataFrame({"analytic mean": post["b1"], "MC mean": beta_draws.mean(axis
 The simulated moments match the analytic ones to four decimals, so formulas and
 implementation agree. We keep the draws for the sample-based summaries below.
 
+The two marginals reported above hide whether the coefficients move together, so the
+next block scatters the joint draws of the intercept and the market beta on one pair of
+axes.
+
+**Reading the computation.** Each point is one joint draw of alpha and beta_mkt from the composition sampler above. A tilted cloud of points shows correlation directly; a circular cloud would show none.
+
+```{python}
+fig, ax = plt.subplots()
+ax.scatter(beta_draws[:3000, 0], beta_draws[:3000, 1], s=6, alpha=0.25, color="steelblue")
+ax.axvline(post["b1"][0], color="grey", lw=1)
+ax.axhline(post["b1"][1], color="grey", lw=1)
+ax.set_xlabel(r"alpha  $\beta_0$")
+ax.set_ylabel(r"market beta  $\beta_1$")
+ax.set_title("Joint posterior draws of alpha and the market beta")
+plt.tight_layout()
+plt.show()
+
+corr_ab = np.corrcoef(beta_draws[:, 0], beta_draws[:, 1])[0, 1]
+print(f"correlation between alpha and beta_mkt draws: {corr_ab:.3f}")
+```
+
+The cloud tilts down and to the right, and the printed correlation is negative: months in
+which the sampler assigns a higher alpha tend to pair it with a lower market beta, because
+both compete to explain the same realised returns through $X^\top X$. Neither marginal
+density above could have shown this; it only appears once the two coefficients are
+plotted against each other.
+
 ## Marginal posteriors
 
 Integrating $\beta$ out leaves $\sigma^2 \mid y \sim \text{Inverse-Gamma}(\alpha_1,
@@ -324,6 +351,33 @@ The posterior and its Normal approximation are almost indistinguishable, because
 66$ degrees of freedom is enough for the $t$ to look Gaussian; it would be poor with
 fifteen observations. The reference-prior posterior is slightly wider and shifted right,
 since the prior pulls toward $\beta_1 = 1$ and removes a little uncertainty.
+
+The variance marginal is easiest to judge next to its own prior, so the next block
+draws the Inverse-Gamma prior and posterior for $\sigma^2$ on the same axes.
+
+**Reading the computation.** The prior and posterior are both Inverse-Gamma densities, differing only in their two parameters. A posterior that has moved away from the prior and narrowed shows the data overruling the prior guess about the noise level.
+
+```{python}
+sg = np.linspace(0.0005, 0.006, 400)
+fig, ax = plt.subplots()
+ax.plot(sg, stats.invgamma(a=a0, scale=d0).pdf(sg), ":",
+        label=f"prior  IG({a0:.0f}, {d0:.4f})")
+ax.plot(sg, stats.invgamma(a=post["a1"], scale=post["d1"]).pdf(sg),
+        label=f"posterior  IG({post['a1']:.0f}, {post['d1']:.4f})")
+ax.axvline(sigma2_true, color="black", lw=1, label="true sigma^2")
+ax.set_xlabel(r"$\sigma^2$")
+ax.set_ylabel("density")
+ax.legend(fontsize=9)
+ax.set_title("Prior and posterior for the residual variance")
+plt.tight_layout()
+plt.show()
+```
+
+The posterior is visibly narrower than the prior and sits close to the true value of
+$0.0016$, since sixty months of returns are informative about volatility even though the
+regressors alone left the market beta poorly pinned down. Precision about the noise level
+and precision about the coefficients are separate questions, and this picture answers only
+the first.
 
 ### Marginalising is different from fixing a variance
 
@@ -455,6 +509,37 @@ the mean drifts toward the short-sample OLS estimate of $1.28$. A narrow posteri
 the wrong centre is false confidence, not precision, so such a sweep belongs alongside any
 small-sample result. The next lecture replaces this closed-form posterior with Monte Carlo
 integration, which is what we must do once the prior is no longer conjugate.
+
+The five posterior means just printed trace out a single path from the prior mean towards
+the OLS estimate as the prior loosens, which is worth its own picture.
+
+**Reading the computation.** Each point reuses a posterior mean already printed above, now plotted against the prior sd instead of alongside a density curve. A path climbing from the prior mean towards the OLS line visualises shrinkage directly.
+
+```{python}
+tbs = np.array([0.02, 0.05, 0.10, 0.25, 1.00])
+post_means_tb = np.array([
+    nig_update(ys, Xs, b0,
+               np.linalg.inv(np.diag(np.array([0.010, tb, 0.500]) ** 2 / sigma2_bar)),
+               a0, d0)["b1"][1]
+    for tb in tbs])
+
+fig, ax = plt.subplots()
+ax.plot(tbs, post_means_tb, "o-", color="steelblue", label="posterior mean of beta_mkt")
+ax.axhline(b_ols_s[1], color="grey", ls=":", label=f"24m OLS {b_ols_s[1]:.2f}")
+ax.axhline(b0[1], color="black", lw=1, ls="--", label="prior mean 1.00")
+ax.set_xlabel("prior sd on market beta")
+ax.set_ylabel("posterior mean of market beta")
+ax.legend(fontsize=9)
+ax.set_title("Shrinkage path: posterior mean from prior mean towards OLS")
+plt.tight_layout()
+plt.show()
+```
+
+The path starts pinned at the prior mean of one when the prior sd is tiny and climbs
+towards the short-sample OLS estimate as the prior loosens, flattening out once the prior
+is wide enough to stop restraining the data. Reading the shrinkage as a path rather than as
+five separate density curves makes the direction and the diminishing returns of loosening
+the prior easier to see at a glance.
 
 
 

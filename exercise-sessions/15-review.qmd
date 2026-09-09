@@ -64,6 +64,67 @@ the target. End the session with a short diagnosis that connects the economic
 question, the posterior target, and the computation used to answer it.
 :::
 
+## What the result looks like
+
+A trace plot and a running mean are the cheapest diagnostics available, and
+both are worth plotting before trusting any posterior summary. The chunk below
+targets the same standard Normal with two random-walk Metropolis chains that
+differ only in their proposal step size: one well tuned, one deliberately far
+too small, which is exactly the "mixes badly for a fixable reason" failure
+named in the practice questions below.
+
+```{python}
+import matplotlib.pyplot as plt
+
+def random_walk_metropolis(step, n_iter, rng):
+    """Random-walk Metropolis targeting a standard Normal."""
+    chain = np.empty(n_iter)
+    current, current_lp = 0.0, -0.5*0.0**2
+    for t in range(n_iter):
+        proposal = current+step*rng.standard_normal()
+        proposal_lp = -0.5*proposal**2
+        if np.log(rng.random()) < proposal_lp-current_lp:
+            current, current_lp = proposal, proposal_lp
+        chain[t] = current
+    return chain
+
+rng_diag = np.random.default_rng(7)
+n_iter = 4000
+good_chain = random_walk_metropolis(step=2.0, n_iter=n_iter, rng=rng_diag)
+bad_chain = random_walk_metropolis(step=0.02, n_iter=n_iter, rng=rng_diag)
+good_accept = np.mean(np.diff(good_chain) != 0)
+bad_accept = np.mean(np.diff(bad_chain) != 0)
+print('Acceptance rates [good, bad]:', good_accept, bad_accept)
+
+fig, axes = plt.subplots(2, 1, sharex=True)
+axes[0].plot(good_chain, color='tab:blue', lw=.6)
+axes[0].set_title('Well-tuned chain (step = 2.0)')
+axes[0].set_ylabel(r'$\theta$')
+axes[1].plot(bad_chain, color='tab:red', lw=.6)
+axes[1].set_title('Pathological chain (step = 0.02)')
+axes[1].set_ylabel(r'$\theta$'); axes[1].set_xlabel('iteration')
+fig.suptitle('Trace plots: good versus pathological mixing')
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots()
+ax.plot(np.cumsum(good_chain)/np.arange(1,n_iter+1), color='tab:blue',
+        label=f'well-tuned (accept {good_accept:.2f})')
+ax.plot(np.cumsum(bad_chain)/np.arange(1,n_iter+1), color='tab:red',
+        label=f'pathological (accept {bad_accept:.2f})')
+ax.axhline(0, color='black', linestyle='--', label='true mean')
+ax.set_xlabel('iteration'); ax.set_ylabel('running mean')
+ax.set_title('Running mean: good versus pathological mixing')
+ax.legend()
+plt.tight_layout(); plt.show()
+```
+
+The well-tuned chain's trace covers the bulk of the target quickly and its
+running mean settles near zero well before the run ends. The pathological
+chain's tiny step size gives a very high acceptance rate but almost no
+movement per iteration, so its trace looks like a slow random walk and its
+running mean is still drifting at the end of the run: high acceptance is not
+by itself evidence of good mixing.
+
 ## Discuss the results
 
 A successful test checks a specific claim. Normalised weights do not prove
@@ -75,17 +136,32 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+Each item below is a piece of code or a claim with something wrong in it.
+Find the error before you would think to increase the number of draws, exactly
+as the core assignment asks.
 
-1. Re-run the Gibbs sampler with only $S = 200$ total iterations and a burn-in of 50.
-   Compare the posterior means and interval widths to the long run, and comment on what
-   the difference says about Monte Carlo error.
-2. Add a redundant collinear column to $X$ (a near-copy of an existing regressor) and
-   describe how the posterior of the affected coefficients changes. Why does the prior
-   help here?
-3. Replace the posterior-predictive test statistic (residual standard deviation) with
-   the maximum of $y$. Does the model still pass the check, and what would a failing
-   check on this statistic tell you?
-4. Without running code, write down the full conditional for $\beta$ in the regression
-   model from memory, then check it against the formula in the lecture. This is exactly
-   the kind of recall the cheat sheet should support.
+1. **A sampler that does not target what its author thinks.** A colleague codes a
+   random-walk Metropolis step for a bounded parameter $\theta\in(0,1)$ by proposing
+   $\theta' = \theta+\text{step}\times\varepsilon$ and accepting whenever $\theta'\in(0,1)$
+   with the usual Metropolis ratio, but rejects out-of-range proposals *silently*
+   (without counting them as rejections or restarting the accept step). State what
+   invariant distribution this sampler actually has, and show, using the acceptance-rate
+   printout above as a template, how you would detect the bug from the output alone.
+2. **A dimension or parameterisation error.** A student's regression code builds the
+   posterior precision as `X.T @ X / sigma2 + np.diag(1/prior_var)` where `prior_var` is a
+   vector of length $K-1$ for a model with $K$ regressors including an intercept. Explain
+   what error this throws or, worse, what it silently broadcasts to if the shapes happen
+   to be compatible, and say which single printed shape check would have caught it
+   immediately.
+3. **A chain that mixes badly for a fixable reason.** Using the pathological chain
+   plotted above as a template, a student instead reports a *random-walk Metropolis*
+   sampler with a step size of 200 (rather than 0.02) as "not converging". Explain why an
+   oversized step also produces poor mixing, why its trace plot and its acceptance rate
+   look different from the too-small-step case above, and state the one-line fix in each
+   direction.
+4. **A claim that cannot be supported by the output shown.** A report states "the chain
+   has converged and the posterior mean is accurate to two decimal places" citing only a
+   trace plot of the last 100 iterations of a single chain. Using the diagnostics actually
+   available above, running mean, acceptance rate, and comparison across chains or
+   step sizes, say what evidence would be needed to support that claim and what it would
+   take to falsify it.

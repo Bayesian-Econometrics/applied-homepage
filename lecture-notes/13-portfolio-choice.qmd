@@ -189,6 +189,74 @@ The two variances agree, and the Bayesian weights pull toward a visibly less agg
 portfolio, an automatic consequence of maximising expected utility against a wider,
 fatter-tailed predictive distribution instead of a razor-thin plug-in one.
 
+### Expected utility against the size of the position
+
+The plug-in and predictive weights above are each optimal for their own distribution, but "optimal" is a claim about
+a curve, not just its peak. We trace expected CARA utility as the chosen weight vector is scaled away from and back
+toward each rule's own optimum: the plug-in curve uses the closed-form Gaussian formula derived earlier, and the
+predictive curve is a Monte Carlo average over the simulated predictive draws already generated, since the CARA
+moment used for the closed form is not guaranteed to exist once the return distribution is heavy-tailed.
+
+**Reading the computation.** Both expected-utility curves are evaluated along their own optimal direction, scaled by a factor `t`; a curve that peaks at `t = 1` would confirm the earlier weights are locally optimal for the criterion actually being maximised.
+
+```{python}
+def eu_gaussian(w, mu, Sigma, gamma):
+    m, s2 = w @ mu, w @ Sigma @ w
+    return -np.exp(-gamma * (m - 0.5 * gamma * s2))
+
+t_grid = np.linspace(0.0, 2.0, 80)
+eu_plug = np.array([eu_gaussian(t * w_plug, mu_hat, S, gamma) for t in t_grid])
+eu_bayes_mc = np.array([-np.mean(np.exp(-gamma * (sim @ (t * w_bayes)))) for t in t_grid])
+t_star_plug, t_star_bayes = t_grid[np.argmax(eu_plug)], t_grid[np.argmax(eu_bayes_mc)]
+
+fig, ax = plt.subplots()
+ax.plot(t_grid, eu_plug, color="C1", label="plug-in (Gaussian, closed form)")
+ax.plot(t_grid, eu_bayes_mc, color="C0", label="predictive (Monte Carlo)")
+ax.axvline(t_star_plug, color="C1", ls=":", lw=1)
+ax.axvline(t_star_bayes, color="C0", ls=":", lw=1)
+ax.set_xlabel("scale applied to the rule's own optimal weights")
+ax.set_ylabel("expected CARA utility")
+ax.legend(fontsize=9)
+ax.set_title("Both criteria peak near their own optimal weights")
+plt.tight_layout(); plt.show()
+
+print(f"argmax scale: plug-in {t_star_plug:.2f}, predictive (Monte Carlo) {t_star_bayes:.2f}")
+```
+
+Both curves peak close to a scale of one, confirming the earlier weights against a direct evaluation of expected
+utility rather than only against the first-order condition that produced them, and both fall away on either side,
+more steeply for the plug-in curve since it is evaluated against a narrower distribution.
+
+A related question is what the two return distributions being maximised against actually look like, holding the
+asset fixed so that the comparison is about the distribution and not about how much weight each rule happens to
+place on it. We take the single asset with the largest sample variance and compare its plug-in Gaussian draws with
+its posterior predictive draws, already generated above for the closed-form check.
+
+**Reading the computation.** The plug-in sample draws that asset's return from the estimated Gaussian; the predictive sample reads off the same column of the posterior predictive draws generated earlier. Neither uses portfolio weights, so the comparison isolates the shape of the return distribution itself.
+
+```{python}
+plugin_draws = rng.multivariate_normal(mu_hat, S, size=sim.shape[0])
+j_risky = int(np.argmax(np.diag(S)))
+r_pred, r_plug = sim[:, j_risky], plugin_draws[:, j_risky]
+
+fig, ax = plt.subplots()
+ax.hist(r_plug, bins=50, density=True, alpha=0.55, label="plug-in (Gaussian)")
+ax.hist(r_pred, bins=50, density=True, alpha=0.55, label="Bayesian predictive")
+ax.set_xlabel(f"return on asset {j_risky + 1}"); ax.set_ylabel("density")
+ax.legend(); ax.set_title("Parameter uncertainty widens and fattens the predictive return")
+plt.tight_layout(); plt.show()
+
+print(f"std dev: plug-in {r_plug.std():.4f}, predictive {r_pred.std():.4f}; "
+      f"excess kurtosis: plug-in {stats.kurtosis(r_plug):.2f}, "
+      f"predictive {stats.kurtosis(r_pred):.2f}")
+```
+
+The predictive histogram sits a little wider than the plug-in one and its printed excess kurtosis is positive where
+the plug-in one is essentially zero, confirming the direction of the effect derived above. With $T = 120$ and only
+four assets the inflation factor $(1+1/T)(T-1)/(T-n-2)$ is close to one, so here the widening is a modest, single-digit
+percentage rather than a dramatic one; the next figure shows it growing sharply once the sample shrinks toward the
+number of assets, which is exactly where the plug-in rule is at its most dangerous.
+
 ### Derive the two sources of predictive risk
 
 Use $p(\mu,\Sigma)\propto|\Sigma|^{-(n+1)/2}$, flat in $\mu$, with positive
@@ -324,6 +392,32 @@ samples, the normal situation for many asset classes, the plug-in loss is consis
 the larger, confirming that ignoring parameter uncertainty is costly precisely when it is
 hardest to avoid.
 
+The certainty-equivalent loss is a consequence of a more visible fact: the two rules choose different amounts of
+leverage, and the gap between them is itself a function of how much data went into estimating $\mu$ and $\Sigma$.
+
+**Reading the computation.** Each sample size draws a fresh estimation sample and both rules' weights from it, exactly as in the loss calculation above, but here the object recorded is gross leverage rather than certainty-equivalent loss.
+
+```{python}
+lev_plug, lev_bayes = [], []
+for T_s in sizes:
+    R_s = rng.multivariate_normal(true_mu, true_Sigma, size=T_s)
+    w_p = mv_weights(R_s.mean(0), np.cov(R_s, rowvar=False), gamma)
+    w_b = predictive_weights(R_s, gamma)
+    lev_plug.append(np.abs(w_p).sum())
+    lev_bayes.append(np.abs(w_b).sum())
+
+fig, ax = plt.subplots()
+ax.plot(sizes, lev_plug, "o-", color="C1", label="plug-in")
+ax.plot(sizes, lev_bayes, "o-", color="C0", label="Bayesian predictive")
+ax.set_xlabel("estimation sample size T"); ax.set_ylabel("gross leverage (sum |w|)")
+ax.legend(); ax.set_title("The predictive rule trades a smaller, less levered position")
+plt.tight_layout(); plt.show()
+```
+
+The plug-in leverage is erratic and often far above the Bayesian one at short samples, the same estimation-error
+amplification through matrix inversion seen at the start of the chapter, and the gap between the two curves narrows
+as $T$ grows and both rules converge on the same, better-estimated optimum.
+
 ## Model uncertainty
 
 Everything so far has fixed the functional form of the return model and asked only how
@@ -376,6 +470,17 @@ print(f"posterior model probabilities: iid {p_iid:.3f}, predictable {p_pred:.3f}
 print(f"weight if iid true {wA:.3f}, if predictable true {wB:.3f}, "
       f"model-averaged {w_bma:.3f}")
 print(f"variance: within-model {var_within:.6f}, across-model {var_across:.6f}")
+```
+
+**Reading the computation.** The bar chart displays exactly the three weights just printed, so any pattern it shows is visible in the numbers above as well.
+
+```{python}
+fig, ax = plt.subplots()
+ax.bar([f"i.i.d. model\n(prob {p_iid:.2f})", f"predictable model\n(prob {p_pred:.2f})",
+        "model averaged"], [wA, wB, w_bma], color=["C1", "C2", "C0"])
+ax.set_ylabel("optimal weight in the risky asset")
+ax.set_title("Model averaging blends, rather than picks, the two allocations")
+plt.tight_layout(); plt.show()
 ```
 
 The model-averaged weight is not a probability-weighted average of $w_A$ and $w_B$: it

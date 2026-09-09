@@ -70,6 +70,83 @@ persistent levels; a zero mean may suit growth rates better. Intercepts require
 their own unit-aware scale rather than the coefficient scale ratio.
 :::
 
+## What the result looks like
+
+The first figure below reshapes the prior standard deviations of the coefficient
+block into an equation-by-(lag, variable) grid, so the own-lag/cross-lag split and
+the lag decay are visible at once. The second figure simulates a small VAR from the
+same equations, then compares the OLS estimate of one equation with the Bayesian
+posterior mean under this Minnesota prior, showing how far shrinkage pulls the
+noisy OLS coefficients back towards the prior mean.
+
+```{python}
+import matplotlib.pyplot as plt
+
+sd_block = np.zeros((M, LAGS, M))
+for i in range(M):
+    for lag in range(1, LAGS+1):
+        for j in range(M):
+            v = LAMBDA1/lag**2
+            if i != j:
+                v *= LAMBDA2*(scales[i]/scales[j])**2
+            sd_block[i, lag-1, j] = np.sqrt(v)
+
+fig, ax = plt.subplots(figsize=(7.5, 3.4))
+im = ax.imshow(sd_block[0], aspect='auto', cmap='viridis')
+ax.set_xticks(range(M))
+ax.set_xticklabels([f'y{j+1}' for j in range(M)])
+ax.set_yticks(range(LAGS))
+ax.set_yticklabels([f'lag {l+1}' for l in range(LAGS)])
+ax.set_xlabel('regressor variable')
+ax.set_ylabel('lag')
+ax.set_title('Minnesota prior std. dev., equation for y1')
+fig.colorbar(im, ax=ax, label='prior std. dev.')
+plt.tight_layout()
+plt.show()
+
+T_SIM = 120
+A1 = np.zeros((M, M))
+np.fill_diagonal(A1, [.6, .5, .55, .45, .5])
+A1[0, 1], A1[1, 0] = .1, -.1
+sim_rng = np.random.default_rng(11)
+sim = np.zeros((T_SIM+LAGS, M))
+for t in range(LAGS, T_SIM+LAGS):
+    sim[t] = A1 @ sim[t-1] + sim_rng.normal(0, .5, M)
+sim = sim[LAGS:]
+Xsim = np.column_stack([np.ones(T_SIM-LAGS)] +
+                       [sim[LAGS-lag:T_SIM-lag] for lag in range(1, LAGS+1)])
+ysim = sim[LAGS:, 0]
+beta_ols = np.linalg.lstsq(Xsim, ysim, rcond=None)[0]
+eq_var = variances[:K]
+P0_eq = np.diag(1/np.asarray(eq_var))
+b0_eq = np.asarray(mean[:K])
+V1_eq = np.linalg.inv(P0_eq + Xsim.T @ Xsim)
+beta_bayes = V1_eq @ (P0_eq @ b0_eq + Xsim.T @ ysim)
+own_lag1_shrinkage = abs(beta_bayes[1]-b0_eq[1])/max(abs(beta_ols[1]-b0_eq[1]), 1e-8)
+print(f'OLS own-lag-1 coefficient: {beta_ols[1]:.3f}   '
+      f'Bayes own-lag-1 coefficient: {beta_bayes[1]:.3f}   '
+      f'prior mean: {b0_eq[1]:.3f}')
+
+fig, ax = plt.subplots()
+idx = np.arange(K)
+ax.plot(idx, b0_eq, 'k--', lw=1.4, label='prior mean')
+ax.plot(idx, beta_ols, 'o', ms=4, alpha=.7, label='OLS')
+ax.plot(idx, beta_bayes, 's', ms=4, alpha=.8, label='Bayesian (Minnesota)')
+ax.set_xlabel('coefficient index (intercept, then lag 1..4 x 5 variables)')
+ax.set_ylabel('coefficient value')
+ax.set_title('OLS scatters; the Minnesota prior shrinks towards the random walk')
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+The Minnesota prior standard deviations are largest on the own-lag-1 entries and
+fall away both across lags and towards cross-variable regressors, exactly the
+pattern the covariance construction imposes. In the simulated equation, OLS
+scatters around the true dynamics while the Bayesian posterior mean sits closer
+to the prior mean of a unit own-lag-1 coefficient whenever the data are less
+informative than the prior.
+
 ## Discuss the results
 
 The dimension is 105. Within a fixed equation/regressor pair, a lag-4 variance
@@ -81,17 +158,22 @@ Which result reflects the economic model, which reflects the prior, and which co
 
 ## Additional practice from the lecture
 
-The following questions refer to the notation and code in the linked lecture chapter.
+The following questions extend the Minnesota covariance construction above.
 
-1. Re-run the high-dimensional simulation with $k = 80$ regressors and $n_{train} = 50$.
-   How much does OLS deteriorate relative to ridge, and why does the gap widen as $k$
-   approaches $n$?
-2. For a fixed $\tau$, compute the full ridge posterior covariance
-   $V = \sigma^2 (X^\top X + \lambda I_k)^{-1}$ and report the posterior standard
-   deviation of the first coefficient. Compare it to the OLS standard error.
-3. Modify the bias-variance experiment to report in-sample MSE alongside out-of-sample
-   MSE as $\tau$ varies. Explain why the two curves disagree about the best $\tau$.
-4. Change $\lambda_2$ from 0.5 to 0.1 in the Minnesota prior and redraw the variance
-   heatmap. Describe how the relative treatment of own and cross lags changes.
-5. In two or three sentences, summarise the illusion-of-sparsity finding and explain why
-   it supports a dense Normal prior over exact variable selection.
+1. Build the same five-variable, four-lag covariance for two more values of the overall
+   tightness, $\lambda_1 = 0.05$ and $\lambda_1 = 1.0$, and redraw the standard-deviation
+   heatmap for each. Report how the own-lag-1 standard deviation changes and confirm that
+   the lag-decay ratio between lag 1 and lag 4 stays at 16 regardless of $\lambda_1$.
+2. Halve $\lambda_2$ to 0.25 and double it to 1.0, holding $\lambda_1$ fixed. For a fixed
+   cross-lag entry, report the resulting standard deviation in each case and check it
+   against the $\sqrt{\lambda_2}$ scaling implied by the variance formula.
+3. Derive, from the variance formula, the exact ratio of the own-lag-1 standard deviation
+   to the cross-lag-1 standard deviation as a function of $\lambda_2$ and the scale ratio
+   $s_i/s_j$ alone. Then compute that ratio numerically from the covariance matrix for the
+   $(y_1, y_2)$ pair and confirm the two agree to machine precision.
+4. A desk must decide how many quarters of data to wait for before trusting an estimated
+   cross-variable spillover coefficient over the Minnesota prior mean of zero. Using the
+   posterior-mean formula $m = V_1(P_0 b_0 + X^\top X\,\hat\beta_{\text{OLS}})$, find
+   the approximate sample size at which the data-implied precision $X^\top X$ starts to
+   dominate the prior precision $P_0$ for a cross-lag-1 coefficient, and explain what that
+   means for how quickly the desk should start acting on such an estimate.
