@@ -1,0 +1,95 @@
+---
+title: "Week 11: SSVS sampler"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/11-variable-selection.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Which finance factors are supported individually, and which are only useful as a group?
+
+## Derive before coding
+
+Use a continuous Normal spike and slab with indicator prior Bernoulli(pi).
+Derive the coefficient Normal conditional, the variance inverse-Gamma conditional,
+and the log-odds update for each indicator. Explain why an indicator equal to zero
+does not make its coefficient exactly zero in this formulation.
+
+## Core assignment
+
+1. Simulate a factor and a close proxy alongside noise variables.
+2. Implement the three SSVS blocks and estimate PIPs.
+3. Report the probability that at least one of the correlated pair is included.
+4. Compare predictive means averaged over draws with a selected-model forecast. Change the prior inclusion probability.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy.special import expit
+
+SEED, N, K, ITER, BURN = 2026, 180, 12, 2500, 700
+rng = np.random.default_rng(SEED)
+X = rng.normal(size=(N,K))
+X[:,1] = .95*X[:,0]+np.sqrt(1-.95**2)*X[:,1]
+truth = np.zeros(K)
+truth[[0,4]] = [1.,-.6]
+y = X @ truth+rng.normal(size=N)
+SPIKE, SLAB, PI = .05, 1., .2
+included, variance = np.ones(K), 1.0
+indicators, coefficients = np.empty((ITER-BURN,K)), np.empty((ITER-BURN,K))
+for s in range(ITER):
+    prior_var = np.where(included==1,SLAB**2,SPIKE**2)
+    covariance = np.linalg.inv(X.T @ X/variance+np.diag(1/prior_var))
+    mean = covariance @ X.T @ y/variance
+    beta = mean+np.linalg.cholesky(covariance) @ rng.standard_normal(K)
+    log_odds = (np.log(PI/(1-PI))+np.log(SPIKE/SLAB)
+                +.5*beta**2*(1/SPIKE**2-1/SLAB**2))
+    included = rng.binomial(1,expit(log_odds))
+    residual = y-X @ beta
+    variance = 1/rng.gamma(3+N/2,1/(2+residual @ residual/2))
+    if s >= BURN:
+        indicators[s-BURN], coefficients[s-BURN] = included,beta
+print(pd.DataFrame({'true':truth,'PIP':indicators.mean(0),'mean':coefficients.mean(0)}))
+print('P(at least one of factors 1 and 2):',np.mean(indicators[:,:2].sum(1)>0))
+```
+
+A correlated proxy can share posterior support with the generating factor.
+The union probability is calculated from joint draws; adding PIPs would count
+joint inclusions twice. A PIP is conditional on the factor set and prior, so it
+is not a universal measure of a factor's economic truth.
+:::
+
+## Discuss the results
+
+A correlated proxy can share posterior support with the generating factor.
+The union probability is calculated from joint draws; adding PIPs would count
+joint inclusions twice. A PIP is conditional on the factor set and prior, so it
+is not a universal measure of a factor's economic truth.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Derive the indicator full conditional: show that $\Pr(\gamma_j = 1 \mid \beta_j) = O_j/(1 + O_j)$ with
+   $O_j$ as in the text, and explain why it is free of $y$ and $\sigma^2$ once $\beta_j$ is known.
+2. Rerun the sampler with $c = 10$ and then $c = 200$, holding $\tau$ fixed. Report how the inclusion
+   probabilities respond, and relate the pattern to the $1/c$ Occam term in the odds ratio.
+3. Replace the fixed $\pi$ with a hierarchical $\pi \sim \text{Beta}(1, 1)$, adding the draw $\pi \mid \gamma
+   \sim \text{Beta}\big(1 + \sum_j \gamma_j, 1 + p - \sum_j \gamma_j\big)$, and say why this aids
+   multiplicity control.
+4. Simulate a dense truth on the same design matrix, all 25 coefficients non-zero and rescaled to the
+   same signal variance, and rerun both procedures. Does the predictive ranking reverse?
+5. Reduce the estimation sample to $n = 80$ and rerun both comparisons. Discuss which procedure degrades
+   faster and whether the out-of-sample ranking survives.

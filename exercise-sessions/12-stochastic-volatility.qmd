@@ -1,0 +1,169 @@
+---
+title: "Week 12: SV sampler"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/12-stochastic-volatility.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Can a single-state JPR sampler recover latent volatility and its persistence?
+
+## Derive before coding
+
+Derive the two-neighbour Normal kernel for log volatility. Transform to
+variance and retain the Jacobian. Match a lognormal's moments with an inverse-Gamma
+blanket and derive the accept-reject density f(s)=min(p(s),c q(s)). Show why the
+final Metropolis ratio corrects proposals even when c q is not a global bound.
+
+## Core assignment
+
+1. Simulate a stationary SV path and returns, then implement both JPR stages.
+2. Include the stationary initial-state contribution in the parameter updates.
+3. Compare posterior parameter summaries with the generating values and plot several state intervals.
+4. Increase persistence, run independent chains, and compare effective sample size with the simpler Gaussian proposal described in the lecture.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+from scipy import stats
+
+SEED, T = 2026, 160
+rng = np.random.default_rng(SEED)
+mu_true, phi_true, sig_true = -9.0, .95, .30
+truth = np.empty(T)
+truth[0] = rng.normal(mu_true, sig_true/np.sqrt(1-phi_true**2))
+for t in range(1,T):
+    truth[t] = mu_true+phi_true*(truth[t-1]-mu_true)+sig_true*rng.normal()
+r = np.exp(truth/2)*rng.normal(size=T)
+
+from scipy.special import gammaln
+
+def log_variance_target(log_s: np.ndarray, r2: np.ndarray,
+                        mean: np.ndarray, variance: np.ndarray) -> np.ndarray:
+    """Conditional variance density evaluated at log(s), with respect to ds."""
+    return -1.5*log_s-r2*np.exp(-log_s)/2-(log_s-mean)**2/(2*variance)
+
+def log_ig_at_log(log_s: np.ndarray, shape: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    """Inverse-Gamma log density with respect to ds, evaluated at log(s)."""
+    return shape*np.log(scale)-gammaln(shape)-(shape+1)*log_s-scale*np.exp(-log_s)
+
+def jpr_update(old: np.ndarray, r2: np.ndarray, mean: np.ndarray,
+               variance: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, int]:
+    """JPR accept-reject/MH update using a moment-matched inverse-Gamma blanket."""
+    a_ln = 2+1/np.expm1(variance)
+    b_ln = (a_ln-1)*np.exp(mean+variance/2)
+    shape, scale = a_ln+.5, b_ln+r2/2
+    log_c = (log_variance_target(mean,r2,mean,variance)
+             -log_ig_at_log(mean,shape,scale))
+    proposal = old.copy()
+    pending = np.arange(len(old))
+    while len(pending):
+        candidate = -np.log(rng.gamma(shape[pending],1/scale[pending]))
+        lp = log_variance_target(candidate,r2[pending],mean[pending],variance[pending])
+        lq = log_ig_at_log(candidate,shape[pending],scale[pending])
+        keep = np.log(rng.random(len(pending))) < np.minimum(0,lp-log_c[pending]-lq)
+        proposal[pending[keep]] = candidate[keep]
+        pending = pending[~keep]
+    old_p = log_variance_target(old,r2,mean,variance)
+    new_p = log_variance_target(proposal,r2,mean,variance)
+    old_f = np.minimum(old_p,log_c+log_ig_at_log(old,shape,scale))
+    new_f = np.minimum(new_p,log_c+log_ig_at_log(proposal,shape,scale))
+    accept = np.log(rng.random(len(old))) < new_p-old_p+old_f-new_f
+    return np.where(accept,proposal,old), int(accept.sum())
+
+def initial_log_density(h0: float, alpha: float, phi: float, s2: float) -> float:
+    """Stationary initial-state density, omitting a parameter-independent constant."""
+    return float(.5*np.log(1-phi**2)-.5*np.log(s2)
+                 -(1-phi**2)*(h0-alpha/(1-phi))**2/(2*s2))
+
+g0, G0 = np.array([0.0, 0.9]), np.diag([10.0, 0.25])
+G0_inv = np.linalg.inv(G0)
+c0, d0 = 6.0, 0.20                       # prior mean of sigma_h^2 equals 0.04
+n_iter, burn = 2500, 800
+h, phi, s2 = np.full(T, np.log(r.var())), 0.9, 0.05
+alpha = np.log(r.var()) * (1 - phi)
+even, odd, r2 = np.arange(0, T, 2), np.arange(1, T, 2), r**2
+par_draws, h_draws = np.empty((n_iter - burn, 3)), np.empty((n_iter - burn, T))
+acc = n_prop = 0
+
+for it in range(n_iter):
+    mu = alpha / (1 - phi)
+    for grp in (even, odd):              # two conditionally independent half-sweeps
+        m, v = np.empty(T), np.full(T, s2)
+        m[1:-1] = (alpha * (1 - phi) + phi * (h[:-2] + h[2:])) / (1 + phi**2)
+        v[1:-1] = s2 / (1 + phi**2)
+        m[0], m[-1] = mu * (1 - phi) + phi * h[1], alpha + phi * h[-2]
+        h[grp], accepted = jpr_update(h[grp], r2[grp], m[grp], v[grp], rng)
+        acc += accepted
+        n_prop += grp.size
+    Z, y = np.column_stack([np.ones(T - 1), h[:-1]]), h[1:]
+    G1 = np.linalg.inv(G0_inv + Z.T @ Z / s2)
+    L = np.linalg.cholesky(G1)
+    g1 = G1 @ (G0_inv @ g0 + Z.T @ y / s2)
+    cand = g1 + L @ rng.standard_normal(2)
+    while abs(cand[1]) >= 1:
+        cand = g1 + L @ rng.standard_normal(2)
+    log_ratio = (initial_log_density(h[0], cand[0], cand[1], s2)
+                 - initial_log_density(h[0], alpha, phi, s2))
+    if np.log(rng.random()) < log_ratio:
+        alpha, phi = cand
+    e = y - Z @ np.array([alpha, phi])
+    initial_ss = (1-phi**2)*(h[0]-alpha/(1-phi))**2
+    s2 = 1.0 / rng.gamma(c0 + T/2, 1.0 / (d0 + 0.5*(e @ e + initial_ss)))
+    if it >= burn:
+        par_draws[it - burn] = [alpha / (1 - phi), phi, np.sqrt(s2)]
+        h_draws[it - burn] = h
+
+print(f"kept {par_draws.shape[0]} draws, acceptance rate {acc / n_prop:.3f}")
+print('Posterior means [mu, phi, sigma_h]:', par_draws.mean(0))
+print('True parameters:', [mu_true, phi_true, sig_true])
+print('Posterior intervals:', np.quantile(par_draws,[.025,.975],axis=0))
+
+```
+
+The teaching run is deliberately short enough to inspect. A true value need not
+lie inside every realised credible interval, and persistence can mix slowly.
+The accept-reject candidates are internal proposals; only the final corrected
+chain is used for posterior summaries. All density ratios in the JPR helper
+are densities with respect to variance ds, evaluated at log(s). Mixing measures
+must not silently compare a density in ds with one in dlog(s).
+:::
+
+## Discuss the results
+
+The teaching run is deliberately short enough to inspect. A true value need not
+lie inside every realised credible interval, and persistence can mix slowly.
+The accept-reject candidates are internal proposals; only the final corrected
+chain is used for posterior summaries. All density ratios in the JPR helper
+are densities with respect to variance ds, evaluated at log(s). Mixing measures
+must not silently compare a density in ds with one in dlog(s).
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Rerun the sampler with $\phi = 0.99$ and with $\phi = 0.85$, holding $\sigma_h$ fixed,
+   and explain why the near-unit-root case gives the larger inefficiency factor.
+2. Replace the informative inverse-gamma prior on $\sigma_h^2$ by a nearly flat one, for
+   instance $c_0 = d_0 = 0.01$, and describe what happens to the posterior of $\phi$ and
+   to the smoothness of the estimated volatility path.
+3. Change the Metropolis step to a random-walk proposal $h_t^{\text{new}} = h_t + \tau
+   \varepsilon$, tune $\tau$ to an acceptance rate near one third, and compare the
+   inefficiency factor of a mid-sample $h_t$ with that of the sampler above.
+4. Compute the posterior predictive distribution of $h_{T+1}, \dots, h_{T+20}$ by
+   iterating the state equation forward for every retained draw and plot the forecast fan.
+   How much of the uncertainty is parameter rather than shock uncertainty?
+5. Derive the mean and variance of $\log u_t^2$ for $u_t \sim \mathcal{N}(0,1)$, verify
+   them by simulation, and use the variance to argue why one observation is so
+   uninformative about $h_t$ when $\sigma_h$ is small.

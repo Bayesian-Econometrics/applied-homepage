@@ -1,0 +1,105 @@
+---
+title: "Week 10: Policy impact"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/10-causal-inference.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+What is the posterior average policy effect after flexible adjustment for observed confounders?
+
+## Derive before coding
+
+State consistency, unconfoundedness, and overlap. For every BART surface draw,
+derive $\tau^{(s)}=n^{-1}\sum_i[f^{(s)}(1,X_i)-f^{(s)}(0,X_i)]$.
+Explain why both potential-treatment predictions must use the same tree draw.
+
+## Core assignment
+
+1. Simulate nonlinear confounding and compare the raw difference with the known average effect.
+2. Fit an actual BART outcome model, with treatment included as a predictor.
+3. Predict both treatment assignments together and form a draw-wise average contrast.
+4. Examine posterior uncertainty and overlap. Repeat with weaker overlap, and explain why flexibility cannot fix unobserved confounding.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+This reference implementation uses `pymc` and `pymc-bart`. It is displayed without automatic execution in the website build; run it in a course environment containing those packages. The remaining sessions use NumPy, pandas, SciPy and Matplotlib.
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+#| eval: false
+import numpy as np
+import pymc as pm
+import pymc_bart as pmb
+
+SEED, N, DRAWS, TUNE = 2026, 250, 600, 600
+rng = np.random.default_rng(SEED)
+x = rng.normal(size=N)
+propensity = 1/(1+np.exp(-.7*x))
+treatment = rng.binomial(1,propensity)
+truth = 1.5+.4*x
+y = np.sin(2*x)+.5*x**2+treatment*truth+rng.normal(size=N)
+training = np.column_stack([treatment,x])
+with pm.Model() as model:
+    features = pm.Data('features',training)
+    mu = pmb.BART('mu',features,y,m=30)
+    sigma = pm.HalfNormal('sigma',1.5)
+    outcome = pm.Normal('outcome',mu,sigma,observed=y,shape=mu.shape)
+    idata = pm.sample(draws=DRAWS,tune=TUNE,chains=2,cores=1,random_seed=SEED,
+                      progressbar=False)
+counterfactual = np.vstack([np.column_stack([np.ones(N),x]),
+                           np.column_stack([np.zeros(N),x])])
+with model:
+    pm.set_data({'features':counterfactual})
+    prediction = pm.sample_posterior_predictive(idata,var_names=['mu'],
+                    predictions=True,random_seed=SEED+1,progressbar=False)
+surfaces = prediction.predictions['mu'].values.reshape(-1,2*N)
+effects = (surfaces[:,:N]-surfaces[:,N:]).mean(axis=1)
+print('Raw contrast:',y[treatment==1].mean()-y[treatment==0].mean())
+print('True empirical average effect:',truth.mean())
+print('BART posterior mean and interval:',effects.mean(),np.quantile(effects,[.025,.975]))
+print(pm.summary(idata,var_names=['sigma']))
+```
+
+The code learns tree structures with PyMC-BART rather than fixing stump
+locations. Predicting both arms in one call preserves their shared surface draw.
+This is uncertainty about an average conditional effect under the identifying
+assumptions. Inspect multiple chains and repeat the fit before interpreting a
+narrow interval as numerical precision. See the official PyMC-BART documentation
+linked below for model and predictive APIs.
+:::
+
+## Discuss the results
+
+The code learns tree structures with PyMC-BART rather than fixing stump
+locations. Predicting both arms in one call preserves their shared surface draw.
+This is uncertainty about an average conditional effect under the identifying
+assumptions. Inspect multiple chains and repeat the fit before interpreting a
+narrow interval as numerical precision. See the official PyMC-BART documentation
+linked below for model and predictive APIs.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Weaken the instrument by setting the slope in `gamma_iv` to $0.15$ and rerun the Gibbs sampler.
+   Describe what happens to the width and coverage of the posterior for $\beta$, and why.
+2. Set `rho_iv` to zero, so the regressor is exogenous. Compare the Bayesian IV posterior with the
+   least-squares interval and explain why instrumenting is now a cost rather than a cure.
+3. Multiply `sa2` by one hundred to remove most of the shrinkage, then describe what happens to the
+   fitted surface in the sparse tails of $X$ and to the credible interval for $\tau$.
+4. Make the treatment effect heterogeneous, say $\tau_i = 2 + 0.8 X_i$, and explain why the
+   constant-$\tau$ specification then estimates a weighted average of the individual effects.
+
+## Implementation reference
+
+[PyMC-BART introduction and prediction API](https://www.pymc.io/projects/examples/en/stable/bart/bart_introduction.html). The BART model learns tree structures; the fixed-stump example in the causal lecture is only a transparent introduction to shrinkage and backfitting.

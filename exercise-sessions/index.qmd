@@ -1,0 +1,35 @@
+---
+title: "Exercise sessions"
+---
+
+Each session follows the lecture schedule. Derive the update first, implement it in Python, then explain the output. Open the reference implementation after attempting the core task. The additional questions extend the lecture examples.
+
+- [Week 1 — Grid search](01-introduction.qmd)
+
+- [Week 2 — Matrix update](02-linear-regression.qmd)
+
+- [Week 3 — Vanilla Monte Carlo](03-monte-carlo-importance-sampling.qmd)
+
+- [Week 4 — The workhorse](04-gibbs-sampling.qmd)
+
+- [Week 5 — HMC versus MH](05-metropolis-hastings-nuts.qmd)
+
+- [Week 6 — Prior tuning](06-minnesota-priors.qmd)
+
+- [Week 7 — BVAR lab](07-bvar-identification.qmd)
+
+- [Week 8 — TVP filter](08-state-space-tvp.qmd)
+
+- [Week 9 — Backtesting](09-prediction-bma.qmd)
+
+- [Week 10 — Policy impact](10-causal-inference.qmd)
+
+- [Week 11 — SSVS sampler](11-variable-selection.qmd)
+
+- [Week 12 — SV sampler](12-stochastic-volatility.qmd)
+
+- [Week 13 — Robust allocation](13-portfolio-choice.qmd)
+
+- [Week 14 — Non-linear Bayes](14-bayesian-machine-learning.qmd)
+
+- [Week 15 — Review and troubleshooting](15-review.qmd)

@@ -1,0 +1,96 @@
+---
+title: "Week 2: Matrix update"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/02-linear-regression.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+What do sixty monthly returns tell us about a CAPM beta relative to a prior beta of one?
+
+## Derive before coding
+
+Use $\beta\mid\sigma^2\sim N(b_0,\sigma^2B_0)$ and
+$\sigma^2\sim IG(a_0,d_0)$. Derive $P_1=B_0^{-1}+X^\top X$,
+$b_1=P_1^{-1}(B_0^{-1}b_0+X^\top y)$, $a_1=a_0+n/2$, and $d_1=d_0+Q/2$.
+Show that $Q=\|y-Xb_1\|^2+(b_1-b_0)^\top B_0^{-1}(b_1-b_0)$.
+This exercise uses algebra and distribution functions, not posterior simulation.
+
+## Core assignment
+
+1. Generate the supplied classroom CAPM sample and write down all matrix dimensions.
+2. Calculate the four NIG posterior parameters using matrix operations.
+3. Derive the marginal Student-t for beta and compute P(beta > 1).
+4. Tighten the beta prior and halve the sample. Separate shifts in the mean from changes in uncertainty.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+SEED, N = 2026, 60
+rng = np.random.default_rng(SEED)
+market = rng.normal(0.006, 0.045, N)
+X = np.column_stack([np.ones(N), market])
+y = X @ np.array([0.002, 1.2]) + rng.normal(0, 0.04, N)
+b0 = np.array([0.0, 1.0])
+a0, d0 = 3.0, 0.0032
+B0 = np.diag(np.array([0.01, 0.5])**2 / (d0 / (a0 - 1)))
+P0 = np.linalg.inv(B0)
+P1 = P0 + X.T @ X
+B1 = np.linalg.inv(P1)
+b1 = np.linalg.solve(P1, P0 @ b0 + X.T @ y)
+Q = y @ y + b0 @ P0 @ b0 - b1 @ P1 @ b1
+residual = y - X @ b1
+assert np.isclose(Q, residual @ residual + (b1-b0) @ P0 @ (b1-b0))
+a1, d1 = a0 + N/2, d0 + Q/2
+scale = np.sqrt(d1/a1 * np.diag(B1))
+beta_dist = stats.t(df=2*a1, loc=b1[1], scale=scale[1])
+pd.DataFrame({'mean': b1, 'posterior sd': np.sqrt(d1/(a1-1)*np.diag(B1)),
+              'lower': b1 + stats.t.ppf(.025, 2*a1)*scale,
+              'upper': b1 + stats.t.ppf(.975, 2*a1)*scale}, index=['alpha', 'beta'])
+print(f'P(beta > 1 | data) = {beta_dist.sf(1):.3f}')
+```
+
+The Student-t scale uses d1/a1, whereas its variance uses d1/(a1−1).
+The posterior mean need not equal the simulated true beta. The simulation is a
+known-data-generating-process example for learning the update, not real CAPM evidence.
+The two expressions for Q provide an independent algebraic implementation check.
+:::
+
+## Discuss the results
+
+The Student-t scale uses d1/a1, whereas its variance uses d1/(a1−1).
+The posterior mean need not equal the simulated true beta. The simulation is a
+known-data-generating-process example for learning the update, not real CAPM evidence.
+The two expressions for Q provide an independent algebraic implementation check.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Derive $B_1^{-1} = B_0^{-1} + X^\top X$ and $b_1 = B_1(B_0^{-1}b_0 + X^\top y)$ by
+   expanding the two quadratic forms and matching coefficients, then show that $Q$ is the
+   constant left over.
+2. Write $b_1$ as the matrix-weighted average $W b_0 + (I - W)\hat\beta_{\text{OLS}}$,
+   identify $W$, and verify your expression numerically with the prior and data above.
+3. Rewrite `nig_update` with a Cholesky factorisation and `scipy.linalg.cho_solve` in
+   place of `np.linalg.inv`. Why is an explicit inverse a bad idea when $X^\top X$ is
+   ill-conditioned?
+4. Using the composition draws, estimate the posterior probability that alpha is positive
+   and that beta exceeds one, under the informative and the diffuse prior. Which pair
+   would you report to a portfolio manager, and why?
+5. Raise $\alpha_0$ while holding $\bar\sigma^2$ fixed, and describe what happens to $\nu$
+   and to the width of the marginal posterior of $\beta_1$.

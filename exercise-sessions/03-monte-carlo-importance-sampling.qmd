@@ -1,0 +1,107 @@
+---
+title: "Week 3: Vanilla Monte Carlo"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/03-monte-carlo-importance-sampling.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+How does uncertainty about volatility enter the value of a European call?
+
+## Derive before coding
+
+Assume a pricing model with risk-neutral drift $r$, constant annual variance $v$,
+and $S_T=S_0e^{(r-v/2)T+\sqrt{vT}Z}$. The variance posterior is informed by
+conditionally mean-zero historical innovations with variance $v\Delta t$.
+Under $v\sim IG(a_0,d_0)$, derive $a_1=a_0+n/2$ and
+$d_1=d_0+\sum_i e_i^2/(2\Delta t)$. We explicitly assume the same variance
+parameter in estimation and pricing; no volatility-risk premium is estimated.
+
+## Core assignment
+
+1. Draw a variance and then a terminal price for each simulation; discount the call payoff.
+2. Compare with pricing at the posterior mean variance.
+3. Replace the simulated payoff by its conditional Black–Scholes value for every variance draw. Explain why this lowers simulation error.
+4. Report posterior dispersion of conditional prices separately from the MCSE of their average.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+SEED, N, S = 2026, 252, 30000
+DT, HORIZON = 1/252, 0.5
+SPOT, STRIKE, RATE, TRUE_VAR = 100.0, 100.0, 0.02, 0.04
+rng = np.random.default_rng(SEED)
+innovations = rng.normal(0, np.sqrt(TRUE_VAR*DT), N)
+a0, d0 = 4.0, 0.12
+a1, d1 = a0+N/2, d0+innovations @ innovations/(2*DT)
+variance = 1/rng.gamma(a1, 1/d1, S)
+z = rng.standard_normal(S)
+terminal = SPOT*np.exp((RATE-variance/2)*HORIZON + np.sqrt(variance*HORIZON)*z)
+payoffs = np.exp(-RATE*HORIZON)*np.maximum(terminal-STRIKE, 0)
+
+def conditional_call(v: np.ndarray | float, spot: float, strike: float, rate: float, horizon: float) -> np.ndarray:
+    sd = np.sqrt(v*horizon)
+    d_1 = (np.log(spot/strike)+(rate+v/2)*horizon)/sd
+    return spot*stats.norm.cdf(d_1)-strike*np.exp(-rate*horizon)*stats.norm.cdf(d_1-sd)
+
+prices = conditional_call(variance, SPOT, STRIKE, RATE, HORIZON)
+table = pd.DataFrame({'value': [payoffs.mean(), prices.mean(), conditional_call(d1/(a1-1), SPOT, STRIKE, RATE, HORIZON)],
+                      'MCSE': [payoffs.std(ddof=1)/np.sqrt(S),
+                               prices.std(ddof=1)/np.sqrt(S), 0]},
+                     index=['nested simulation', 'conditional expectation', 'plug-in'])
+print(table.round(4))
+print('95% posterior interval for conditional price:', np.quantile(prices, [.025, .975]))
+```
+
+The two Monte Carlo methods target the same posterior-averaged conditional
+price. The second integrates out the terminal-price shock analytically. Its
+MCSE is numerical error, while the interval across conditional prices describes
+parameter uncertainty. Neither interval is a prediction interval for the option payoff.
+:::
+
+## Discuss the results
+
+The two Monte Carlo methods target the same posterior-averaged conditional
+price. The second integrates out the terminal-price shock analytically. Its
+MCSE is numerical error, while the interval across conditional prices describes
+parameter uncertainty. Neither interval is a prediction interval for the option payoff.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. For the $\text{Beta}(14, 8)$ posterior, derive and then verify numerically the number
+   of direct Monte Carlo draws needed so that the MCSE of the estimated posterior mean
+   is below $0.001$.
+2. Estimate $\Pr(\theta > 0.9 \mid y)$ for the same posterior by direct Monte Carlo with
+   $S = 5000$. Explain, using the Bernoulli variance $p(1-p)$, why the *relative* Monte
+   Carlo error of a small tail probability is so much larger than that of the posterior
+   mean at the same $S$.
+3. Repeat the truncated-normal coin importance-sampling example with a
+   $\text{Beta}(5, 3)$ proposal and report the effective sample size. Then choose a
+   proposal that is far too narrow and show the ESS collapsing, as with
+   $\text{Beta}(2, 10)$ above.
+4. Show algebraically that as a self-normalised importance-sampling proposal $q$
+   approaches the target $p$, every importance weight approaches a constant and the ESS
+   approaches $S$. Confirm this numerically by proposing from $\text{Beta}(9, 5)$, close
+   to the true posterior, and comparing its ESS with the uniform proposal's.
+5. Vanilla Monte Carlo option pricing. Extend the option-pricing simulator to a put
+   option, and compute by simulation the probability that the option with parameter
+   uncertainty finishes in the money, comparing it with the plug-in probability that
+   uses only the posterior mean volatility. Then repeat the price comparison with a
+   posterior for $\sigma^2$ that is twice as uncertain (halve $a_0$) and comment on how
+   the price gap responds.

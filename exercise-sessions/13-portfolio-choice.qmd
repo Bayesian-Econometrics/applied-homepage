@@ -1,0 +1,97 @@
+---
+title: "Week 13: Robust allocation"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/13-portfolio-choice.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Which allocation maximises expected utility after integrating parameter uncertainty?
+
+## Derive before coding
+
+For log returns $g_t\sim N(\mu,v)$, use a scaled NIG prior and Gibbs draws.
+For each retained parameter pair draw a future log return and set risky gross
+return to $e^{g^*}$. With cash gross return $R_f>0$ and risky weight
+$0\le w\le0.9$, wealth is $(1-w)R_f+we^{g^*}>0$.
+Maximise average CRRA utility with gamma=5. The cash floor makes utility bounded
+on the downside under this predictive model; no arbitrary ruin penalty is needed.
+
+## Core assignment
+
+1. Generate MCMC parameter draws and conditional predictive returns.
+2. Evaluate every candidate allocation on the same predictive draws.
+3. Compare the optimum with the plug-in allocation using posterior mean parameters.
+4. Generate fresh predictive innovations and reassess utility. Explain why maximising for each parameter draw and averaging weights is a different decision.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+
+SEED, N, ITER, BURN = 2026, 80, 3500, 1000
+rng = np.random.default_rng(SEED)
+logs = rng.normal(.006,.045,N)
+M0, K0, A0, D0 = 0., 1., 3., .004
+kn = K0+N
+mn = (K0*M0+logs.sum())/kn
+mu, variance = mn,.002
+parameters = []
+for s in range(ITER):
+    mu = rng.normal(mn,np.sqrt(variance/kn))
+    scale = D0+.5*((logs-mu) @ (logs-mu)+K0*(mu-M0)**2)
+    variance = 1/rng.gamma(A0+(N+1)/2,1/scale)
+    if s >= BURN:
+        parameters.append([mu,variance])
+parameters = np.asarray(parameters)
+z = rng.standard_normal(len(parameters))
+gross = np.exp(parameters[:,0]+np.sqrt(parameters[:,1])*z)
+plug = np.exp(parameters[:,0].mean()+np.sqrt(parameters[:,1].mean())*z)
+RF, GAMMA = 1.001, 5.0
+weights = np.linspace(0,.9,91)
+wealth = (1-weights[:,None])*RF+weights[:,None]*gross
+plug_wealth = (1-weights[:,None])*RF+weights[:,None]*plug
+utility = (wealth**(1-GAMMA)/(1-GAMMA)).mean(1)
+plug_utility = (plug_wealth**(1-GAMMA)/(1-GAMMA)).mean(1)
+best, best_plug = weights[utility.argmax()],weights[plug_utility.argmax()]
+print(pd.DataFrame({'weight':[best,best_plug]},index=['posterior predictive','plug-in']))
+fresh_gross = np.exp(parameters[:,0]+np.sqrt(parameters[:,1])*rng.standard_normal(len(parameters)))
+for label,w in [('posterior predictive',best),('plug-in',best_plug)]:
+    W = (1-w)*RF+w*fresh_gross
+    print(label,'fresh-draw expected utility',np.mean(W**(1-GAMMA)/(1-GAMMA)))
+```
+
+The optimum can lie at a constraint. Its numerical stability depends on chain
+mixing, predictive Monte Carlo error, and grid resolution. The model is for
+physical log returns and the decision criterion is expected utility; it is
+different from the risk-neutral pricing exercise. To include model uncertainty,
+draw a model index using Week 9's posterior weights before drawing its return.
+:::
+
+## Discuss the results
+
+The optimum can lie at a constraint. Its numerical stability depends on chain
+mixing, predictive Monte Carlo error, and grid resolution. The model is for
+physical log returns and the decision criterion is expected utility; it is
+different from the risk-neutral pricing exercise. To include model uncertainty,
+draw a model index using Week 9's posterior weights before drawing its return.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Repeat the constrained allocation for risk aversion $\gamma=2,5,10$. Keep the return model and constraints fixed so that the comparison isolates preferences.
+2. Derive the mean–variance optimum for a conditionally Gaussian return and CARA utility. Explain why replacing the Gaussian by a Student-$t$ predictive distribution can make expected exponential utility undefined.
+3. Vary the cash floor from 10% to 20%. Compare utility using fresh predictive draws and report the sampling uncertainty of the utility difference.
+4. Simulate the model-uncertainty example with no predictability. Report model probabilities and the within-model and between-model predictive variance.

@@ -1,0 +1,110 @@
+---
+title: "Week 14: Non-linear Bayes"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/14-bayesian-machine-learning.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+When does a learned tree ensemble improve return predictions over OLS?
+
+## Derive before coding
+
+Explain the BART prior over sums of trees and derive the Normal leaf update
+using partial residuals. Contrast uncertainty about a latent mean with uncertainty
+about a realised return. Keep the lecture's GP as an additional benchmark, while
+the required comparison here is BART versus OLS.
+
+## Core assignment
+
+1. Generate chronological training and test segments with a nonlinear conditional mean.
+2. Fit BART on training data only, and issue predictive draws for the held-out inputs.
+3. Fit OLS on the same data and compare test MSE and interval coverage.
+4. Repeat at a weaker signal and across several seeds. Avoid tuning on the test outcomes.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+This reference implementation uses `pymc` and `pymc-bart`. It is displayed without automatic execution in the website build; run it in a course environment containing those packages. The remaining sessions use NumPy, pandas, SciPy and Matplotlib.
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+#| eval: false
+import numpy as np
+import pandas as pd
+from scipy import stats
+import pymc as pm
+import pymc_bart as pmb
+
+SEED, TRAIN, TEST, DRAWS, TUNE = 2026, 180, 80, 600, 600
+rng = np.random.default_rng(SEED)
+x = rng.normal(size=(TRAIN+TEST,2))
+signal = .7*np.tanh(2*x[:,0])+.3*x[:,0]*x[:,1]
+y = signal+rng.normal(size=TRAIN+TEST)
+with pm.Model() as model:
+    features = pm.Data('features',x[:TRAIN])
+    mu = pmb.BART('mu',features,y[:TRAIN],m=30)
+    sigma = pm.HalfNormal('sigma',1.5)
+    outcome = pm.Normal('outcome',mu,sigma,observed=y[:TRAIN],shape=mu.shape)
+    idata = pm.sample(draws=DRAWS,tune=TUNE,chains=2,cores=1,random_seed=SEED,
+                      progressbar=False)
+with model:
+    pm.set_data({'features':x[TRAIN:]})
+    prediction = pm.sample_posterior_predictive(idata,var_names=['outcome'],
+                     predictions=True,random_seed=SEED+1,progressbar=False)
+draws = prediction.predictions['outcome'].values.reshape(-1,TEST)
+Z = np.column_stack([np.ones(TRAIN+TEST),x])
+coef = np.linalg.lstsq(Z[:TRAIN],y[:TRAIN],rcond=None)[0]
+ols_mean = Z[TRAIN:] @ coef
+resid = y[:TRAIN]-Z[:TRAIN] @ coef
+dof = TRAIN-Z.shape[1]
+V = np.linalg.inv(Z[:TRAIN].T @ Z[:TRAIN])
+scale = np.sqrt((resid @ resid/dof)*(1+np.einsum('ij,jk,ik->i',Z[TRAIN:],V,Z[TRAIN:])))
+ols_band = ols_mean+stats.t.ppf(np.array([.05,.95]),dof)[:,None]*scale
+bart_band = np.quantile(draws,[.05,.95],axis=0)
+rows = []
+for label,mean,band in [('OLS',ols_mean,ols_band),('BART',draws.mean(0),bart_band)]:
+    rows.append({'model':label,'test MSE':np.mean((y[TRAIN:]-mean)**2),
+                 '90% coverage':np.mean((y[TRAIN:]>=band[0])&(y[TRAIN:]<=band[1]))})
+print(pd.DataFrame(rows))
+```
+
+The benchmark interval uses the classical t-based regression prediction
+formula. A single held-out sample need not rank models reliably. Lower training
+error is not evidence of better return forecasts; repeat the experiment and
+record both error and calibration. This exercise fits actual tree structures,
+while the lecture develops GP and neural-network alternatives.
+:::
+
+## Discuss the results
+
+The benchmark interval uses the classical t-based regression prediction
+formula. A single held-out sample need not rank models reliably. Lower training
+error is not evidence of better return forecasts; repeat the experiment and
+record both error and calibration. This exercise fits actual tree structures,
+while the lecture develops GP and neural-network alternatives.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Add the signal variance $\sigma_f^2$ as a third hyperparameter and extend the grid over it. Report the selected value and explain why standardisation alone does not force it to equal one.
+2. Replace the squared-exponential kernel with the absolute-exponential kernel
+   $\exp\{-|x - x'| / \ell\}$ and describe how the smoothness of the posterior mean changes.
+3. Reduce the sample from seventy observations to twenty, rerun the grid, and report whether the selected length scale changes; explain why its direction need not be predetermined.
+4. In the horse race, raise the training sample from 300 to 2000 at the return-like amplitude. Does
+   the Gaussian process now win, and how much data does a non-linearity need to be detectable?
+5. The cost is cubic in $n$. Time `gp_fit` for $n = 200, 400, 800$, confirm the scaling, and explain
+   why it rules the method out for high-frequency data.
+
+## Implementation reference
+
+[PyMC-BART introduction and prediction API](https://www.pymc.io/projects/examples/en/stable/bart/bart_introduction.html). Chipman, George and McCulloch (2010), *BART: Bayesian Additive Regression Trees*, supplies the model; the GP lecture uses Rasmussen and Williams (2006).

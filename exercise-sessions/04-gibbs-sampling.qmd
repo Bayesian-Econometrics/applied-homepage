@@ -1,0 +1,105 @@
+---
+title: "Week 4: The workhorse"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/04-gibbs-sampling.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Can a Gibbs sampler reproduce an exact regression posterior before we change the prior?
+
+## Derive before coding
+
+Start with Week 2's scaled NIG prior. Derive
+$\beta\mid\sigma^2,y\sim N(b_1,\sigma^2B_1)$ and
+$\sigma^2\mid\beta,y\sim IG(a_0+(n+k)/2,
+d_0+[\mathrm{RSS}(\beta)+(\beta-b_0)^\top B_0^{-1}(\beta-b_0)]/2)$.
+Distinguish this conditional shape from the marginal shape $a_0+n/2$.
+
+## Core assignment
+
+1. Implement both conditional draws and store every iteration.
+2. Compare posterior means with the exact NIG answer and inspect trace plots from different starts.
+3. Replace the scaled coefficient prior by an independent Normal prior; derive the changed updates before editing code.
+4. Report a credible interval and explain why more iterations reduce numerical error but not posterior uncertainty.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+SEED, N, K, ITER, BURN = 2026, 150, 3, 4000, 1000
+rng = np.random.default_rng(SEED)
+X = np.column_stack([np.ones(N), rng.normal(size=(N, K-1))])
+y = X @ np.array([0.5, 1.0, -0.7]) + rng.normal(size=N)
+b0, P0 = np.zeros(K), np.eye(K)
+a0, d0 = 3.0, 2.0
+B1 = np.linalg.inv(P0 + X.T @ X)
+b1 = B1 @ (P0 @ b0 + X.T @ y)
+L = np.linalg.cholesky(B1)
+beta_draws, var_draws = np.empty((ITER, K)), np.empty(ITER)
+variance = 4.0
+for s in range(ITER):
+    beta = b1 + np.sqrt(variance)*L @ rng.standard_normal(K)
+    residual, dev = y-X @ beta, beta-b0
+    shape = a0+(N+K)/2
+    scale = d0+(residual @ residual + dev @ P0 @ dev)/2
+    variance = 1/rng.gamma(shape, 1/scale)
+    beta_draws[s], var_draws[s] = beta, variance
+kept = beta_draws[BURN:]
+print(pd.DataFrame({'exact mean': b1, 'Gibbs mean': kept.mean(0),
+                    'lower': np.quantile(kept,.025,axis=0),
+                    'upper': np.quantile(kept,.975,axis=0)}))
+fig, ax = plt.subplots()
+ax.plot(beta_draws[:,1], lw=.5, color='steelblue')
+ax.axhline(b1[1], color='black', ls=':')
+ax.set(xlabel='iteration', ylabel='coefficient 1', title='A known posterior as a sampler check')
+plt.show()
+```
+
+Agreement with a known posterior is stronger evidence than a plausible-looking
+trace. It tests the target and the implementation together. For independent
+priors, recompute the coefficient precision at the current variance and omit
+the prior quadratic and k/2 term from the variance update.
+:::
+
+## Discuss the results
+
+Agreement with a known posterior is stronger evidence than a plausible-looking
+trace. It tests the target and the implementation together. For independent
+priors, recompute the coefficient precision at the current variance and omit
+the prior quadratic and k/2 term from the variance update.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Rerun the semi-conjugate normal sampler with a strongly informative prior on $\mu$,
+   say $m = 0$ and $c = 50$, and describe how the posterior mean of $\mu$ moves away from
+   $\bar{x}$. Verify the shift against the closed-form conditional mean formula directly,
+   without touching the sampler.
+2. Derive the full conditional of $\sigma^2$ in the semi-conjugate model (rather than
+   $\tau$), by the change of variables $\sigma^2 = 1/\tau$, and check numerically that
+   $1/\tau^{(t)}$ from the sampler above has the distribution you derive.
+3. The workhorse exercise: implement the Gibbs sampler for the multiple regression model
+   from scratch (as above) for a design matrix with five regressors instead of three, and
+   report how the width of each 95% credible interval changes relative to the
+   three-regressor case, holding $n$ fixed.
+4. In the latent-class sampler, initialise $z$ at the *true* labels instead of at random,
+   rerun the chain, and check whether label switching still occurs. Explain in one
+   sentence why the answer does not depend on the initial value.
+5. Extend the latent-class sampler to $K = 3$ groups and $M = 8$ questions, simulate data
+   with three genuinely different usage profiles, and adapt the relabelling rule used
+   above (which only handles two classes) to work with three.

@@ -1,0 +1,100 @@
+---
+title: "Week 1: Grid search"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/01-introduction.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+How much should twelve observations change a prior belief about a success probability?
+
+## Derive before coding
+
+For $y=9$ successes in $n=12$ trials and a $\operatorname{Beta}(5,5)$ prior,
+derive $p(\theta\mid y)$ by multiplying the two kernels. Then explain the difference
+between a density at a grid point and the probability assigned to a grid cell.
+On an equally spaced midpoint grid of width $\Delta$, masses are proportional to
+$p(y\mid\theta_j)p(\theta_j)\Delta$.
+
+## Core assignment
+
+1. Build 25, 100, and 1,000 midpoint grids on (0,1); avoid singular endpoints.
+2. Normalise posterior masses using log weights. Calculate the mean, a 95% equal-tailed interval, and the probability that theta exceeds 0.5.
+3. Compare against the analytic Beta posterior and report approximation error.
+4. Replace the prior by a two-component Beta mixture from the lecture. Update both component parameters and component probabilities.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+from scipy import stats
+from scipy.special import logsumexp
+
+N_TRIALS, SUCCESSES = 12, 9
+A_PRIOR, B_PRIOR = 5.0, 5.0
+exact = stats.beta(A_PRIOR + SUCCESSES, B_PRIOR + N_TRIALS - SUCCESSES)
+rows = []
+for size in [25, 100, 1000]:
+    theta = (np.arange(size) + 0.5) / size
+    log_mass = (stats.binom.logpmf(SUCCESSES, N_TRIALS, theta)
+                + stats.beta.logpdf(theta, A_PRIOR, B_PRIOR) - np.log(size))
+    mass = np.exp(log_mass - logsumexp(log_mass))
+    interval = theta[np.searchsorted(np.cumsum(mass), [0.025, 0.975])]
+    rows.append({'grid': size, 'mean': mass @ theta,
+                 'mean error': abs(mass @ theta - exact.mean()),
+                 'lower': interval[0], 'upper': interval[1],
+                 'P(theta > .5)': mass[theta > 0.5].sum()})
+    assert np.isclose(mass.sum(), 1)
+pd.DataFrame(rows)
+```
+
+The mean should approach 14/22. Interval endpoints move in grid-sized steps,
+so their error need not decrease smoothly at every refinement. The masses sum
+to one; plotted as a density, they must be divided by the cell width. A nonuniform
+grid needs different cell widths, which no longer cancel in normalisation.
+:::
+
+## Discuss the results
+
+The mean should approach 14/22. Interval endpoints move in grid-sized steps,
+so their error need not decrease smoothly at every refinement. The masses sum
+to one; plotted as a density, they must be divided by the cell width. A nonuniform
+grid needs different cell widths, which no longer cancel in normalisation.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Repeat the coin analysis with a $\text{Beta}(1,1)$ prior and with a
+   $\text{Beta}(50,50)$ prior. Report the posterior mean in each case and check it against
+   the weighted-average formula $w\theta_0 + (1-w)\hat\theta$. At what prior sample size
+   does the conclusion $P(\theta > 0.5 \mid {\bf x}) > 0.9$ break down?
+2. Derive the beta-binomial predictive probability $P(Y = k \mid {\bf x})$ yourself,
+   showing the step where the beta kernel is integrated out. Then verify your expression
+   numerically against a simulation that draws $\theta$ from the posterior and $Y$ from
+   the binomial.
+3. A screening rule flags firms as likely to default. It flags 90% of firms that do
+   default and 20% of those that do not, and 3% of firms default. Using Bayes' theorem for
+   events, compute the probability that a flagged firm actually defaults, and explain in
+   one sentence why the answer is so much lower than 90%.
+4. Naive Bayesian classification by hand. Six emails are labelled: spam, "send us your
+   password"; ham, "send us your review"; ham, "password review"; spam, "review us"; spam,
+   "send your password"; spam, "send us your account". Estimate $P(\text{spam})$ and the
+   word probabilities from these counts, then classify the new message "review us now",
+   treating the words as conditionally independent given the class. Which single word
+   drives the answer?
+5. Extend the grid calculation to two parameters by putting a grid on the mean and the
+   variance of a normal sample. Count the number of density evaluations you need for a
+   grid of 200 points per dimension, and then for five parameters, and explain in one
+   sentence why grids are not the answer.

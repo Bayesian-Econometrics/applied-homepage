@@ -1,0 +1,99 @@
+---
+title: "Week 8: TVP filter"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/08-state-space-tvp.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Can we track a drifting market beta using only the returns available at each date?
+
+## Derive before coding
+
+Use state $s_t=(\alpha_t,\beta_t)^\top$, random-walk covariance $Q$, and
+observation row $x_t^\top=(1,r_{m,t})$. Derive $F_t=x_t^\top P_t^-x_t+H$,
+$K_t=P_t^-x_t/F_t$, and the Normal update. Condition on fixed H and Q in this lab.
+
+## Core assignment
+
+1. Simulate changing alpha and beta, then implement prediction and correction in their proper order.
+2. Plot filtered beta with pointwise 95% intervals against its simulated path.
+3. Change the beta state-noise variance by a factor of ten in both directions.
+4. Explain why large market moves are informative about beta and why smoothed estimates cannot be used as real-time signals.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+SEED, T = 2026, 180
+rng = np.random.default_rng(SEED)
+market = rng.normal(0,.05,T)
+Q, H = np.diag([.000001,.0025]), .02**2
+truth = np.zeros((T,2))
+truth[0] = [0,1]
+for t in range(1,T):
+    truth[t] = truth[t-1] + rng.multivariate_normal(np.zeros(2),Q)
+X = np.column_stack([np.ones(T),market])
+returns = (X*truth).sum(1)+rng.normal(0,np.sqrt(H),T)
+mean, covariance = np.array([0.,1.]), np.diag([.01,.5])
+means, variances = np.empty((T,2)), np.empty((T,2))
+for t in range(T):
+    if t > 0:
+        covariance = covariance + Q
+    innovation = returns[t]-X[t] @ mean
+    F = X[t] @ covariance @ X[t] + H
+    gain = covariance @ X[t]/F
+    mean = mean + gain*innovation
+    update = np.eye(2)-np.outer(gain,X[t])
+    covariance = update @ covariance @ update.T + H*np.outer(gain,gain)
+    means[t], variances[t] = mean, np.diag(covariance)
+fig, ax = plt.subplots()
+ax.plot(truth[:,1],color='black',lw=1,label='true beta')
+ax.plot(means[:,1],color='steelblue',label='filtered beta')
+ax.fill_between(range(T),means[:,1]-1.96*np.sqrt(variances[:,1]),
+                means[:,1]+1.96*np.sqrt(variances[:,1]),alpha=.2)
+ax.set(xlabel='month',ylabel='market beta')
+ax.legend(loc='upper left')
+plt.show()
+```
+
+The covariance update is written in Joseph form, algebraically equivalent to
+the usual Gaussian update and helpful for retaining numerical symmetry.
+The bands condition on the chosen noise variances; estimating those variances
+would require additional posterior integration.
+:::
+
+## Discuss the results
+
+The covariance update is written in Joseph form, algebraically equivalent to
+the usual Gaussian update and helpful for retaining numerical symmetry.
+The bands condition on the chosen noise variances; estimating those variances
+would require additional posterior integration.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Estimate the variances by maximum likelihood: write the negative of `kalman_filter_ll`'s
+   log-likelihood as a function of $(\sigma_\varepsilon, \sigma_\eta)$ and minimise it over a
+   grid (or with `scipy.optimize.minimize`). How close are the estimates to the true values?
+2. Add a deterministic drift to the state, $\alpha_{t+1} = \alpha_t + c + \eta_t$, so the
+   trend grows. Modify the filter and check that it still tracks the simulated state.
+3. Implement the backward smoothing recursion for the local level model and compare the
+   smoothed path and its variance band to the filtered ones. Confirm the smoother is more
+   accurate in the interior of the sample.
+4. Vary the true signal-to-noise ratio used to *simulate* the data and, for each, plot the
+   mean squared error of the filtered state against the assumed $q$. Verify that the error is
+   minimised when the assumed $q$ matches the truth.

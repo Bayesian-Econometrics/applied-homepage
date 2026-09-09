@@ -1,0 +1,91 @@
+---
+title: "Week 15: Review and troubleshooting"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/15-review.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Can you locate a modelling error before increasing the number of draws?
+
+## Derive before coding
+
+For each failure, identify whether the error is in the model, algebra,
+implementation, or interpretation: Gamma rate passed as scale; a missing NIG
+prior quadratic; discarded MH rejections; leaked future outcomes in BMA;
+counterfactual predictions from unrelated tree draws; stationary SV initial
+density omitted from only one conditional.
+
+## Core assignment
+
+1. Bring one reproducible code example and write the target density above it.
+2. Reduce the example to a conjugate special case with a known answer.
+3. Check dimensions, parameterisations, and one numerical identity before looking at plots.
+4. Present the correction with an uncertainty statement: what is fixed, integrated out, and still unverified?
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+
+rng = np.random.default_rng(2026)
+shape, rate = 5.0, 2.0
+correct = rng.gamma(shape,1/rate,50000)
+wrong = rng.gamma(shape,rate,50000)
+print('Gamma theoretical mean:',shape/rate)
+print('Correct and incorrect empirical means:',correct.mean(),wrong.mean())
+assert abs(correct.mean()-shape/rate) < .04
+
+likelihood, prior = np.array([.2,.8]),np.array([.6,.4])
+posterior = likelihood*prior
+posterior /= posterior.sum()
+assert np.isclose(posterior.sum(),1)
+print('Two-state posterior:',posterior)
+
+mu0, prior_var, noise_var = 0.,1.,4.
+y = np.array([1.,3.])
+post_var = 1/(1/prior_var+len(y)/noise_var)
+post_mean = post_var*(mu0/prior_var+y.sum()/noise_var)
+assert np.isclose(post_mean,2/3) and np.isclose(post_var,2/3)
+print('Parameter variance and predictive variance:',post_var,post_var+noise_var)
+```
+
+A successful test checks a specific claim. Normalised weights do not prove
+the likelihood is correct, and a small MCSE does not prove the chain explored
+the target. End the session with a short diagnosis that connects the economic
+question, the posterior target, and the computation used to answer it.
+:::
+
+## Discuss the results
+
+A successful test checks a specific claim. Normalised weights do not prove
+the likelihood is correct, and a small MCSE does not prove the chain explored
+the target. End the session with a short diagnosis that connects the economic
+question, the posterior target, and the computation used to answer it.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Re-run the Gibbs sampler with only $S = 200$ total iterations and a burn-in of 50.
+   Compare the posterior means and interval widths to the long run, and comment on what
+   the difference says about Monte Carlo error.
+2. Add a redundant collinear column to $X$ (a near-copy of an existing regressor) and
+   describe how the posterior of the affected coefficients changes. Why does the prior
+   help here?
+3. Replace the posterior-predictive test statistic (residual standard deviation) with
+   the maximum of $y$. Does the model still pass the check, and what would a failing
+   check on this statistic tell you?
+4. Without running code, write down the full conditional for $\beta$ in the regression
+   model from memory, then check it against the formula in the lecture. This is exactly
+   the kind of recall the cheat sheet should support.

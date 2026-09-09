@@ -1,0 +1,123 @@
+---
+title: "Week 5: HMC versus MH"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/05-metropolis-hastings-nuts.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+Does a gradient-guided proposal buy more useful information per second?
+
+## Derive before coding
+
+Derive the Bernoulli log likelihood and its gradient
+$X^\top(y-p)-\beta/\tau^2$. Show why the MH proposal ratio cancels for a
+symmetric random walk and why HMC instead corrects the change in joint energy.
+NUTS automates trajectory construction; fixed-step HMC below is not NUTS.
+
+## Core assignment
+
+1. Check the analytic gradient against a central finite difference at a nonzero coefficient vector.
+2. Run random-walk MH and HMC on the same logistic target with the same number of retained draws.
+3. Compare acceptance, posterior means, a batch-means MCSE, and cost. Increase correlation among predictors and repeat.
+4. Explain why a high acceptance rate alone cannot rank samplers, and why a gradient evaluation is not the same cost as a log-density evaluation.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import time
+import numpy as np
+import pandas as pd
+from scipy.special import expit
+
+SEED, N, ITER, BURN = 2026, 250, 2500, 500
+rng = np.random.default_rng(SEED)
+X = np.column_stack([np.ones(N), rng.normal(size=(N,2))])
+y = rng.binomial(1, expit(X @ np.array([-.5,1.,-.8])))
+TAU = 3.0
+
+def log_target(beta: np.ndarray, X: np.ndarray, y: np.ndarray, tau: float) -> float:
+    eta = X @ beta
+    return float(y @ eta - np.logaddexp(0,eta).sum() - beta @ beta/(2*tau**2))
+
+def gradient(beta: np.ndarray, X: np.ndarray, y: np.ndarray, tau: float) -> np.ndarray:
+    return X.T @ (y-expit(X @ beta))-beta/tau**2
+
+point, eps = np.array([.2,-.1,.3]), 1e-5
+numerical = np.array([(log_target(point+eps*e, X, y, TAU)-log_target(point-eps*e, X, y, TAU))/(2*eps)
+                      for e in np.eye(3)])
+assert np.allclose(gradient(point, X, y, TAU), numerical, rtol=1e-5, atol=1e-6)
+rows = []
+for method in ['MH', 'HMC']:
+    beta, chain, accepted = np.zeros(3), np.empty((ITER,3)), 0
+    start = time.perf_counter()
+    for s in range(ITER):
+        if method == 'MH':
+            proposal = beta + .15*rng.standard_normal(3)
+            log_ratio = log_target(proposal, X, y, TAU)-log_target(beta, X, y, TAU)
+        else:
+            momentum = rng.standard_normal(3)
+            proposal, moving = beta.copy(), momentum.copy()
+            moving += .5*.08*gradient(proposal, X, y, TAU)
+            for step in range(12):
+                proposal += .08*moving
+                if step < 11:
+                    moving += .08*gradient(proposal, X, y, TAU)
+            moving += .5*.08*gradient(proposal, X, y, TAU)
+            log_ratio = (log_target(proposal, X, y, TAU)-log_target(beta, X, y, TAU)
+                         +(momentum @ momentum-moving @ moving)/2)
+        if np.log(rng.random()) < log_ratio:
+            beta = proposal
+            accepted += 1
+        chain[s] = beta
+    elapsed = time.perf_counter()-start
+    kept = chain[BURN:]
+    batches = kept.reshape(40, -1, 3).mean(axis=1)
+    mcse = batches.std(axis=0,ddof=1)/np.sqrt(40)
+    rows.append({'method':method, 'accept':accepted/ITER, 'seconds':elapsed,
+                 'mean beta1':kept[:,1].mean(), 'MCSE beta1':mcse[1]})
+pd.DataFrame(rows)
+```
+
+Batch means estimate simulation error only when batches are long enough
+relative to dependence. Use the lecture's trace and multi-chain checks too.
+Sampler speed depends on this target and implementation; the table is an
+experiment, not a claim that one method always wins.
+:::
+
+## Discuss the results
+
+Batch means estimate simulation error only when batches are long enough
+relative to dependence. Use the lecture's trace and multi-chain checks too.
+Sampler speed depends on this target and implementation; the table is an
+experiment, not a claim that one method always wins.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Re-run the logistic sampler with a tighter prior, $\tau = 0.5$, and compare posterior means, standard
+   deviations and effective sample sizes with the $\tau = 5$ case. Which coefficients move most, and why?
+2. Scale per-coordinate steps in `rw_metropolis` to pilot standard deviations; report the ESS gain.
+3. Sweep $\epsilon$ at fixed $L = 10$, recording acceptance and effective sample size per gradient, and
+   relate the point where the energy error dominates to the 0.65 to 0.9 guideline.
+4. Fix $\epsilon = 0.15$ and vary $L$ from 1 to 40, plotting effective sample size per gradient against
+   $L$, and explain the shape using the U-turn argument behind the no-U-turn sampler.
+5. **HMC vs MH: comparing sampling efficiency for a non-conjugate logistic model.** Simulate a logistic
+   model with fifteen strongly correlated covariates, tune both samplers on it and rebuild the efficiency
+   comparison table from this lecture. At what dimension does Hamiltonian Monte Carlo overtake the random
+   walk per second rather than only per posterior evaluation?
+6. Fix $\beta$ in the Challenger model at its posterior mean and apply the slice sampler of this lecture
+   to $\alpha$ alone, holding $\beta$ fixed. Compare its autocorrelation and effective sample size to the
+   marginal chain for $\alpha$ produced by the joint random-walk sampler, and comment on whether the
+   tuning-free property of slice sampling was worth the extra bookkeeping here.

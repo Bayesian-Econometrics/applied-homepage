@@ -1,0 +1,97 @@
+---
+title: "Week 6: Prior tuning"
+subtitle: "Python exercise session"
+---
+
+[Lecture notes](../lecture-notes/06-minnesota-priors.qmd) · [Fixed course schedule](../schedule.qmd)
+
+## The economic question
+
+How can one express that distant and cross-variable lags should matter less?
+
+## Derive before coding
+
+For coefficient $A_{\ell,ij}$, use prior variance
+$\lambda_1/\ell^2$ for own lags and
+$\lambda_1\lambda_2 s_i^2/(\ell^2s_j^2)$ for cross lags.
+Here lambda1 is a variance multiplier, matching the lecture's convention; other
+texts sometimes square the tightness parameter. Derive the scale-ratio adjustment
+by changing the measurement units of one variable.
+
+## Core assignment
+
+1. Construct the full diagonal covariance for a five-variable VAR with four lags, including intercepts.
+2. Label each entry by equation, lag, and regressor; state the resulting dimension.
+3. Compare lag 1 with lag 4, and own-variable with cross-variable entries.
+4. Change one variable from percentage units to fractions. Verify the implied coefficient variances transform consistently; discuss the intercept separately.
+
+Submit your derivation, runnable code, and a short interpretation. State the prior convention, distinguish posterior uncertainty from simulation error, and explain one sensitivity check.
+
+## Reference implementation
+
+The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+
+::: {.callout-note collapse="true"}
+## Show the reference implementation
+
+```{python}
+import numpy as np
+import pandas as pd
+
+M, LAGS = 5, 4
+LAMBDA1, LAMBDA2 = .2, .5
+scales = np.array([1.,2.,.5,1.5,.8])
+K = 1+M*LAGS
+mean, variances, labels = [], [], []
+for equation in range(M):
+    mean.append(0.0)
+    variances.append(100.0)
+    labels.append(f'eq{equation+1}:intercept')
+    for lag in range(1,LAGS+1):
+        for regressor in range(M):
+            own = equation == regressor
+            mean.append(float(own and lag == 1))
+            variance = LAMBDA1/lag**2
+            if not own:
+                variance *= LAMBDA2*(scales[equation]/scales[regressor])**2
+            variances.append(variance)
+            labels.append(f'eq{equation+1}:L{lag}.y{regressor+1}')
+V0 = np.diag(variances)
+b0 = np.asarray(mean)
+assert V0.shape == (M*K,M*K)
+assert np.linalg.eigvalsh(V0).min() > 0
+print('Coefficient dimension:', M*K)
+pd.DataFrame({'mean':b0,'variance':variances},index=labels).head(22)
+```
+
+The dimension is 105. Within a fixed equation/regressor pair, a lag-4 variance
+is one sixteenth of lag 1. The random-walk prior mean is a modelling choice for
+persistent levels; a zero mean may suit growth rates better. Intercepts require
+their own unit-aware scale rather than the coefficient scale ratio.
+:::
+
+## Discuss the results
+
+The dimension is 105. Within a fixed equation/regressor pair, a lag-4 variance
+is one sixteenth of lag 1. The random-walk prior mean is a modelling choice for
+persistent levels; a zero mean may suit growth rates better. Intercepts require
+their own unit-aware scale rather than the coefficient scale ratio.
+
+Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
+
+## Additional practice from the lecture
+
+The following questions refer to the notation and code in the linked lecture chapter.
+
+1. Re-run the high-dimensional simulation with $k = 80$ regressors and $n_{train} = 50$.
+   How much does OLS deteriorate relative to ridge, and why does the gap widen as $k$
+   approaches $n$?
+2. For a fixed $\tau$, compute the full ridge posterior covariance
+   $V = \sigma^2 (X^\top X + \lambda I_k)^{-1}$ and report the posterior standard
+   deviation of the first coefficient. Compare it to the OLS standard error.
+3. Modify the bias-variance experiment to report in-sample MSE alongside out-of-sample
+   MSE as $\tau$ varies. Explain why the two curves disagree about the best $\tau$.
+4. Change $\lambda_2$ from 0.5 to 0.1 in the Minnesota prior and redraw the variance
+   heatmap. Describe how the relative treatment of own and cross lags changes.
+5. In two or three sentences, summarise the illusion-of-sparsity finding and explain why
+   it supports a dense Normal prior over exact variable selection.
