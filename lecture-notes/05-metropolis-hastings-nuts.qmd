@@ -860,6 +860,24 @@ because a small fraction of draws with $\beta$ near zero send $-\alpha/\beta$ fa
 would otherwise stretch the axis until the bulk of the distribution was unreadable; the credible interval
 itself was computed from the complete, untrimmed set of draws.
 
+## A chain can accept frequently and still miss the posterior
+
+Imagine a posterior with two separated modes. A very small random-walk proposal
+often remains near its current high-density point and is accepted. Nevertheless,
+the chain may never cross the low-density gap. A high acceptance rate then tells
+us about local step size, not global exploration. Starting several chains in the
+same mode can hide the problem even in between-chain diagnostics.
+
+For the logistic comparison, inspect coefficient traces, effective sample sizes
+per second and agreement across dispersed starts. The posterior under a proper
+Normal prior need not resemble this deliberately multimodal example; the lesson
+is that an acceptance statistic is not a convergence certificate. NUTS adapts
+trajectory length and step size but does not remove every difficult geometry.
+Explain which posterior feature makes your chosen diagnostic informative.
+
+*Source connection:* Lopes, *Bayesian computation*, PDF pp. 42–56, compares
+proposal behaviour in a multimodal target. The scheduled model remains logistic regression.
+
 ## Takeaways
 
 Metropolis-Hastings turns the ability to evaluate an unnormalised posterior into the ability to sample

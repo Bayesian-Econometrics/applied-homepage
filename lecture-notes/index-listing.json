@@ -1,0 +1,20 @@
+{
+  "listing": "/lecture-notes/index.html",
+  "items": [
+    "/lecture-notes/01-introduction.html",
+    "/lecture-notes/02-linear-regression.html",
+    "/lecture-notes/03-monte-carlo-importance-sampling.html",
+    "/lecture-notes/04-gibbs-sampling.html",
+    "/lecture-notes/05-metropolis-hastings-nuts.html",
+    "/lecture-notes/06-minnesota-priors.html",
+    "/lecture-notes/07-bvar-identification.html",
+    "/lecture-notes/08-state-space-tvp.html",
+    "/lecture-notes/09-prediction-bma.html",
+    "/lecture-notes/10-causal-inference.html",
+    "/lecture-notes/11-variable-selection.html",
+    "/lecture-notes/12-stochastic-volatility.html",
+    "/lecture-notes/13-portfolio-choice.html",
+    "/lecture-notes/14-bayesian-machine-learning.html",
+    "/lecture-notes/15-review.html"
+  ]
+}

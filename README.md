@@ -8,9 +8,9 @@ The fixed sequence, assigned literature and exercise focus are in `schedule.qmd`
 Install Quarto, then use the existing project environment:
 
 ```sh
-uv sync
-uv run quarto preview
-uv run quarto render
+uv sync --extra bart
+uv run --extra bart quarto preview
+uv run --extra bart quarto render
 ```
 
 The output goes to `_site/`. The existing GitHub Actions workflow builds and publishes
@@ -31,10 +31,12 @@ local cache does not need to be committed.
   sequence, Bayes and Beta-posterior derivations, and the Week 1 exercise.
 - `literature.qmd`: assigned readings and a map of the supplementary UPM and local sources.
 
-The Week 10 and Week 14 reference implementations require `pymc` and `pymc-bart`.
-Those dependencies have not been added to the project. These two blocks use
-`eval: false`, so the website displays their source without claiming executed results.
-All other exercise solutions use the existing numerical dependencies.
+The Week 10 and Week 14 reference implementations execute genuine PyMC-BART
+samplers. The optional `bart` dependency group installs their tested PyMC 5 / PyMC-BART
+0.11 API combination; `uv.lock` records the resolved environment. Use `--extra bart`
+for a complete site build. The examples use sequential chains (`cores=1`) for
+cross-platform execution and report sampling diagnostics. Initial compilation and
+sampling can take several minutes. Other exercises use the core numerical packages.
 
 The pages use `freeze: auto`. Explicitly render a changed chapter to refresh its output;
 the code examples simulate their own data and use fixed seeds. Sampling results remain

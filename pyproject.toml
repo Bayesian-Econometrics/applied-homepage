@@ -9,3 +9,9 @@ dependencies = [
     "pandas>=2.2",
     "scipy>=1.14",
 ]
+
+[project.optional-dependencies]
+bart = [
+    "pymc>=5.28,<6",
+    "pymc-bart>=0.11,<0.12",
+]

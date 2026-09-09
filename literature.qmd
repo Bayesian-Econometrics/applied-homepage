@@ -90,3 +90,31 @@ UPM is the label of the supplied teaching-material collection. Later application
 identification, causal BART, stochastic volatility and Gaussian processes—use the
 specialist literature assigned to those weeks. The source PDFs are reading material;
 the site provides adapted explanations and derivations rather than reproducing the books.
+
+
+## Additional slide collections: targeted reading
+
+Page numbers below count physical PDF pages, including title pages. These readings
+supplement the fixed weekly sequence. Examples and notation in the notes are adapted;
+the source applications do not replace the scheduled Python exercises.
+
+| Supplied file or collection | Relevant weeks and pages | What to learn from it |
+|:--|:--|:--|
+| Lopes, `basicbayes2` (*Overview of Bayesian econometrics*) | 1: 3–16; 2: 22–28; 9: 17–21 | Sequential evidence, prediction and conjugate regression |
+| Lopes, `montecarlomethods` (*Bayesian computation*) | 3: 6–23; 4: 61–74; 5: 42–56 | Proposal geometry, coordinate Gibbs and limitations of local exploration |
+| Lopes, `HLM` (*Hierarchical modeling*) | 6: 4–16 | Separate estimation, complete pooling and learned partial pooling |
+| Lopes, `dynamicmodels` (*Dynamic models*) | 8: 7–27; 12: 63–70 | Filtering, smoothing, joint state draws and mixture approximations |
+| Chan, `BayesMacro.pdf` | 1–2: 8–23; 9: 42–63; 8: 78–99; 12: 100–119; 7: 120–139 | Scalar-to-system derivations, evidence and latent-state models |
+| `SGPE-ECNM11060_Lecture-1.pdf` | 1: 16–26 | Beta-binomial learning and prediction |
+| `SGPE-ECNM11060_Lecture-2.pdf` | 2: 3–15; 4: 33–41; 9: 49–67 | Conjugate regression, prior information as extra rows, and BMA |
+| `SGPE-ECNM11060-Lecture-3-Parti.pdf` | 11: 3–32 | SSVS versus continuous shrinkage; sparse models are a modelling choice |
+| `SGPE-ECNM11060-Lecture-3-Partii.pdf` | 10 and 14: 4–19; 14: 20–23 | Tree functions, tree priors, posterior computation, and GP introduction |
+| `SGPE-ECNM11060_Lecture-4.pdf` | 6: 13–23; 7: 3–12, 29–35 | Minnesota versus conjugate system priors; multivariate uncertainty |
+| `SGPE-ECNM11060_Lecture-5.pdf` | 8: 3–12; 12: 14–20 | State-space reasoning and the KSC alternative to the scheduled JPR sampler |
+| `SGPE-ECNM11060_Lecture-6.pdf` | Optional in 8 and 11: 1–22 | Latent-factor compression, distinct from selection of observed finance factors |
+| `Topic3_Bayes_Macro_Forecasting.pdf` | 6: 3–6; 9: 13–15 | Why shrinkage helps prediction and why full predictive densities matter |
+
+The SGPE precision-Gamma notation must be translated into this course's variance-
+inverse-gamma notation. Independent and variance-scaled coefficient priors are
+different assumptions. KSC mixture sampling is supplementary to JPR, and tree
+prediction alone does not establish causal identification.

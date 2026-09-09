@@ -981,6 +981,43 @@ exactly the substitution used above. The degrees-of-freedom limit is $-k$ rather
 that $\nu_* = n - k$ rather than $n$, which is the same degrees-of-freedom correction that
 classical regression applies.
 
+## A Normal prior as additional regression rows
+
+Where does the ridge-like matrix update come from? Under the scaled prior
+$\beta\mid\sigma^2\sim N(b_0,\sigma^2 B_0)$, the likelihood and prior contribute
+two squared distances to the joint exponent:
+
+$$
+\|y-X\beta\|^2+(\beta-b_0)^\top B_0^{-1}(\beta-b_0).
+$$
+
+Choose $C$ with $C^\top C=B_0^{-1}$ and define
+$X_*=[X^\top,C^\top]^\top$, $y_*=[y^\top,(Cb_0)^\top]^\top$.
+The second squared distance is $\|Cb_0-C\beta\|^2$, so their sum is
+$\|y_*-X_*\beta\|^2$. Differentiating this sum with respect to $\beta$ gives
+
+$$
+(X^\top X+B_0^{-1})b_n=X^\top y+B_0^{-1}b_0.
+$$
+
+Thus the posterior mean is the least-squares solution of an augmented system.
+The artificial rows express **soft restrictions**: they say where coefficients
+should be before seeing the data, with stronger rows imposing greater precision.
+They are not extra observed firms or extra degrees of freedom. In particular,
+do not count these rows as observations when updating the inverse-gamma shape,
+and do not use an ordinary augmented-data likelihood to calculate model evidence:
+the prior's normalising constants still matter.
+
+For the CAPM exercise, set the intercept target to zero and choose an economically
+defensible beta target. Verify that solving the augmented least-squares system
+gives the same $b_n$ as the manual NIG matrix update. Use an upper Cholesky factor
+of $B_0^{-1}$ for $C$; a lower factor must be transposed.
+
+*Source connection:* SGPE Lecture 2, PDF pp. 11–15 (dummy observations).
+Chan, *Notes on Bayesian Macroeconometrics*, pp. 8–11, motivates the same
+addition of information in the scalar Normal model. This section retains our
+scaled NIG prior; Chan's later independent-prior regression is a different model.
+
 ## Reading guide and sources
 
 UPM Class 5 and the Normal-model Case 2 practical: completing the square and marginalisation. Greenberg (2008), Sections 4.1–4.3 and 8.1, distinguishes prior specification from posterior calculation.

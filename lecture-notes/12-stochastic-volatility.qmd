@@ -537,6 +537,55 @@ entire path is drawn in one forward-filter backward-sample step with the indicat
 more Gibbs block, and a small offset inside the logarithm guards against returns near
 zero. Joint path updates can substantially improve mixing relative to single-date updates. The gain depends on the dataset, parameterisation and implementation. The finite Normal mixture approximates the log-chi-squared density; exact inference for the original model requires accounting for that approximation, for example by an appropriate correction.
 
+## Taking logs does not make volatility Gaussian
+
+Starting from $r_t=\exp(h_t/2)\varepsilon_t$, with
+$\varepsilon_t\sim N(0,1)$, squaring and taking logs gives
+$\log r_t^2=h_t+z_t$, where $z_t=\log\varepsilon_t^2$.
+The equation is linear in the latent state, but its observation error is not
+Normal. To see its density, put $v=\varepsilon^2\sim\chi_1^2$ and substitute
+$v=e^z$ into $f_v(v)$, multiplying by the Jacobian $e^z$:
+
+$$
+f_z(z)=\frac{1}{\sqrt{2\pi}}\exp\left(\frac z2-\frac{e^z}{2}\right).
+$$
+
+It has mean $-\gamma-\log 2\approx-1.27036$ and variance $\pi^2/2$.
+Matching these moments with a Normal distribution misses the asymmetry.
+
+```{python}
+#| label: fig-log-volatility-observation-error
+#| fig-cap: "The exact log-chi-square error has a long left tail. A moment-matched Normal is not the same observation model."
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import norm
+
+logerror_grid = np.linspace(-12, 4, 500)
+logerror_exact = np.exp(0.5 * logerror_grid - 0.5 * np.exp(logerror_grid)) / np.sqrt(2 * np.pi)
+fig, ax = plt.subplots()
+ax.plot(logerror_grid, logerror_exact, color='#527a99', label='Exact log-chi-square')
+ax.plot(logerror_grid, norm.pdf(logerror_grid, -np.euler_gamma - np.log(2),
+                              np.pi / np.sqrt(2)), '--', color='#aa8066',
+        label='Moment-matched Normal')
+ax.set(xlabel='Observation error in log squared returns', ylabel='Density')
+ax.grid(axis='y', alpha=0.3)
+ax.spines[['top', 'right']].set_visible(False)
+ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=2)
+plt.show()
+```
+
+Mixture samplers approximate this error by a mixture of Normals; conditional on
+mixture indicators, Gaussian state-sampling machinery becomes available. That is
+the KSC route, and its approximation must be acknowledged. The scheduled exercise
+uses JPR instead, retaining the original return likelihood in its acceptance
+calculation. A Gaussian approximation can help construct a proposal without
+becoming the target distribution. Do not silently substitute a Kalman filter on
+log squared returns for the required SV posterior sampler.
+
+*Source connection:* Chan, *Notes on Bayesian Macroeconometrics*, PDF pp. 102–104;
+SGPE Lecture 5, pp. 14–20; Lopes, *Dynamic models*, pp. 63–70. These sections explain
+the mixture alternative; they are not descriptions of the JPR algorithm.
+
 ## Takeaways
 
 Because the log variance enters the measurement equation nonlinearly, the likelihood is a

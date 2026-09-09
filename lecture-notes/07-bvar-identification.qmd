@@ -444,8 +444,8 @@ above with the two swapped). It should be contrasted with the **conjugate prior*
 $B \mid \Sigma \sim \mathcal{MN}(B_0, \Sigma \otimes M_0^{-1})$, which scales the coefficient
 covariance by $\Sigma$ exactly as the single-equation Normal-Inverse-Gamma prior did; that scaling
 forces the prior correlation structure of every equation's coefficients to be proportional to one
-another, which is far too restrictive for a multi-equation system and is essentially never used
-for that reason. Breaking the link between the prior on $B$ and $\Sigma$, as the **extended
+another, which can restrict equation-specific prior elicitation. This conjugate prior is
+widely used when its structure is appropriate and direct simulation is valuable. Breaking the link between the prior on $B$ and $\Sigma$, as the **extended
 conjugate prior** and the Normal-diffuse prior both do, is what buys the freedom to be informative
 equation by equation, at the cost that the joint posterior of $(B, \Sigma)$ is then no longer of
 any standard form: unlike the non-informative case above, $B \mid \Sigma, Y$ is still Normal and
@@ -790,6 +790,33 @@ data equally well, so even with an infinite sample the bands would not collapse 
 **set identification**, and the band mixes a credible interval with the range of models the assumptions
 failed to exclude. Reading it as a confidence interval is a mistake, and an honest summary reports how
 many restrictions were imposed, over how many horizons, and what share of rotations they eliminated.
+
+## Three system priors that should not share one label
+
+The supplied readings use several computationally different VAR priors.
+With fixed $\Sigma$, a Normal Minnesota coefficient prior leads to one Normal
+posterior. With independent $b\sim N(b_0,V_0)$ and an inverse-Wishart prior for
+$\Sigma$, the two **full conditionals** are standard, but joint direct sampling
+does not follow from that fact. The Gibbs sampler alternates them.
+
+Under a matrix-Normal inverse-Wishart prior instead,
+$B\mid\Sigma\sim MN(B_0,V_0,\Sigma)$, where
+$\operatorname{Cov}(\operatorname{vec}B\mid\Sigma)=\Sigma\otimes V_0$.
+This separable covariance buys a joint conjugate update while restricting the
+relative coefficient prior covariances across equations. It remains a useful
+and widely used specification; the choice is a modelling trade-off, not a
+distinction between a valid and an invalid Bayesian VAR.
+
+For identification, a draw of the reduced-form covariance still does not label
+economic shocks. If $PP^\top=\Sigma$, every orthogonal rotation $PQ$ has the same
+covariance because $QQ^\top=I$. Restrictions select admissible rotations; they do
+not improve the reduced-form likelihood. Retain the three-variable system and
+sign-restricted IRFs in the lab, and report how often proposed rotations satisfy
+the restrictions. An ordering-based Cholesky illustration is not that exercise.
+
+*Source connection:* SGPE Lecture 4, PDF pp. 3–23 and 29–35; Chan, Chapter 8;
+Lopes, *Bayesian computation*, pp. 81–85, for system regression. Sign-restriction
+identification follows the week's assigned specialist literature.
 
 ## Takeaways
 

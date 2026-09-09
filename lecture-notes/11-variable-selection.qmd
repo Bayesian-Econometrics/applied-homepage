@@ -507,6 +507,35 @@ genuinely non-zero the simulated truth itself turns dense and the printed gap na
 direction the point Giannone, Lenza and Primiceri make about real data: a sparse prior's apparent edge is a property
 of how sparse the world actually is, not of the method, so it must be checked rather than assumed.
 
+## Selecting observed factors versus learning latent factors
+
+SSVS asks which columns of an observed design matrix should enter a regression.
+A latent-factor model instead describes many series through
+$x_t=\Lambda f_t+e_t$: $f_t$ is unobserved and must be learned together with
+loadings $\Lambda$. These address different questions. The first can attach an
+inclusion probability to a named finance factor; the second summarises shared
+variation but needs normalisations because rotations of factors and loadings
+can represent the same data. Compression does not identify a unique economic driver.
+
+There is also a useful hierarchical extension within SSVS. If
+$\gamma_j\mid\pi\sim\operatorname{Bernoulli}(\pi)$ and
+$\pi\sim\operatorname{Beta}(a,b)$, multiplication of kernels gives
+
+$$
+\pi\mid\gamma\sim\operatorname{Beta}
+\left(a+\sum_j\gamma_j,\ b+K-\sum_j\gamma_j\right).
+$$
+
+The prior expected model size is $Ka/(a+b)$. Integrating over $\pi$ also makes
+inclusion indicators dependent; this is different from fixing $\pi=a/(a+b)$.
+As an optional extension to the finance SSVS exercise, add this one Gibbs step
+and plot the posterior model-size histogram. A diffuse coefficient slab and
+a prior favouring large models are separate choices and should be varied separately.
+
+*Source connection:* SGPE Lecture 3, Part I, PDF pp. 9–32, develops selection and
+continuous shrinkage; Lecture 6, pp. 1–22, motivates the optional latent-factor
+comparison. Lopes's hierarchical perspective motivates learning a shared hyperparameter.
+
 ## Takeaways
 
 Variable selection over $p$ candidates involves $2^p$ models, so the space cannot be enumerated once $p$ is moderate,

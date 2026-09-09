@@ -1084,6 +1084,68 @@ density rather than sample from it exactly. That is what Metropolis-Hastings doe
 it is the subject of Lecture 5: a general-purpose way to construct a valid Markov chain
 step for an arbitrary target, of which Gibbs sampling will turn out to be a special case.
 
+## Seeing a Gibbs sweep along a posterior ridge
+
+Consider two standardised coefficients with joint Normal posterior correlation
+$\rho$. Its exponent is proportional to
+$-(\theta_1^2-2\rho\theta_1\theta_2+\theta_2^2)/(2(1-\rho^2))$.
+Holding $\theta_2$ fixed and completing the square in $\theta_1$ leaves
+$-(\theta_1-\rho\theta_2)^2/(2(1-\rho^2))$ plus a constant. Consequently,
+
+$$
+\theta_1\mid\theta_2\sim N(\rho\theta_2,1-\rho^2),\qquad
+\theta_2\mid\theta_1\sim N(\rho\theta_1,1-\rho^2).
+$$
+
+Each sweep is one horizontal and one vertical move. The following code records
+both intermediate points, rather than joining complete sweeps with diagonal lines.
+
+```{python}
+#| label: fig-gibbs-coordinate-geometry
+#| fig-cap: "With strong posterior correlation, coordinate updates make small steps along a narrow ridge. Both panels use exact full conditionals."
+import numpy as np
+import matplotlib.pyplot as plt
+
+geometry_rng = np.random.default_rng(410)
+geometry_grid = np.linspace(-3, 3, 150)
+geometry_a, geometry_b = np.meshgrid(geometry_grid, geometry_grid)
+fig, axes = plt.subplots(1, 2, figsize=(9, 4), sharex=True, sharey=True)
+for ax, geometry_rho in zip(axes, [0.2, 0.95]):
+    geometry_density = np.exp(-(geometry_a**2 - 2 * geometry_rho * geometry_a
+                               * geometry_b + geometry_b**2)
+                              / (2 * (1 - geometry_rho**2)))
+    ax.contour(geometry_a, geometry_b, geometry_density,
+               levels=[0.05, 0.2, 0.5, 0.8], colors='#9babb7')
+    geometry_point = np.array([-2.0, -2.0])
+    geometry_path = [geometry_point.copy()]
+    for geometry_sweep in range(45):
+        geometry_point[0] = geometry_rng.normal(
+            geometry_rho * geometry_point[1], np.sqrt(1 - geometry_rho**2))
+        geometry_path.append(geometry_point.copy())
+        geometry_point[1] = geometry_rng.normal(
+            geometry_rho * geometry_point[0], np.sqrt(1 - geometry_rho**2))
+        geometry_path.append(geometry_point.copy())
+    geometry_path = np.array(geometry_path)
+    ax.plot(geometry_path[:, 0], geometry_path[:, 1], lw=0.8, color='#527a99')
+    ax.set(title=fr'$\rho={geometry_rho}$', xlabel=r'$\theta_1$',
+           xlim=(-3, 3), ylim=(-3, 3))
+    ax.grid(axis='y', alpha=0.3)
+    ax.spines[['top', 'right']].set_visible(False)
+axes[0].set_ylabel(r'$\theta_2$')
+plt.tight_layout()
+plt.show()
+```
+
+Substituting the first conditional draw into the second shows a sweep-to-sweep
+coefficient $\rho^2$ for $\theta_2$. High correlation therefore survives many
+sweeps even though every conditional draw is exact. In regression, correlated
+regressors can create this geometry. Drawing the whole coefficient vector from
+its multivariate Normal conditional is a useful block update; increasing the
+number of iterations is not the only response to slow mixing.
+
+*Source connection:* Lopes, *Bayesian computation*, PDF pp. 61–67. Apply the
+lesson to the multiple-regression Gibbs exercise, retaining its coefficient block.
+
 ## Takeaways
 
 The Gibbs sampler replaces one hard problem, sampling a joint posterior directly, with

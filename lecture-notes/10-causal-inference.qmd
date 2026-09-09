@@ -507,6 +507,38 @@ $\hat{f}(1, X_i) - \hat{f}(0, X_i)$ over the sample gives an average effect even
 
 
 
+## What tree flexibility learns, and what identifies the policy effect
+
+The tree slides explain a prior for the outcome surface $f(d,x)$. To turn that
+surface into a causal estimand requires a separate argument. Under consistency,
+conditional exchangeability $(Y(0),Y(1))\perp D\mid X$, and overlap,
+
+$$
+E[Y(d)\mid X=x]=E[Y\mid D=d,X=x]=f(d,x).
+$$
+
+The first equality is justified by identification assumptions, not by a
+flexible regression algorithm. For the observed covariate population, a posterior
+draw of the average conditional treatment effect is therefore
+
+$$
+\tau^{(s)}=\frac1n\sum_i\{f^{(s)}(1,x_i)-f^{(s)}(0,x_i)\}.
+$$
+
+Stack both treatment assignments into one prediction matrix so that the same
+sampled ensemble supplies both potential-outcome means. Independent fits or
+independent prediction calls can lose their posterior dependence. Do not add
+independent observation noise when the estimand is this average of conditional
+means. Inferring a realised finite-sample average of individual potential-outcome
+differences is another target and requires additional assumptions about those outcomes.
+
+The exercise now fits actual BART trees. Compare the posterior effect plot with
+the overlap plot: a smooth fitted surface cannot reveal unmeasured confounding,
+and a narrow extrapolation interval does not establish overlap.
+
+*Source connection:* SGPE Lecture 3, Part II, PDF pp. 4–19, supplies tree modelling;
+Hill (2011) and Imbens and Rubin (2015) supply the causal interpretation.
+
 ## Reading guide and sources
 
 Greenberg (2008), Sections 11.1–11.2, for treatment models and endogenous covariates. Hill (2011) and Chipman et al. (2010) supply the BART application; UPM supplies the conditional-update mechanics, not a BART implementation.

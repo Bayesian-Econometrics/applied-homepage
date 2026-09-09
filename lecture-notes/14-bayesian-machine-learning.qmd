@@ -42,6 +42,75 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## From one split to a Bayesian prior over functions
+
+A regression tree starts with a question such as “is the predictor below zero?”
+Each terminal region receives a constant mean. A tree therefore defines a
+piecewise-constant function $g(x;T,\mu)$, where $T$ records the splits and $\mu$
+the terminal means. BART writes
+
+$$
+y_i=\sum_{j=1}^m g(x_i;T_j,\mu_j)+\varepsilon_i,
+\qquad \varepsilon_i\sim N(0,\sigma^2).
+$$
+
+This first equation says that several small adjustments add up to the conditional
+mean. It does not say that each tree must independently fit the outcome well.
+If independent leaf means have variance $\tau^2/m$, the sum at a fixed input has
+prior variance $\tau^2$. Increasing the number of trees need not increase the
+prior scale of the function. A depth-dependent split probability, commonly
+$\alpha(1+d)^{-\beta}$, also favours small trees.
+
+The plot constructs three illustrative trees explicitly. It is a picture of
+the additive representation, not a fitted BART posterior.
+
+```{python}
+#| label: fig-additive-tree-construction
+#| fig-cap: "Several small step functions add to a more flexible regression function. The chosen split locations and leaf values are illustrative."
+import numpy as np
+import matplotlib.pyplot as plt
+
+tree_grid = np.linspace(-2, 2, 401)
+tree_components = np.array([np.where(tree_grid < -0.6, -0.3, 0.2),
+                            np.where(tree_grid < 0.4, 0.1, -0.25),
+                            np.where(tree_grid < 1.1, -0.1, 0.3)])
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.5), sharey=True)
+for tree_index, tree_color in enumerate(['#527a99', '#aa8066', '#829779']):
+    axes[0].plot(tree_grid, tree_components[tree_index], color=tree_color,
+                 label=f'Tree {tree_index + 1}')
+axes[1].plot(tree_grid, tree_components.sum(axis=0), color='#345b75')
+for ax in axes:
+    ax.set(xlabel='Predictor', ylabel='Contribution to conditional mean')
+    ax.grid(axis='y', alpha=0.3)
+    ax.spines[['top', 'right']].set_visible(False)
+axes[0].set_title('Individual weak trees')
+axes[1].set_title('Sum of the trees')
+axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.2), ncol=3)
+plt.tight_layout()
+plt.show()
+```
+
+To update tree $j$, subtract the other trees from $y_i$ to form partial residuals
+$r_{ij}$. Conditional on a proposed tree, a leaf containing $n_\ell$ observations
+has Normal likelihood for its common mean. With leaf prior $N(0,v_\mu)$,
+completion of the square gives
+
+$$
+V_\ell=(n_\ell/\sigma^2+1/v_\mu)^{-1},\qquad
+m_\ell=V_\ell\sum_{i\in\ell}r_{ij}/\sigma^2.
+$$
+
+The familiar Normal update is only one part of BART: the tree structures must
+also be explored, with moves accounting for likelihood, tree prior and proposal
+probabilities. Fitting fixed stumps or bootstrapping boosted trees does not
+perform that posterior calculation. In the week 14 comparison, distinguish such
+demonstrations from BART draws and evaluate BART and OLS on the same held-out data.
+In week 10, posterior outcome functions must additionally be combined with
+causal identification assumptions before interpreting treatment contrasts.
+
+*Source connection:* SGPE Lecture 3, Part II, PDF pp. 4–19, and Chipman et al.
+(2010). Its later GP discussion connects tree priors to the function priors below.
+
 ## A prior over two unknown function values
 
 Suppose $x$ is a valuation measure and $f(x)$ is the expected return at that valuation.

@@ -482,6 +482,56 @@ This is sequential Bayes, as in the UPM coin example, now applied to a model ind
 Rolling-window scores with forgotten observations are a different procedure and
 must not be described as the same full-history posterior model probabilities.
 
+## Is the predictive density calibrated, or merely narrow?
+
+A point forecast can be accurate while its uncertainty is much too small.
+For a continuous predictive CDF $F_t$, calculate the probability integral
+transform $u_t=F_t(y_t)$ using the distribution issued **before** observing $y_t$.
+If that conditional distribution is correct and strictly increasing, then
+
+$$
+P(F_t(Y_t)\leq u\mid\mathcal I_{t-1})
+=P(Y_t\leq F_t^{-1}(u)\mid\mathcal I_{t-1})=u.
+$$
+
+Hence calibrated transforms are uniform. The simulation below isolates a
+variance mistake: both forecasts have the correct mean, but one halves the
+standard deviation. Realisations then land too often in its extreme tails.
+
+```{python}
+#| label: fig-predictive-calibration-pit
+#| fig-cap: "An overconfident forecast produces a U-shaped PIT histogram even when its predictive mean is correct."
+from scipy.stats import norm
+import numpy as np
+import matplotlib.pyplot as plt
+
+pit_rng = np.random.default_rng(910)
+pit_outcomes = pit_rng.normal(size=4000)
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.5), sharey=True)
+for ax, pit_scale in zip(axes, [1.0, 0.5]):
+    ax.hist(norm.cdf(pit_outcomes, scale=pit_scale), bins=np.linspace(0, 1, 11),
+            density=True, color='#527a99', alpha=0.75, edgecolor='white')
+    ax.axhline(1, color='#777777', linestyle='--')
+    ax.set(title=f'Forecast standard deviation = {pit_scale}',
+           xlabel='Predictive CDF at realised outcome')
+    ax.grid(axis='y', alpha=0.3)
+    ax.spines[['top', 'right']].set_visible(False)
+axes[0].set_ylabel('PIT density')
+plt.tight_layout()
+plt.show()
+```
+
+In the BMA backtest, compute each mixture CDF as
+$F_t(y)=\sum_k w_{k,t-1}F_{k,t}(y)$, with weights available at the forecast origin.
+Report a PIT histogram alongside the required log-predictive scores. A flat
+histogram alone does not establish conditional calibration: also inspect serial
+dependence and changes across forecast regimes. These diagnostics complement a
+proper scoring rule rather than replacing it.
+
+*Source connection:* *Topic 3: Bayesian Macro Forecasting*, PDF pp. 13–15, motivates
+density and tail evaluation; Lopes, *Overview*, pp. 12–21, develops predictive
+integration and model probabilities. The PIT derivation is an additional diagnostic.
+
 ## Reading guide and sources
 
 UPM Classes 1 and 5 connect prediction with model probabilities; Frühwirth-Schnatter, Bayesian Computing, Parts IV a and V, treats predictive mixtures and model selection; Geweke (2005), Sections 8.2–8.3.

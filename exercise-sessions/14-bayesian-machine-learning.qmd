@@ -27,206 +27,132 @@ Submit your derivation, runnable code, and a short interpretation. State the pri
 
 ## Reference implementation
 
-This site builds with only NumPy, pandas, SciPy and Matplotlib, so the reference
-implementation below is a transparent numpy stand-in for BART rather than a call
-to `pymc`/`pymc-bart`: a small sum-of-regression-trees model, fitted by residual
-boosting, with predictive uncertainty obtained by refitting the whole ensemble on
-bootstrap resamples of the training data. It is not the Bayesian backfitting MCMC
-that BART actually uses, but it shares BART's essential structure, a sum of shallow
-trees, and it gives an honest predictive spread to compare against OLS. A course
-environment with `pymc` and `pymc-bart` installed can run the real sampler instead;
-the [implementation reference](#implementation-reference) below links its API.
-
-The code implements the model above in a reproducible standalone example. Identify where each posterior parameter enters the calculation, then change one assumption at a time.
+This implementation fits actual BART using PyMC-BART's tree sampler and a
+Normal outcome likelihood. Install `uv sync --extra bart`. Training observations
+determine the trees; held-out outcomes enter only the final evaluation. Predicting
+`mu` gives latent-mean draws, while `outcome` also includes observation noise.
+The OLS benchmark uses the same training and test samples and Student-t prediction
+intervals. The simulated observations are independent, but the split retains
+chronological order as required for the financial forecasting workflow.
 
 ::: {.callout-note collapse="true"}
 ## Show the reference implementation
 
 ```{python}
+import sys
+# Quarto's Windows kernel needs module metadata for BART's tree-store process.
+sys.modules['__main__'].__spec__ = None
 import numpy as np
 import pandas as pd
-from scipy import stats
 import matplotlib.pyplot as plt
+import pymc as pm
+import pymc_bart as pmb
+import arviz as az
+from scipy import stats
 
 SEED, TRAIN, TEST = 2026, 180, 80
-N_TREES, DEPTH, LEARNING_RATE, MIN_LEAF = 25, 2, 0.15, 10
-N_BOOTSTRAP = 60
+TREES, TUNE, DRAWS, CHAINS = 30, 1000, 1000, 4
 rng = np.random.default_rng(SEED)
-x = rng.normal(size=(TRAIN+TEST,2))
-signal = .7*np.tanh(2*x[:,0])+.3*x[:,0]*x[:,1]
-y = signal+rng.normal(size=TRAIN+TEST)
+x = rng.normal(size=(TRAIN + TEST, 2))
+signal = 0.7 * np.tanh(2 * x[:, 0]) + 0.3 * x[:, 0] * x[:, 1]
+y = signal + rng.normal(size=TRAIN + TEST)
+x_train, x_test = x[:TRAIN], x[TRAIN:]
+y_train, y_test = y[:TRAIN], y[TRAIN:]
+with pm.Model() as return_model:
+    predictors = pm.Data('predictors', x_train)
+    sigma = pm.HalfNormal('sigma', sigma=2)
+    mu = pmb.BART('mu', X=predictors, Y=y_train, m=TREES)
+    outcome = pm.Normal('outcome', mu=mu, sigma=sigma,
+                        observed=y_train, shape=mu.shape)
+    posterior = pm.sample(draws=DRAWS, tune=TUNE, chains=CHAINS, cores=1,
+                          random_seed=SEED, progressbar=False, target_accept=0.9)
 
-def best_split(X, r, min_leaf):
-    """Vectorised SSE-minimising split search over every feature and threshold."""
-    n = len(r)
-    best_feature, best_threshold, best_sse = None, None, np.inf
-    for j in range(X.shape[1]):
-        order = np.argsort(X[:, j])
-        xs, rs = X[order, j], r[order]
-        n_left = np.arange(1, n+1)
-        left_sum, left_sq = np.cumsum(rs), np.cumsum(rs**2)
-        right_sum, right_sq = left_sum[-1]-left_sum, left_sq[-1]-left_sq
-        n_right = n-n_left
-        with np.errstate(divide='ignore', invalid='ignore'):
-            sse = (left_sq-left_sum**2/n_left)+(right_sq-right_sum**2/np.maximum(n_right,1))
-        valid = (n_left >= min_leaf)&(n_right >= min_leaf)
-        valid[:-1] &= xs[:-1] != xs[1:]
-        valid[-1] = False
-        if valid.any():
-            candidate = np.where(valid, sse, np.inf)
-            idx = np.argmin(candidate)
-            if candidate[idx] < best_sse:
-                best_feature, best_sse = j, candidate[idx]
-                best_threshold = (xs[idx]+xs[idx+1])/2
-    return best_feature, best_threshold
+grid = np.linspace(-2.5, 2.5, 100)
+x_grid = np.column_stack([grid, np.zeros(grid.size)])
+with return_model:
+    pm.set_data({'predictors': np.vstack([x_test, x_grid])})
+    prediction = pm.sample_posterior_predictive(
+        posterior, var_names=['mu', 'outcome'], random_seed=SEED + 1,
+        progressbar=False, return_inferencedata=False)
+function_draws = prediction['mu'].reshape(-1, TEST + grid.size)
+return_draws = prediction['outcome'].reshape(-1, TEST + grid.size)
+bart_mean = function_draws[:, :TEST].mean(axis=0)
+bart_band = np.quantile(return_draws[:, :TEST], [0.025, 0.975], axis=0)
 
-def build_tree(X, r, depth, min_leaf):
-    """Grow a depth-limited regression tree by recursive binary splitting."""
-    feature, threshold = (None, None) if depth == 0 else best_split(X, r, min_leaf)
-    if feature is None:
-        return {'leaf': True, 'value': r.mean()}
-    left = X[:, feature] <= threshold
-    return {'leaf': False, 'feature': feature, 'threshold': threshold,
-             'left': build_tree(X[left], r[left], depth-1, min_leaf),
-             'right': build_tree(X[~left], r[~left], depth-1, min_leaf)}
-
-def predict_tree(tree, X):
-    if tree['leaf']:
-        return np.full(len(X), tree['value'])
-    left = X[:, tree['feature']] <= tree['threshold']
-    out = np.empty(len(X))
-    out[left] = predict_tree(tree['left'], X[left])
-    out[~left] = predict_tree(tree['right'], X[~left])
-    return out
-
-def fit_boosted_trees(X, y, n_trees, depth, lr, min_leaf):
-    """Sum-of-trees model fitted by residual boosting: the numpy stand-in for BART."""
-    init = y.mean()
-    residual = y-init
-    trees = []
-    for _ in range(n_trees):
-        tree = build_tree(X, residual, depth, min_leaf)
-        residual = residual-lr*predict_tree(tree, X)
-        trees.append(tree)
-    return init, trees
-
-def predict_boosted(init, trees, lr, X):
-    return init+lr*sum(predict_tree(tree, X) for tree in trees)
-
-x_train, y_train, x_test, y_test = x[:TRAIN], y[:TRAIN], x[TRAIN:], y[TRAIN:]
-draws = np.empty((N_BOOTSTRAP, TEST))
-for b in range(N_BOOTSTRAP):
-    resample = rng.integers(0, TRAIN, TRAIN)
-    init, trees = fit_boosted_trees(x_train[resample], y_train[resample],
-                                     N_TREES, DEPTH, LEARNING_RATE, MIN_LEAF)
-    draws[b] = predict_boosted(init, trees, LEARNING_RATE, x_test)
-
-# The bootstrap draws above capture only function (estimation) uncertainty; a
-# predictive draw for a new observation also needs the observation noise, so
-# an in-sample residual scale is added back before computing coverage.
-init_full, trees_full = fit_boosted_trees(x_train, y_train, N_TREES, DEPTH, LEARNING_RATE, MIN_LEAF)
-sigma_hat = (y_train-predict_boosted(init_full, trees_full, LEARNING_RATE, x_train)).std(ddof=1)
-predictive_draws = draws+sigma_hat*rng.standard_normal(size=draws.shape)
-
-Z = np.column_stack([np.ones(TRAIN+TEST), x])
-coef = np.linalg.lstsq(Z[:TRAIN], y[:TRAIN], rcond=None)[0]
-ols_mean = Z[TRAIN:] @ coef
-resid = y[:TRAIN]-Z[:TRAIN] @ coef
-dof = TRAIN-Z.shape[1]
-V = np.linalg.inv(Z[:TRAIN].T @ Z[:TRAIN])
-scale = np.sqrt((resid @ resid/dof)*(1+np.einsum('ij,jk,ik->i',Z[TRAIN:],V,Z[TRAIN:])))
-ols_band = ols_mean+stats.t.ppf(np.array([.05,.95]), dof)[:,None]*scale
-bart_mean = draws.mean(0)
-bart_band = np.quantile(predictive_draws, [.05,.95], axis=0)
+# OLS prediction intervals include innovation and coefficient uncertainty.
+ols_train = np.column_stack([np.ones(TRAIN), x_train])
+ols_test = np.column_stack([np.ones(TEST), x_test])
+ols_beta = np.linalg.lstsq(ols_train, y_train, rcond=None)[0]
+ols_cov = np.linalg.inv(ols_train.T @ ols_train)
+ols_df = TRAIN - ols_train.shape[1]
+ols_s2 = np.sum((y_train - ols_train @ ols_beta)**2) / ols_df
+ols_mean = ols_test @ ols_beta
+ols_scale = np.sqrt(ols_s2 * (1 + np.sum((ols_test @ ols_cov) * ols_test, axis=1)))
+ols_band = ols_mean + stats.t.ppf([0.025, 0.975], ols_df)[:, None] * ols_scale
 rows = []
-for label,mean,band in [('OLS',ols_mean,ols_band),('BART stand-in',bart_mean,bart_band)]:
-    rows.append({'model':label,'test MSE':np.mean((y_test-mean)**2),
-                 '90% coverage':np.mean((y_test>=band[0])&(y_test<=band[1]))})
-results = pd.DataFrame(rows)
-print(results)
+for name, mean, band in [('OLS', ols_mean, ols_band), ('BART', bart_mean, bart_band)]:
+    rows.append({'model': name, 'test MSE': np.mean((y_test - mean)**2),
+                 '95% predictive coverage': np.mean((y_test >= band[0]) & (y_test <= band[1])),
+                 'mean interval width': np.mean(band[1] - band[0])})
+print(pd.DataFrame(rows).to_string(index=False))
+print(az.summary(posterior, var_names=['sigma'], kind='diagnostics'))
+print('Largest training-mean R-hat:', float(az.rhat(posterior, var_names=['mu']).to_array().max()))
+
 ```
 
-The benchmark interval uses the classical t-based regression prediction
-formula. A single held-out sample need not rank models reliably. Lower training
-error is not evidence of better return forecasts; repeat the experiment and
-record both error and calibration. This exercise fits actual tree structures,
-while the lecture develops a Gaussian process alternative.
 :::
+
+Inspect R-hat, effective sample sizes and traces before interpreting the
+posterior. A large training-mean R-hat signals that this teaching run needs more
+sampling or investigation; increasing draws is not a substitute for checking
+model geometry. The diagnostics shown are a starting point, not proof of convergence.
 
 ## What the result looks like
 
+The scatterplot compares conditional means with noisy realised returns, so
+even a good model need not lie near the diagonal. The second plot holds the
+second predictor at zero: distinguish uncertainty in the fitted mean from the
+larger uncertainty in a future return. Do not declare a winner from one seed;
+compare test MSE, coverage and interval width across replications and signal levels.
+
 ```{python}
-fig, ax = plt.subplots()
-lims = [min(y_test.min(), ols_mean.min(), bart_mean.min()),
-        max(y_test.max(), ols_mean.max(), bart_mean.max())]
-ax.plot(lims, lims, color='grey', linestyle='--', label='perfect prediction')
-ax.scatter(y_test, ols_mean, alpha=.6, label='OLS')
-ax.scatter(y_test, bart_mean, alpha=.6, label='BART stand-in')
-ax.set_xlabel('realised test return'); ax.set_ylabel('predicted return')
-ax.set_title('Predicted versus realised test returns')
-ax.legend()
-plt.tight_layout(); plt.show()
-
-grid = np.linspace(-2.5, 2.5, 200)
-x_grid = np.column_stack([grid, np.zeros(200)])
-truth_grid = .7*np.tanh(2*grid)
-fit_grid = np.empty((N_BOOTSTRAP, 200))
-for b in range(N_BOOTSTRAP):
-    resample = rng.integers(0, TRAIN, TRAIN)
-    init, trees = fit_boosted_trees(x_train[resample], y_train[resample],
-                                     N_TREES, DEPTH, LEARNING_RATE, MIN_LEAF)
-    fit_grid[b] = predict_boosted(init, trees, LEARNING_RATE, x_grid)
-fit_mean = fit_grid.mean(0)
-fit_lower, fit_upper = np.quantile(fit_grid, [.05,.95], axis=0)
 
 fig, ax = plt.subplots()
-ax.plot(grid, truth_grid, color='black', label=r'true signal, $x_1=0$')
-ax.plot(grid, fit_mean, color='tab:orange', label='BART stand-in, mean fit')
-ax.fill_between(grid, fit_lower, fit_upper, color='tab:orange', alpha=.25,
-                 label='90% predictive band')
-ax.set_xlabel('$x_0$'); ax.set_ylabel('fitted function')
-ax.set_title('Fitted non-linear function against the truth')
-ax.legend()
-plt.tight_layout(); plt.show()
+ax.scatter(y_test, ols_mean, alpha=0.6, color='#aa8066', label='OLS')
+ax.scatter(y_test, bart_mean, alpha=0.6, color='#527a99', label='BART')
+ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], '--', color='#777777')
+ax.set(xlabel='Realised held-out return', ylabel='Predicted conditional mean')
+ax.grid(axis='y', alpha=0.3)
+ax.spines[['top', 'right']].set_visible(False)
+ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=2)
+plt.show()
+
+latent_band = np.quantile(function_draws[:, TEST:], [0.025, 0.975], axis=0)
+predictive_band = np.quantile(return_draws[:, TEST:], [0.025, 0.975], axis=0)
+fig, ax = plt.subplots()
+ax.fill_between(grid, predictive_band[0], predictive_band[1], color='#527a99',
+                 alpha=0.12, label='95% return interval')
+ax.fill_between(grid, latent_band[0], latent_band[1], color='#527a99',
+                 alpha=0.35, label='95% mean interval')
+ax.plot(grid, function_draws[:, TEST:].mean(axis=0), color='#527a99', label='BART mean')
+ax.plot(grid, 0.7 * np.tanh(2 * grid), '--', color='#aa8066', label='True mean')
+ax.set(xlabel='First predictor (second held at zero)', ylabel='Return')
+ax.grid(axis='y', alpha=0.3)
+ax.spines[['top', 'right']].set_visible(False)
+ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=2)
+plt.show()
+
 ```
-
-The scatter shows both models tracking the identity line loosely, with OLS
-systematically flatter because a linear fit cannot bend with the $\tanh$
-non-linearity. The second panel makes this explicit: the sum-of-trees mean fit
-follows the true signal's curvature along the $x_1=0$ slice, while its
-predictive band widens exactly where individual bootstrap refits disagree,
-typically away from the centre of the training distribution.
-
-## Discuss the results
-
-The benchmark interval uses the classical t-based regression prediction
-formula. A single held-out sample need not rank models reliably. Lower training
-error is not evidence of better return forecasts; repeat the experiment and
-record both error and calibration. This exercise fits actual tree structures,
-while the lecture develops a Gaussian process alternative.
-
-Which result reflects the economic model, which reflects the prior, and which could change simply because a new simulation seed was used?
 
 ## Additional practice from the lecture
 
-The following questions extend the BART-versus-OLS comparison used above.
+1. Halve the nonlinear signal and repeat across several seeds; report paired BART-minus-OLS test-MSE differences.
+2. Increase `TREES` and compare fit stability, runtime and posterior diagnostics without selecting settings on the test outcomes.
+3. Recalculate coverage using latent-mean intervals and explain why these are inappropriate intervals for realised returns.
+4. Fit a linear data-generating process and then stronger nonlinearities. Explain when flexibility helps and when it mostly estimates noise.
 
-1. Vary the number of trees in the sum-of-trees model, `N_TREES = 10` and then `N_TREES = 60`,
-   holding the learning rate fixed, and report how the test MSE and the 90% coverage of the
-   BART stand-in change relative to the values printed above.
-2. Refit the entire comparison at three different seeds (keep `TRAIN`, `TEST` and the signal
-   fixed) and check whether the ranking between OLS and the BART stand-in on test MSE is
-   stable. State in one sentence what a seed-dependent ranking would imply about trusting a
-   single run.
-3. The training-sample MSE of the sum-of-trees model can be driven arbitrarily low by adding
-   more trees or deeper splits, without improving the test MSE printed above. Derive why this
-   overfitting occurs for an additive model with enough capacity, then confirm it by
-   recording training MSE alongside test MSE as `N_TREES` rises from 5 to 100.
-4. Using the 90% coverage figures printed above, decide which model a risk manager should
-   deploy for a tail-risk-aware position size that depends on the width of the predictive
-   band rather than on the point forecast, and justify the choice using both panels plotted
-   above.
+## Implementation reference
 
-## Implementation reference {#implementation-reference}
-
-[PyMC-BART introduction and prediction API](https://www.pymc.io/projects/examples/en/stable/bart/bart_introduction.html). Chipman, George and McCulloch (2010), *BART: Bayesian Additive Regression Trees*, supplies the model that the stand-in above approximates; the lecture's Gaussian process benchmark uses Rasmussen and Williams (2006).
+[PyMC-BART introduction and prediction API](https://www.pymc.io/projects/examples/en/stable/bart/bart_introduction.html).
+The tree-prior and backfitting derivations are developed in the lecture notes and
+SGPE Lecture 3, Part II, PDF pp. 4–19. Chipman et al. (2010) is the model reference.
