@@ -38,6 +38,7 @@ draw from one at a time.
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.special import gammaln
 import matplotlib.pyplot as plt
 
 rng = np.random.default_rng(2026)
@@ -303,6 +304,31 @@ everything we do with Gibbs output: posterior means, credible intervals, and mar
 histograms are all sample averages of some function $g$ along the chain, and the ergodic
 theorem says they converge to the right answer regardless of the dependence, provided we
 let the chain run long enough and have discarded the burn-in.
+
+### Numerical standard errors, subsampling, and parallel chains
+
+Reporting a Gibbs mean without a sense of its own uncertainty is only half a summary, and
+dependence between sweeps means the ordinary $s/\sqrt{n}$ formula understates it, since it ignores
+the autocovariances $\gamma_j$ between the $g(\theta^{(t)})$ entering the average:
+
+$$
+\operatorname{Var}\!\left(\bar g_{\text{mcmc}}\right) = \frac{1}{n}\left(\gamma_0 +
+2\sum_{j=1}^{n-1}\left(1-\tfrac{j}{n}\right)\gamma_j\right) = \frac{S(0)}{n},
+$$
+
+where $S(0)$, the spectral density of $g(\theta^{(t)})$ at zero, exceeds $\gamma_0$ for a
+positively autocorrelated chain. Estimated consistently, its square root is the chain's
+**numerical standard error**, feeding an asymptotic error bound exactly as for direct or
+importance sampling. One way to avoid estimating $S(0)$ is to **subsample the chain**, keeping
+only every $m$-th draw so the retained ones are close to independent; this is not a free lunch,
+since every discarded draw still carries information about $g(\theta)$, so subsampling uses only a
+fraction of what the full chain offers, and thinning before averaging throws information away
+rather than improving on it. Running several **parallel chains** from dispersed starts is
+different in kind: after each chain's warm-up, one draw per chain is close to an independent
+posterior draw, since the chains never communicate, so their mean has a numerical standard error
+computed exactly as for an independent sample, at the price of more computation for the same
+number of retained draws; comparing chains started far apart is also a convincing convergence
+diagnostic in its own right.
 
 ## Running the sampler and checking it against the truth
 
@@ -761,6 +787,284 @@ works whenever one question cleanly separates the classes; with more classes or 
 separated groups one
 instead relabels by matching each draw to a fixed reference partition, but the underlying
 issue and the need to address it before summarising are the same.
+
+## Regression with heavy-tailed errors: Student-t via data augmentation
+
+Every regression sampler built so far assumed Gaussian errors, and asset returns are the textbook
+case where that is wrong: extreme returns occur far more often than a Normal error would predict.
+A **Student-$t$** error, with its heavier tails, is the natural replacement, but the likelihood is
+not conjugate to anything, since
+$\propto\big[1+(y_t-x_t^\top\beta)^2/(\nu\sigma^2)\big]^{-(\nu+1)/2}$ raises the quadratic form to
+a power instead of an exponential, so completing the square no longer produces anything
+recognisable, and $(\beta,\sigma^2,\nu)$ has no closed-form posterior. Data augmentation,
+introduced above for the latent-class mixture, resolves exactly this kind of impasse, and this
+section builds a second instance of it, following Chapter 3 of Bauwens' lecture notes on Bayesian
+econometrics.
+
+### The scale-mixture representation
+
+Introduce, for each observation, an unobserved positive scale $\lambda_t$ and write
+
+$$
+y_t = x_t^\top\beta + \lambda_t u_t, \qquad u_t \sim \mathcal{N}(0,\sigma^2), \qquad
+\lambda_t^2 \sim \text{Inverse-Gamma}\!\left(\tfrac{\nu}{2},\tfrac{\nu}{2}\right),
+$$
+
+with $u_t$ and $\lambda_t^2$ independent of each other and across $t$. Conditional on $\lambda_t$
+the error $\varepsilon_t=\lambda_t u_t$ is Normal with variance $\sigma^2\lambda_t^2$; the claim
+is that integrating $\lambda_t$ out gives exactly a Student-$t_\nu$ error. Derive it with the same
+beta-integral trick Lecture 2 used for the marginal Student-$t$ posterior of $\beta$: substitute
+$u=1/\sigma^2$ there, or $v=1/\lambda_t^2$ here, and use $\int_0^\infty
+v^{a-1}e^{-bv}dv=\Gamma(a)/b^a$. Writing $\phi=\lambda_t^2$, the joint density of $\varepsilon_t$
+and $\phi$, with its two powers of $\phi$ and its two exponential terms (both containing $1/\phi$)
+collected, is
+
+$$
+p(\varepsilon_t,\phi) =
+\underbrace{(2\pi\sigma^2\phi)^{-1/2}\exp\!\left(-\frac{\varepsilon_t^2}{2\sigma^2\phi}\right)}_{\varepsilon_t\mid\phi}
+\times
+\underbrace{\frac{(\nu/2)^{\nu/2}}{\Gamma(\nu/2)}\phi^{-\nu/2-1}\exp\!\left(-\frac{\nu}{2\phi}\right)}_{\phi}
+\propto \phi^{-(\nu+3)/2}\exp\!\left[-\frac{1}{\phi}\left(
+\frac{\nu}{2}+\frac{\varepsilon_t^2}{2\sigma^2}\right)\right].
+$$
+
+Substituting $v=1/\phi$, so $\phi^{-(\nu+3)/2}=v^{(\nu+3)/2}$ and $d\phi=-dv/v^2$, turns the
+integral over $\phi\in(0,\infty)$ into the same gamma integral as before, with $a=(\nu+1)/2$:
+
+$$
+\int_0^\infty v^{(\nu+3)/2-2}\exp\!\left[-v\left(\frac{\nu}{2}+\frac{\varepsilon_t^2}{2\sigma^2}\right)\right]dv
+=\Gamma\!\left(\frac{\nu+1}{2}\right)\left(\frac{\nu}{2}+\frac{\varepsilon_t^2}{2\sigma^2}\right)^{-(\nu+1)/2}.
+$$
+
+Restoring the constants carried along the way gives
+$p(\varepsilon_t)\propto\left[1+\varepsilon_t^2/(\nu\sigma^2)\right]^{-(\nu+1)/2}$, exactly the
+kernel of a Student-$t_\nu$ density scaled by $\sigma$, matching the source's
+$t(0,1,\nu^{-1}\sigma^{-2},\nu)$: marginalising a Normal over this Inverse-Gamma mixing variance
+gives a Student-$t_\nu$ error, with $\{\varepsilon_t=\lambda_tu_t\}$ independent across $t$ since
+$\lambda_t,u_t$ are independent by construction.
+
+### From the mixture to a heteroskedastic regression
+
+Its use is in the *conditional* model, not the marginal: fix every $\lambda_t$ and divide the
+$t$-th row of the regression equation by it,
+
+$$
+\frac{y_t}{\lambda_t} = \left(\frac{x_t}{\lambda_t}\right)^{\!\top}\!\beta + u_t, \qquad
+u_t \sim \mathcal{N}(0,\sigma^2),
+$$
+
+homoskedastic again: the troublesome $\lambda_t$ has been divided out of the error. Writing
+$D_\lambda=\text{diag}(\lambda_1,\dots,\lambda_T)$, $y_\lambda=D_\lambda^{-1}y$ and
+$X_\lambda=D_\lambda^{-1}X$, conditioning on $\lambda$ turns the Student regression into exactly
+the Normal-Inverse-Gamma regression of Lecture 2 applied to $(X_\lambda,y_\lambda)$ instead of
+$(X,y)$. Returning to that lecture's scaled prior, $\beta\mid\sigma^2\sim\mathcal
+N(b_0,\sigma^2B_0)$, $\sigma^2\sim\text{Inverse-Gamma}(\alpha_0,\delta_0)$, in place of the
+unscaled semi-conjugate prior used earlier in this chapter, the weighted updates are
+
+$$
+B_1(\lambda)^{-1} = B_0^{-1} + X_\lambda^\top X_\lambda, \qquad
+b_1(\lambda) = B_1(\lambda)\left(B_0^{-1}b_0 + X_\lambda^\top y_\lambda\right),
+$$
+$$
+\beta \mid \sigma^2,\nu,\lambda,y \sim \mathcal{N}\!\left(b_1(\lambda),\, \sigma^2 B_1(\lambda)\right),
+\qquad
+\sigma^2 \mid \beta,\nu,\lambda,y \sim \text{Inverse-Gamma}\!\left(\alpha_0+\tfrac{T}{2},\;
+\delta_0 + \tfrac{1}{2}\sum_{t=1}^T \frac{(y_t-x_t^\top\beta)^2}{\lambda_t^2}\right),
+$$
+
+each term weighted by $1/\lambda_t^2$, matching Bauwens' $M_*(\lambda)=M_0+X_\lambda^\top
+X_\lambda$ and $\beta_*(\lambda)$ under the Lecture 2 bridge; with $\lambda$ known nothing depends
+on $\nu$, since $\nu$ enters only through $\lambda$'s prior and full conditional.
+
+### The full conditional of the mixing variables
+
+What remains is $\lambda$. Write the standardised residual $\tilde y_t =
+(y_t-x_t^\top\beta)/\sigma$, so $\tilde y_t = \lambda_t\tilde u_t$ with $\tilde u_t\sim\mathcal
+N(0,1)$ given $\beta,\sigma$. Holding $\beta,\sigma,\nu$ fixed, the joint density of $\tilde y_t$
+and $\lambda_t^2$ collects the same two powers as above, but now $\tilde y_t$ plays the role
+$\varepsilon_t$ played there and $\lambda_t^2$ is the unknown rather than the variable integrated
+out:
+
+$$
+f(\tilde y_t\mid\lambda_t^2)\,f(\lambda_t^2) \propto
+(\lambda_t^2)^{-1/2}\exp\!\left(-\frac{\tilde y_t^2}{2\lambda_t^2}\right) \times
+(\lambda_t^2)^{-\nu/2-1}\exp\!\left(-\frac{\nu}{2\lambda_t^2}\right)
+= (\lambda_t^2)^{-(\nu+3)/2}\exp\!\left(-\frac{\nu+\tilde y_t^2}{2\lambda_t^2}\right).
+$$
+
+Comparing the power and the exponent with the Inverse-Gamma kernel
+$(\lambda_t^2)^{-a-1}\exp(-d/\lambda_t^2)$ identifies $a=(\nu+1)/2$ and $d=(\nu+\tilde y_t^2)/2$,
+so the $\lambda_t^2$ are conditionally independent across $t$ with
+$$
+\lambda_t^2 \mid \beta,\sigma^2,\nu,y \sim \text{Inverse-Gamma}\!\left(\frac{\nu+1}{2},\;
+\frac{\nu+\tilde y_t^2}{2}\right),
+$$
+matching the source's $\text{IG}_2(\nu+1,\nu+\tilde y_t^2)$ under the bridge of Lecture 2. Since
+the Inverse-Gamma$(a,d)$ mean is $d/(a-1)$ for $a>1$, the posterior mean of $\lambda_t^2$ grows
+roughly linearly with $\tilde y_t^2$, so the weight $1/\lambda_t^2$ that enters the previous
+section's updates shrinks towards zero as $\tilde y_t^2$ grows: a large standardised residual is
+automatically down-weighted next sweep, without ever declaring it an outlier or removing it, which
+is the practical payoff of the whole construction.
+
+### Degrees of freedom as an unknown
+
+The one block left is $\nu$. Its full conditional, keeping only factors depending on it, is
+$\propto\phi(\nu)\prod_t\Gamma(\nu/2)^{-1}(\nu/2)^{\nu/2}(\lambda_t^2)^{-\nu/2-1}
+\exp(-\nu/(2\lambda_t^2))$, not the kernel of any standard family. This is exactly the gap
+Metropolis-Hastings fills, as in the source's own **combining Gibbs and MH** example, where an MH
+step replaces the direct draw for one troublesome block inside an otherwise ordinary Gibbs sweep;
+the same idea applies here to $\nu$ while $\beta,\sigma^2,\lambda$ keep their direct draws. Three
+routes are workable: fix $\nu$; add a Metropolis step for it; or restrict it to a finite grid and
+draw it from the discrete conditional above, renormalised. We use the grid, which needs no tuning
+and sidesteps the flat prior $\phi(\nu)\propto 1$ being non-integrable on $(0,\infty)$, since the
+likelihood barely distinguishes large values of $\nu$; a proper prior decaying fast enough, such
+as a half-Cauchy, is the alternative remedy, since $\phi(\nu)\propto 1/\nu$ does not decay quickly
+enough.
+
+### A worked example: recovering fat-tailed parameters
+
+We simulate a small return regression on one factor, drawing errors from the scale-mixture
+representation itself rather than a ready-made Student-$t$ generator, so that the mixture is
+exercised rather than assumed. The two sample moments printed below are worth inspecting before
+the sampler runs, because they say something about what $\nu = 3$ implies.
+
+```{python}
+rng_t = np.random.default_rng(24)     # a dedicated stream for this section
+nu_true = 3
+n_t, k_t = 120, 2
+beta_true_t = np.array([0.001, 1.0])
+sigma2_true_t = 0.03 ** 2
+Xt = np.column_stack([np.ones(n_t), rng_t.normal(0.01, 0.05, size=n_t)])
+lam2_true = 1.0 / rng_t.gamma(nu_true / 2, 2.0 / nu_true, size=n_t)   # Inverse-Gamma(nu/2, nu/2)
+u_t = np.sqrt(sigma2_true_t) * rng_t.standard_normal(n_t)
+eps_t = np.sqrt(lam2_true) * u_t
+yt = Xt @ beta_true_t + eps_t
+
+std_eps = eps_t / np.sqrt(sigma2_true_t)
+print(f"variance of eps/sigma: empirical {std_eps.var(ddof=1):.3f}   "
+      f"theoretical nu/(nu-2) = {nu_true/(nu_true-2):.3f}")
+print(f"excess kurtosis of eps/sigma: {stats.kurtosis(std_eps):.2f}  (Gaussian = 0)")
+```
+
+The empirical variance of the standardised errors, $10.31$ against a theoretical
+$\nu/(\nu-2)=3.00$, is informative rather than a mistake: a $t_3$ variable barely has a finite
+variance, so a sample variance from only $120$ draws is heavy-tailed too, the
+ratio-without-reliable-moments warning from Lecture 2 one level down. The excess kurtosis of
+$18.09$ is unambiguous, far above the Gaussian benchmark of zero.
+
+The sampler now cycles over the four full conditionals derived above: $\beta$, $\sigma^2$, each
+$\lambda_t^2$, and $\nu$ from the discrete grid conditional, its log density evaluated on the
+whole grid at once.
+
+```{python}
+nu_grid = np.arange(2.5, 40.5, 0.5); a_grid = nu_grid / 2.0
+b0_t, B0_inv_t = np.zeros(k_t), np.linalg.inv(np.eye(k_t) * 10000.0)   # near-flat on beta
+a0_t, d0_t, n_iter_t, burn_t = 0.01, 0.01, 3000, 500
+beta_t_draws = np.empty((n_iter_t, k_t))
+sigma2_t_draws, nu_t_draws = np.empty(n_iter_t), np.empty(n_iter_t)
+lam2_draws = np.empty((n_iter_t, n_t))
+lam2, beta_t, sigma2_t, nu_t = np.ones(n_t), beta_true_t.copy(), sigma2_true_t, 8.0
+for t in range(n_iter_t):
+    wgt = 1.0 / lam2                                     # weight 1/lambda_t^2
+    Xw, yw = Xt * np.sqrt(wgt)[:, None], yt * np.sqrt(wgt)
+    B1t = np.linalg.inv(B0_inv_t + Xw.T @ Xw)
+    b1t = B1t @ (B0_inv_t @ b0_t + Xw.T @ yw)
+    beta_t = b1t + np.sqrt(sigma2_t) * (np.linalg.cholesky(B1t) @ rng_t.standard_normal(k_t))
+    resid_w = (yt - Xt @ beta_t) * np.sqrt(wgt)
+    sigma2_t = 1.0 / rng_t.gamma(a0_t + n_t / 2, 1.0 / (d0_t + 0.5 * (resid_w @ resid_w)))
+    ytilde = (yt - Xt @ beta_t) / np.sqrt(sigma2_t)
+    lam2 = 1.0 / rng_t.gamma((nu_t + 1) / 2, 2.0 / (nu_t + ytilde ** 2))
+    logpdf = (a_grid[:, None] * np.log(a_grid[:, None]) - gammaln(a_grid[:, None])
+              - (a_grid[:, None] + 1) * np.log(lam2)[None, :] - a_grid[:, None] / lam2[None, :])
+    logp_nu = logpdf.sum(axis=1)
+    p_nu = np.exp(logp_nu - logp_nu.max()); p_nu /= p_nu.sum()
+    nu_t = rng_t.choice(nu_grid, p=p_nu)
+    beta_t_draws[t], sigma2_t_draws[t], nu_t_draws[t] = beta_t, sigma2_t, nu_t
+    lam2_draws[t] = lam2
+beta_t_post, sigma2_t_post = beta_t_draws[burn_t:], sigma2_t_draws[burn_t:]
+nu_t_post, lam2_post = nu_t_draws[burn_t:], lam2_draws[burn_t:]
+print(f"kept {beta_t_post.shape[0]} sweeps after discarding {burn_t} for burn-in")
+```
+
+To see what modelling the tails buys, we fit the same $(X_t,y_t)$ with the ordinary Gaussian-error
+sampler used earlier in this chapter, with no $\lambda_t$ or $\nu$ to update.
+
+```{python}
+b0_g, B0_inv_g = np.zeros(k_t), np.linalg.inv(np.eye(k_t) * 10000.0)
+beta_g_draws = np.empty((n_iter_t, k_t))
+sigma2_g = sigma2_true_t
+for t in range(n_iter_t):
+    B1g = np.linalg.inv(B0_inv_g + Xt.T @ Xt / sigma2_g)
+    b1g = B1g @ (B0_inv_g @ b0_g + Xt.T @ yt / sigma2_g)
+    beta_g = b1g + np.linalg.cholesky(B1g) @ rng_t.standard_normal(k_t)
+    resid_g = yt - Xt @ beta_g
+    sigma2_g = 1.0 / rng_t.gamma(a0_t + n_t / 2, 1.0 / (d0_t + 0.5 * (resid_g @ resid_g)))
+    beta_g_draws[t] = beta_g
+beta_g_post = beta_g_draws[burn_t:]
+
+print(pd.DataFrame({"true": beta_true_t, "Gaussian-Gibbs mean": beta_g_post.mean(axis=0),
+                    "Student-Gibbs mean": beta_t_post.mean(axis=0)},
+                   index=["beta0", "beta1"]).round(4))
+print(f"posterior sd of beta1: Gaussian {beta_g_post[:, 1].std():.4f}   "
+      f"Student {beta_t_post[:, 1].std():.4f}")
+print(f"posterior mean of nu: {nu_t_post.mean():.2f}   (true nu = {nu_true})")
+```
+
+The next block plots the posterior mean of $1/\lambda_t^2$, one point per observation, against the
+standardised residual at the posterior mean of $\beta,\sigma^2$: a point with a large residual
+should sit low on the weight axis.
+
+```{python}
+w_post_mean = (1.0 / lam2_post).mean(axis=0)
+beta_hat_t, sigma_hat_t = beta_t_post.mean(axis=0), np.sqrt(sigma2_t_post.mean())
+ytilde_hat = (yt - Xt @ beta_hat_t) / sigma_hat_t
+
+fig, ax = plt.subplots()
+ax.scatter(ytilde_hat, w_post_mean, s=16, color="steelblue", alpha=0.75)
+ax.set_xlabel(r"standardised residual  $\tilde y_t$")
+ax.set_ylabel(r"posterior mean of  $1/\lambda_t^2$")
+ax.set_title("Outlier discounting: the weight falls with the residual")
+plt.tight_layout(); plt.show()
+
+big = np.argsort(np.abs(ytilde_hat))[-5:]
+print("five largest |standardised residual| and their posterior mean weight:")
+print(pd.DataFrame({"y_tilde": ytilde_hat[big], "weight": w_post_mean[big]}).round(3))
+```
+
+Finally, the posterior of $\nu$ itself (left, a mass concentrated at small values says the data
+are informative about the tails) and the two fitted coefficient posteriors for $\beta_1$ side by
+side (right).
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
+vals, counts = np.unique(nu_t_post, return_counts=True)
+axes[0].bar(vals, counts / counts.sum(), width=0.4, color="darkorange")
+axes[0].axvline(nu_true, color="black", ls=":", label="true nu")
+axes[0].set_xlabel(r"$\nu$"); axes[0].set_ylabel("posterior probability")
+axes[0].legend(fontsize=8); axes[0].set_title("Posterior of the degrees of freedom")
+
+axes[1].hist(beta_g_post[:, 1], bins=40, density=True, alpha=0.6, color="red",
+             label="Gaussian errors")
+axes[1].hist(beta_t_post[:, 1], bins=40, density=True, alpha=0.6, color="steelblue",
+             label="Student errors")
+axes[1].axvline(beta_true_t[1], color="black", ls=":", label="true beta_1")
+axes[1].set_xlabel(r"$\beta_1$"); axes[1].legend(fontsize=8)
+axes[1].set_title("Gaussian vs Student fit on the same fat-tailed data")
+plt.tight_layout(); plt.show()
+```
+
+The comparison table shows the payoff. The Gaussian sampler puts $\beta_1$ at $0.749$ against a
+true value of $1.0$, a substantial miss driven by the extreme observations it cannot discount, its
+standard deviation of $0.173$ reflecting the same contamination, since explaining every point with
+one common variance inflates that variance to accommodate the extremes. The Student sampler puts
+$\beta_1$ at $0.890$, closer to the truth, with a standard deviation of only $0.077$, less than
+half the Gaussian sampler's, because the outliers have been assigned small $\lambda_t$-based
+weights instead of dragging the common variance upward; the recovered degrees of freedom,
+posterior mean $2.62$ against a true value of $3$, show the grid conditional finding the right
+neighbourhood of tail-heaviness from only $120$ observations. The weight table confirms the
+mechanism: the five most extreme standardised residuals, from about $7.9$ to $16.2$, carry
+posterior mean weights between $0.056$ and $0.014$, one to two orders of magnitude below the
+weight of $1$ a Gaussian model implicitly assigns every observation.
 
 ## What Gibbs sampling cannot do
 

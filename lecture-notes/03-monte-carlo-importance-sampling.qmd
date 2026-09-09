@@ -9,6 +9,53 @@ Practise the derivation and implementation in [Week 3: Vanilla Monte Carlo](../e
 :::
 
 
+## Bayes' theorem in kernels
+
+Before touching any integral, it is worth restating Bayes' theorem in the form we use for
+the rest of this chapter, because it decides how much of the calculation is unavoidable.
+Writing the prior density as $\phi(\theta)$, the likelihood as $f(y\mid\theta)$ and the
+marginal likelihood as $f(y)$,
+
+$$
+\phi(\theta\mid y)=\frac{\phi(\theta)f(y\mid\theta)}{f(y)}\;\propto\;\phi(\theta)f(y\mid\theta)
+\;\propto\;\kappa(\theta)\,k(\theta;y)\;\equiv\;\kappa(\theta\mid y),
+$$
+
+where $\kappa(\theta)$ is any function proportional to the prior, $k(\theta;y)$ is any
+function proportional to the likelihood as a function of $\theta$ for fixed data, and
+$\kappa(\theta\mid y)$, their product, is a **kernel** of the posterior. A kernel need not
+integrate to one; it is the shape of a density with the normalising constant left out.
+
+Every posterior summary we report is the expectation of some function $g(\theta)$, and
+writing that expectation with the kernel rather than the density shows immediately why the
+constant so rarely has to be computed on its own:
+
+$$
+\mathbb{E}[g(\theta)\mid y]=\int g(\theta)\,\phi(\theta\mid y)\,d\theta
+=\frac{\displaystyle\int g(\theta)\,\kappa(\theta\mid y)\,d\theta}
+       {\displaystyle\int \kappa(\theta\mid y)\,d\theta},
+$$
+
+because multiplying numerator and denominator by the same missing constant
+$K(y)=\int\kappa(\theta\mid y)\,d\theta$ leaves the ratio unchanged; the denominator is simply
+the special case $g(\theta)=1$. Every quantity in this chapter, from a posterior mean to a
+tail probability, is one instance of this ratio of two integrals of the kernel, and the
+normalising constant is never computed by itself, because it cancels between numerator and
+denominator. This is the frame for the whole chapter: everything that follows is a way of
+approximating a ratio of kernel integrals without ever normalising the kernel first.
+
+A posterior expectation can fail to be available in closed form for two quite different
+reasons, and it is worth keeping them apart. The first is that the normalising constant
+$K(y)$ itself has no closed form, so we do not even know the posterior density, only its
+kernel; the ratio above dispatches exactly this problem, since it never asks for $K(y)$
+separately. The second, more stubborn, reason is that even when the posterior density is
+known completely, a particular function $g(\theta)$ of interest may still have an integral
+with no closed form: a ratio of two jointly Normal parameters is the standard example, a
+perfectly well-defined random variable with a computable density that nonetheless can fail to
+have a finite mean, exactly as Lecture 2 warned when dividing one regression coefficient by
+another. Numerical integration is needed whenever either failure occurs, and the Monte Carlo
+methods of this chapter, built on the kernel ratio above, handle both at once.
+
 ## An integral is a probability-weighted average
 
 Before working with a continuous posterior, imagine only three possible parameter values:
@@ -360,6 +407,32 @@ surely by the law of large numbers, so their ratio converges to $\mathbb{E}_p[g(
 vanishing bias for the ability to work with an unnormalised target, which in practice is
 the only option we have.
 
+Two properties of $\hat{g}_S^{\,\text{IS}}$ deserve to be stated together, because using the
+estimator responsibly needs both. Since $\hat A_S=\frac1S\sum_s g(\theta^{(s)})w(\theta^{(s)})$
+and $\hat B_S=\frac1S\sum_s w(\theta^{(s)})$ are each an ordinary Monte Carlo average, each is
+individually unbiased and consistent for its own target under $q$, and only their ratio loses
+the unbiasedness, as already argued. Under regularity conditions on $g$ and $w$ that rule out
+infinite variance, the ratio is also asymptotically Normal,
+$S^{1/2}\big(\hat{g}_S^{\,\text{IS}} - \mu_g\big) \overset{\text{approx}}{\sim}
+\mathcal{N}(0, \tau_g^2)$ for large $S$, with $\tau_g^2 < \infty$ the asymptotic variance of
+the estimator, exactly paralleling the direct-sampling result above but with a variance that
+now also reflects how uneven the weights are. The practical consequence is unglamorous but
+important: a self-normalised estimate can be trusted only in the sense that its bias shrinks
+as $S$ grows and its spread shrinks at the usual $1/\sqrt{S}$ rate, never in the sense that one
+small-$S$ run is guaranteed to sit on the truth.
+
+A good importance density $q$ has to satisfy a short list of requirements, and every one of
+them traces back to keeping the weight $w(\theta) = \tilde p(\theta)/q(\theta)$ well behaved.
+Its support must cover every region where the target has appreciable mass, since $q(\theta)=0$
+anywhere $g(\theta)\tilde p(\theta)\neq 0$ breaks the equality outright. Its tails should be no
+lighter than the target's, and ideally heavier, because a proposal that decays faster than the
+target sends $w(\theta)\to\infty$ in the tail and produces the runaway weights demonstrated
+below. It needs to be cheap to draw from many times over, since the entire appeal of the method
+is replacing an unsampleable target with a tractable one. And the resulting weight function
+should be bounded in practice, even where it is not bounded in theory, meaning no single draw
+should be able to dominate the weighted sum; the next section gives the diagnostics that check
+this last requirement directly.
+
 We put this to work on the truncated-normal coin, proposing from a $\text{Uniform}(0,1)$
 distribution, which covers the whole domain of $\theta$ generously.
 
@@ -381,6 +454,46 @@ The importance-sampling estimate lands within a few thousandths of the quadratur
 answer, obtained entirely from uniform draws reweighted by the target's shape, with no
 canned truncated-normal-times-binomial sampler anywhere in sight. The printed effective
 sample size is explained next.
+
+### Self-normalised bias at small sample sizes, numerically
+
+The claim that $\hat{g}_S^{\,\text{IS}}$ is consistent but not unbiased is easy to state and
+easy to check directly: draw many independent importance samples at a deliberately small $S$,
+average the resulting estimates, and compare that average with the quadrature truth; then
+repeat at a much larger $S$ and watch the gap shrink.
+
+```{python}
+def is_mean_estimate(S):
+    th = prop.rvs(size=S, random_state=rng)
+    wt = unnorm_post(th) / prop.pdf(th)
+    return np.sum(th * wt) / np.sum(wt)
+
+S_small, S_large, reps_bias = 20, 2000, 4000
+est_small = np.array([is_mean_estimate(S_small) for _ in range(reps_bias)])
+est_large = np.array([is_mean_estimate(S_large) for _ in range(reps_bias)])
+
+fig, ax = plt.subplots()
+ax.hist(est_small, bins=40, density=True, alpha=0.6, label=f"S = {S_small}")
+ax.hist(est_large, bins=40, density=True, alpha=0.6, label=f"S = {S_large}")
+ax.axvline(true_mean_tn, color="black", lw=1.5, label="quadrature truth")
+ax.set_xlabel("self-normalised estimate of the posterior mean"); ax.set_ylabel("density")
+ax.legend(fontsize=9)
+ax.set_title(f"Bias shrinks with S over {reps_bias} repetitions")
+plt.tight_layout(); plt.show()
+
+print(f"true posterior mean (quadrature): {true_mean_tn:.4f}")
+print(f"mean of {reps_bias} estimates at S={S_small}: {est_small.mean():.4f}  "
+      f"(bias {est_small.mean()-true_mean_tn:+.4f})")
+print(f"mean of {reps_bias} estimates at S={S_large}: {est_large.mean():.4f}  "
+      f"(bias {est_large.mean()-true_mean_tn:+.4f})")
+```
+
+At `S = 20` the histogram of estimates is shifted visibly away from the quadrature truth, a
+small-sample bias exactly of the kind the ratio-of-averages argument predicts, while at
+`S = 2000` the distribution has narrowed and recentred much closer to the truth. Averaging
+many replications at each $S$ isolates the bias from the sampling noise that a single run
+would also show, and printing the two average biases side by side is the cleanest numerical
+demonstration that consistency, not unbiasedness, is what self-normalisation buys.
 
 ## The variance of the weights and effective sample size
 
@@ -467,6 +580,31 @@ the random seed, it suddenly is not. Finding such a proposal by hand becomes clo
 impossible once $\theta$ has more than a few components, which is exactly the
 difficulty that motivates the Markov chain samplers of the next two lectures.
 
+It is worth flagging a technicality that is easy to trip over. Everything above used a fully
+normalised importance density, so `prop.pdf` above already integrates to one. In practice it
+is common to know only a kernel $i(\theta) \propto q(\theta)$ with an unknown normalising
+constant $c_i = \int i(\theta)\,d\theta$, and to build the weight from $i$ rather than from the
+normalised $q$. This changes nothing about $\mu_g$, because the weight built from $i(\theta)$
+differs from the one built from $q(\theta) = i(\theta)/c_i$ only by the constant factor $c_i$,
+which cancels inside the self-normalised ratio exactly as the posterior's own normalising
+constant does. What does change is that the raw average of the weights built from $i(\theta)$
+no longer estimates one; it estimates $c_\kappa/c_i$, the ratio of the posterior kernel's own
+normalising constant to the importance kernel's, so that average multiplied by $c_i$, when
+$c_i$ happens to be known, is a usable estimator of $c_\kappa$ even though $q$ itself was never
+fully normalised.
+
+Two further habits keep an importance-sampling run honest, beyond the effective sample size
+already computed above. Always plot a histogram of the normalised weights, exactly as the
+figure above does, and treat a single draw carrying a large share of the total weight as a
+failure of the importance density rather than a fluke of the random seed. And track the
+coefficient of variation of the raw weights, $\text{sd}(w)/\text{mean}(w)$, as the number of
+draws grows: it should stabilise, and an importance density whose coefficient of variation
+keeps growing with $S$ cannot be trusted however large $S$ is made. With a stable coefficient
+of variation, the standard practical target is to keep drawing until the estimated
+probabilistic error bound on the quantities of interest, both the integral of the kernel and
+the posterior expectations built from it, falls under about 5 to 10 per cent, the same
+standard used for direct sampling.
+
 ## Rejection sampling
 
 Importance sampling reweights every draw and never touches the target's normalising
@@ -537,6 +675,47 @@ volume between a safe envelope and the target typically grows so that $M$ grows
 exponentially with $d$, and the acceptance rate $1/M$ collapses correspondingly:
 rejection sampling suffers from the same curse of dimensionality as the grid, just with
 a slower fuse.
+
+### A special, simple case: rejection under a parameter restriction
+
+One situation removes the need to search for an envelope constant at all. Suppose the target
+is an unrestricted posterior with kernel $\kappa(\theta)$ truncated to a restricted region
+$\Theta_r \subset \Theta$, so that the restricted kernel is
+$\kappa(\theta)\mathbf{1}\{\theta \in \Theta_r\}$, and the unrestricted posterior is already
+easy to simulate, whether directly or by the machinery above. Then the unrestricted posterior
+itself can serve as the proposal, with envelope constant exactly $M = 1$, because
+$\kappa(\theta)\mathbf{1}\{\theta \in \Theta_r\} \le 1 \cdot \kappa(\theta)$ holds trivially,
+and the algorithm collapses to drawing from the unrestricted posterior and discarding any draw
+that falls outside $\Theta_r$. The acceptance rate is then simply
+$\Pr(\theta \in \Theta_r \mid y)$, the very quantity a marginal-probability calculation would
+want in any case, and it can be small whenever the restriction removes most of the unrestricted
+posterior's mass, which is the same curse-of-dimensionality warning as before in a different
+guise: restricting several components of $\theta$ at once shrinks the accepted region
+multiplicatively, exactly as an inequality-constrained prior such as a sign restriction on a
+single regression coefficient can leave very little posterior mass behind.
+
+We illustrate on the truncated-normal coin, imposing the further restriction $\theta > 0.7$ on
+top of the posterior already derived, and simply filtering the unrestricted rejection draws
+from above rather than building any new envelope.
+
+```{python}
+theta_r = 0.7
+restricted = rej_draws[rej_draws > theta_r]
+accept_rate_r = restricted.size / rej_draws.size
+true_prob_r, _ = quad(lambda t: unnorm_post(t) / Z, theta_r, 1)
+
+print(f"P(theta > {theta_r} | y): quadrature {true_prob_r:.4f}   "
+      f"filtered rejection-sample acceptance rate {accept_rate_r:.4f}")
+print(f"restricted posterior mean: {restricted.mean():.4f}  "
+      f"(unrestricted posterior mean {rej_draws.mean():.4f})")
+```
+
+The filtered acceptance rate matches the quadrature probability closely, confirming that simply
+discarding draws outside $\Theta_r$ reproduces the restricted posterior exactly, with no
+weighting and no envelope search beyond the one already done for the unrestricted problem; this
+is the trick used for sign or inequality restrictions on regression coefficients, and it stays
+cheap here only because the restriction acts on an already-tractable one-dimensional draw
+rather than on a many-dimensional joint region.
 
 ## Sampling-importance-resampling
 
@@ -759,7 +938,25 @@ two applied problems: predicting a positive-valued series and pricing an option 
 carrying parameter uncertainty all the way through to the final number, rather than
 discarding it at a plug-in estimate.
 
+## Reading these results in the sources' notation
 
+The importance- and rejection-sampling literature, including the source this chapter draws
+on, uses a different set of letters for the same objects, and it is worth bridging them once
+so that a formula copied from a reference does not look unfamiliar.
+
+| This course | Source (Bauwens) | Relation |
+|---|---|---|
+| unnormalised posterior, `unnorm_post` | kernel $\kappa(\theta \mid y)$ | identical object |
+| proposal / importance density $q$, `prop` | importance function $\iota(\theta)$ | identical object |
+| weight $w(\theta) = \tilde p(\theta)/q(\theta)$ | weight function $w(\theta) = \kappa(\theta\mid y)/\iota(\theta)$ | identical |
+| envelope constant $M$ | envelope constant $c \ge \sup_\theta \kappa(\theta)/\iota(\theta)$ | identical |
+| effective sample size, ESS | (not named; diagnosed via the weights' histogram and coefficient of variation) | this course's ESS summarises the same diagnostic in one number |
+
+: Notation bridge {.striped}
+
+The prior and posterior parameters of the conjugate regression model that reappear in the
+gamma and option-pricing examples above follow the bridge already given in Lecture 2's own
+notation table; nothing there changes here.
 
 ## Reading guide and sources
 

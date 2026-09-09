@@ -82,6 +82,51 @@ which has $k = 1 + mp$ entries, and stacking the $T - p$ usable observations int
 multivariate regression $Y = XB + U$, where $B$ is the $k \times m$ matrix whose columns hold each
 equation's coefficients.
 
+### Row-wise, stacked and vectorised forms
+
+Three ways of writing $Y = XB + U$ are worth having side by side, because different steps below
+reach for different ones. Date by date, one row of the system reads
+
+$$
+y_t^\top = x_t^\top B + u_t^\top, \qquad u_t \sim \mathcal{N}(0, \Sigma),
+$$
+
+with $x_t$ the $k$-dimensional row of regressors for date $t$ and $y_t^\top$, $u_t^\top$ the
+corresponding rows of $Y$ and $U$. Bauwens writes the same relation the other way up, as
+$y_t = B'z_t + \epsilon_t$ with $z_t \equiv x_t$ a $k \times 1$ column and $y_t$, $\epsilon_t$ of
+dimension $m \times 1$; the two are the same equation transposed. Stacking the
+$T_{\text{eff}} = T - p$ usable dates recovers the matrix form used above, $Y = XB + U$, with $Y$
+and $U$ of dimension $T_{\text{eff}} \times m$, $X$ of dimension $T_{\text{eff}} \times k$ and $B$
+of dimension $k \times m$. The same $X$ multiplies every column of $B$: no equation gets its own
+regressors, which is the bookkeeping point made above and is what lets one design matrix serve
+the whole system.
+
+The rows of $U$ are independent draws from $\mathcal{N}(0, \Sigma)$, a statement about a random
+matrix rather than a random vector. Writing $\operatorname{vec} U$ for the vector obtained by
+stacking the columns of $U$, this is
+
+$$
+U \sim \mathcal{MN}_{T_{\text{eff}} \times m}(0, \, \Sigma \otimes I_{T_{\text{eff}}})
+\quad\Longleftrightarrow\quad
+\operatorname{vec} U \sim \mathcal{N}(0, \, \Sigma \otimes I_{T_{\text{eff}}}),
+$$
+
+the **matricvariate Normal distribution**: a random matrix is matricvariate Normal exactly when
+its vectorisation is multivariate Normal, and the Kronecker product $\Sigma \otimes
+I_{T_{\text{eff}}}$ records that different equations correlate through $\Sigma$ while different
+dates do not correlate at all. Vectorising the whole regression the same way, with
+$b = \operatorname{vec} B$ and $z = \operatorname{vec} Y$,
+
+$$
+z = (I_m \otimes X)\, b + \operatorname{vec} U, \qquad \operatorname{vec} U \sim
+\mathcal{N}(0, \Sigma \otimes I_{T_{\text{eff}}}),
+$$
+
+which places one copy of $X$ on each diagonal block of $I_m \otimes X$; this is the same
+vectorisation the Minnesota posterior below will reuse. The row-wise, matrix and vectorised forms
+describe one model; which is convenient depends on whether the next step is writing down a
+likelihood, simulating data, or completing a square in $\operatorname{vec} B$.
+
 ## Simulating a stable trivariate VAR(1)
 
 We generate data from a known VAR(1) so the estimator can be checked against the truth, reading the three
@@ -129,6 +174,210 @@ All three eigenvalues sit comfortably inside the unit circle, so the series fluc
 unconditional means rather than wandering off, and the sample means are close to $(I - A_1)^{-1}c$. The
 correlations show output and inflation moving together and both moving against the rate, the sort of
 co-movement a VAR is meant to capture and a reflection of the correlated innovations we simulated.
+
+## The likelihood, the non-informative prior and its posterior
+
+### The likelihood as a matricvariate Normal
+
+Reading $Y = XB + U$ with $U \sim \mathcal{MN}(0, \Sigma \otimes I_{T_{\text{eff}}})$ as a density
+in $(B, \Sigma)$ for fixed data gives the likelihood. Because only $\Sigma$, not $X$, needs
+inverting, the matricvariate Normal density collapses the $T_{\text{eff}} \times m$ kernel into a
+single trace,
+
+$$
+L(B, \Sigma \mid Y, X) \propto |\Sigma|^{-T_{\text{eff}}/2}
+\exp\left\{-\tfrac12 \operatorname{tr}\left[\Sigma^{-1}(Y - XB)^\top (Y - XB)\right]\right\}.
+$$
+
+Exactly as in the single-equation completing of the square, adding and subtracting the
+least-squares fit $\hat B = (X^\top X)^{-1} X^\top Y$ splits the quadratic term into a part that
+does not involve $B$ and a perfect square in $B$,
+
+$$
+(Y - XB)^\top(Y - XB) = S + (B - \hat B)^\top X^\top X (B - \hat B), \qquad
+S = Y^\top Y - Y^\top X(X^\top X)^{-1} X^\top Y,
+$$
+
+the matrix analogue of the scalar identity used for the single-equation regression, with $S$ the
+residual cross-product matrix in place of a residual sum of squares. Substituting gives the
+likelihood in the form the posterior needs,
+
+$$
+L(B, \Sigma \mid Y, X) \propto |\Sigma|^{-T_{\text{eff}}/2}
+\exp\left\{-\tfrac12 \operatorname{tr}\Sigma^{-1}\left[S + (B - \hat B)^\top X^\top X(B - \hat B)\right]\right\},
+$$
+
+which depends on the $T_{\text{eff}} \times m$ data $(Y, X)$ only through $\hat B$, $S$ and
+$X^\top X$: these three matrices are **sufficient statistics** for $(B, \Sigma)$, exactly as
+$\hat\beta$ and the residual sum of squares were sufficient for the single-equation regression of
+Lecture 2.
+
+**Reading the computation.** The block recomputes $\hat B$ and $S$ directly from the simulated
+data and checks the trace identity above at a value of $B$ well away from $\hat B$, since an
+identity that only held at the optimum would be no identity at all.
+
+```{python}
+T_eff = X.shape[0]
+B_hat = np.linalg.solve(X.T @ X, X.T @ Y)
+S_mat = Y.T @ Y - Y.T @ X @ B_hat
+
+B_probe = B_hat + 0.3 * rng.standard_normal((k, m))
+lhs = (Y - X @ B_probe).T @ (Y - X @ B_probe)
+rhs = S_mat + (B_probe - B_hat).T @ (X.T @ X) @ (B_probe - B_hat)
+print(f"T_eff = {T_eff}, k = {k}, m = {m}")
+print(f"max |LHS - RHS| of the trace identity: {np.abs(lhs - rhs).max():.2e}")
+print(pd.DataFrame(S_mat, index=names, columns=names).round(3))
+```
+
+The two sides of the identity agree to $1.14\times10^{-13}$, which is machine precision, confirming
+that the split holds for any $B$ and not only at the least-squares point. Dividing the printed
+$S$ by $T_{\text{eff}} - k = 195$ gives an estimate of $\Sigma$ in the same ballpark as the true
+value used to simulate the data, $(1.00, 0.20, -0.30)$ on the first row, though sampling variation
+in 199 observations keeps it from matching digit for digit.
+
+### The non-informative prior and its posterior
+
+Bauwens' conventional choice of an uninformative joint prior for a VAR is
+
+$$
+p(B, \Sigma) \propto |\Sigma|^{-(m+1)/2},
+$$
+
+flat in $B$ over $\mathbb{R}^{k \times m}$ and, on the same reasoning as the single-equation case,
+flat on the log scale for the eigenvalues of $\Sigma$. It is improper, exactly as $1/\sigma^2$ was
+for one equation, and for the same reason it is tolerable: it is the limit of a proper prior, and
+the resulting posterior is proper whenever $X$ has full column rank and
+$T_{\text{eff}} > k + m + 1$.
+
+Multiplying this prior into the likelihood above gives the posterior kernel
+
+$$
+p(B, \Sigma \mid Y, X) \propto |\Sigma|^{-(T_{\text{eff}}+m+1)/2}
+\exp\left\{-\tfrac12 \operatorname{tr}\Sigma^{-1}\left[S + (B-\hat B)^\top X^\top X (B - \hat B)\right]\right\},
+$$
+
+which is nothing but the likelihood's exponent with the prior's extra power of $|\Sigma|$ folded
+in. Read as a function of $B$ alone, holding $\Sigma$ fixed, this is the kernel of a matricvariate
+Normal centred at $\hat B$; read as a function of $\Sigma$ alone after integrating $B$ out, the
+power of $|\Sigma|$ and the exponent's remaining trace are exactly the kernel of an
+**inverse-Wishart** density. Following this course's convention, write
+
+$$
+\Sigma \sim \mathcal{IW}(S_0, \nu_0), \qquad
+p(\Sigma) \propto |\Sigma|^{-(\nu_0+m+1)/2}\exp\left[-\tfrac12\operatorname{tr}(S_0\Sigma^{-1})\right],
+$$
+
+which matches `scipy.stats.invwishart(df=nu0, scale=S0)` exactly, so that the posterior
+factorises as
+
+$$
+\Sigma \mid Y \sim \mathcal{IW}(S, \, T_{\text{eff}} - k), \qquad
+B \mid \Sigma, Y \sim \mathcal{MN}\!\left(\hat B, \; \Sigma \otimes (X^\top X)^{-1}\right).
+$$
+
+Bauwens writes the same two densities as $\Sigma \mid d \sim IW_m(T_{\text{eff}}-k, S)$, with his
+inverse-Wishart parameters ordered $(\nu, S)$ where this course writes $(S, \nu)$, and as
+$B \mid \Sigma, d \sim MN(\hat B, \Sigma \otimes (X^\top X)^{-1})$, identical to the form above. The
+mean of the inverse-Wishart factor is $\mathbb{E}[\Sigma \mid Y] = S/(T_{\text{eff}}-k-m-1)$ for
+$T_{\text{eff}} > k+m+1$.
+
+Integrating $\Sigma$ out of the conditional matricvariate Normal, by the same
+Normal-divided-by-a-root-chi-square argument used for the single equation, leaves the marginal of
+$\operatorname{vec} B$ as a **matricvariate Student**, with
+
+$$
+\mathbb{E}[\operatorname{vec} B \mid Y] = \operatorname{vec} \hat B, \qquad
+\operatorname{Var}[\operatorname{vec} B \mid Y] = \frac{1}{T_{\text{eff}}-k-m-1}\, S \otimes (X^\top X)^{-1}.
+$$
+
+The Kronecker structure present in both the conditional covariance $\Sigma \otimes (X^\top X)^{-1}$
+and this marginal variance is what makes the whole joint posterior tractable without any
+iteration: a single $m \times m$ draw of $\Sigma$ fixes the entire $km \times km$ covariance of
+$\operatorname{vec} B$ up to that one Kronecker factor, so sampling $(B, \Sigma)$ jointly needs
+only an inverse-Wishart draw followed by a matricvariate Normal draw, both standard distributions,
+with no cycling between them required.
+
+### Direct sampling under the non-informative prior
+
+**Reading the computation.** Each replication draws $\Sigma$ from its inverse-Wishart marginal and
+then $B$ from the matricvariate Normal conditional on that same draw, Bauwens' two-step recipe.
+Averaging many such draws checks both factors of the posterior against their closed forms at once.
+
+```{python}
+nu_nip = T_eff - k
+n_direct = 4000
+XtX_inv = np.linalg.inv(X.T @ X)
+chol_P = np.linalg.cholesky(XtX_inv)
+B_direct = np.empty((n_direct, k, m))
+Sigma_direct = np.empty((n_direct, m, m))
+for r in range(n_direct):
+    Sig_r = stats.invwishart(df=nu_nip, scale=S_mat).rvs(random_state=rng)
+    Z = rng.standard_normal((k, m))
+    B_direct[r] = B_hat + chol_P @ Z @ np.linalg.cholesky(Sig_r).T
+    Sigma_direct[r] = Sig_r
+
+Sigma_mean_analytic = S_mat / (nu_nip - m - 1)
+print(f"nu (IW dof) = {nu_nip}")
+print(f"max |mean(B draws) - B_hat| = {np.abs(B_direct.mean(axis=0) - B_hat).max():.4f}")
+print(f"max |mean(Sigma draws) - analytic E[Sigma]| = "
+      f"{np.abs(Sigma_direct.mean(axis=0) - Sigma_mean_analytic).max():.4f}")
+```
+
+With 4000 draws the sampled mean of $B$ is within $0.0017$ of the least-squares estimate $\hat B$
+in every entry, and the sampled mean of $\Sigma$ is within $0.0024$ of the analytic inverse-Wishart
+mean $S/(\nu-m-1)$ with $\nu = T_{\text{eff}} - k = 195$: both composition-sampled moments
+reproduce their closed forms to within ordinary Monte Carlo error, exactly the check every sampler
+must pass before it is trusted on a posterior with no known answer.
+
+### Gibbs sampling for the same posterior
+
+The joint posterior above also has a two-block Gibbs representation, cycling between the two
+conditionals already used to build the direct sampler,
+
+$$
+B^{(r)} \mid \Sigma^{(r-1)}, Y \sim \mathcal{MN}\!\left(\hat B, \; \Sigma^{(r-1)} \otimes (X^\top X)^{-1}\right),
+\qquad
+\Sigma^{(r)} \mid B^{(r)}, Y \sim \mathcal{IW}\!\left((Y - XB^{(r)})^\top(Y - XB^{(r)}), \; T_{\text{eff}}\right).
+$$
+
+Bauwens states this as his Gibbs algorithm for the non-informative posterior: draw $B$ given the
+current $\Sigma$, then redraw $\Sigma$ given the new $B$, and repeat. Notice that the scale
+conditioning on $B$ uses $T_{\text{eff}}$ degrees of freedom rather than the $T_{\text{eff}} - k$
+of the marginal $\Sigma \mid Y$, for the same reason a single-equation full conditional for
+$\sigma^2$ carried shape $n/2$ rather than $(n-k)/2$: holding $B$ fixed forgoes the $k$ degrees of
+freedom that estimating it costs.
+
+**Reading the computation.** Each sweep draws $B$ given the current $\Sigma$, then redraws $\Sigma$
+given that $B$, reusing $\hat B$ and the Cholesky factor of $(X^\top X)^{-1}$ already built above.
+After the warm-up sweeps the sampled means should match both the analytic formulas and the direct
+sampler, since all three target the same posterior.
+
+```{python}
+n_sweep, burn = 5000, 1000
+Sig_state = S_mat / (nu_nip - m - 1)
+B_gibbs = np.empty((n_sweep, k, m))
+Sigma_gibbs = np.empty((n_sweep, m, m))
+for r in range(n_sweep):
+    Z = rng.standard_normal((k, m))
+    B_r = B_hat + chol_P @ Z @ np.linalg.cholesky(Sig_state).T
+    resid_r = Y - X @ B_r
+    Sig_state = stats.invwishart(df=T_eff, scale=resid_r.T @ resid_r).rvs(random_state=rng)
+    B_gibbs[r], Sigma_gibbs[r] = B_r, Sig_state
+
+kept_B, kept_S = B_gibbs[burn:], Sigma_gibbs[burn:]
+print(f"max |Gibbs mean(B) - B_hat| = {np.abs(kept_B.mean(axis=0) - B_hat).max():.4f}")
+print(f"max |Gibbs mean(Sigma) - analytic E[Sigma]| = "
+      f"{np.abs(kept_S.mean(axis=0) - Sigma_mean_analytic).max():.4f}")
+```
+
+After the warm-up sweeps the Gibbs means land within $0.0028$ of $\hat B$ and within $0.0017$ of
+the analytic inverse-Wishart mean of $\Sigma$, matching the direct sampler's accuracy to within
+Monte Carlo noise. The exercise confirms that the two algorithms target the same posterior, but it
+is worth being honest about what it demonstrates: under the non-informative prior direct sampling
+already gives exact, independent draws in two closed-form steps, so the Gibbs sampler here is
+strictly more expensive for no benefit. Its value is that it needs only the two conditionals, not
+a closed-form joint posterior, so it keeps working once the prior is no longer conjugate, which is
+exactly the situation the next section builds.
 
 ## The Minnesota prior and the conjugate posterior
 
@@ -184,6 +433,48 @@ These two conditionals form the BVAR Gibbs sampler used in the exercise. The
 residual sum of products must be evaluated at the current coefficient draw;
 an OLS residual covariance combined with a different shrinkage posterior is
 not the same joint model.
+
+### This is the Normal-diffuse prior
+
+The independent prior just used, a Normal $b \sim \mathcal{N}(b_0, V_0)$ on
+$b = \operatorname{vec} B$ paired with an inverse-Wishart $\Sigma \sim \mathcal{IW}(S_0, \nu_0)$
+that does not depend on $B$, is exactly what Bauwens calls the **Normal-diffuse prior** (written
+$IW(\nu_0, S_0)$ in his ordering of arguments, the same distribution as $\mathcal{IW}(S_0, \nu_0)$
+above with the two swapped). It should be contrasted with the **conjugate prior**
+$B \mid \Sigma \sim \mathcal{MN}(B_0, \Sigma \otimes M_0^{-1})$, which scales the coefficient
+covariance by $\Sigma$ exactly as the single-equation Normal-Inverse-Gamma prior did; that scaling
+forces the prior correlation structure of every equation's coefficients to be proportional to one
+another, which is far too restrictive for a multi-equation system and is essentially never used
+for that reason. Breaking the link between the prior on $B$ and $\Sigma$, as the **extended
+conjugate prior** and the Normal-diffuse prior both do, is what buys the freedom to be informative
+equation by equation, at the cost that the joint posterior of $(B, \Sigma)$ is then no longer of
+any standard form: unlike the non-informative case above, $B \mid \Sigma, Y$ is still Normal and
+$\Sigma \mid B, Y$ is still inverse-Wishart, but neither marginal, $B \mid Y$ or $\Sigma \mid Y$,
+has a closed form, because the prior on $B$ no longer shares $\Sigma$'s scale and so the two blocks
+cannot be integrated apart. The two conditionals just derived,
+
+$$
+\operatorname{vec} B \mid \Sigma, Y \sim \mathcal{N}\!\left(b_n, \; P_n^{-1}\right), \qquad
+P_n = V_0^{-1} + \Sigma^{-1} \otimes X^\top X = V_0^{-1} + \Sigma^{-1} \otimes \sum_t x_t x_t^\top,
+$$
+
+$$
+\Sigma \mid B, Y \sim \mathcal{IW}\!\left((Y - XB)^\top (Y - XB) + S_0, \; \nu_0 + N\right)
+\qquad (N = T_{\text{eff}} \text{ above}),
+$$
+
+are exactly the two full conditionals of a Normal-diffuse posterior, and cycling between them is
+the two-block Gibbs sampler already coded above for the Minnesota prior and reused again below for
+the sign-restricted structural analysis. The code needed no separate derivation there because a
+Minnesota prior *is* a Normal-diffuse prior with a particular, structured choice of $b_0$ and
+$V_0$ — diagonal, centred at a random walk, tighter on cross-equation and longer lags — which is
+precisely the shrinkage device Lecture 6 introduces and this chapter now equips with its full
+posterior machinery. Setting $V_0^{-1} \to 0$, $S_0 \to 0$ and $\nu_0 \to -m$ in the two
+conditionals above recovers exactly the non-informative posterior of the previous section, but for
+any $V_0^{-1} \neq 0$ the two blocks no longer separate into one inverse-Wishart draw followed by
+one Normal draw, and iterating the two conditionals is the only route to the joint posterior — the
+same iteration the Gibbs sampler above ran unnecessarily under the simpler non-informative prior,
+and the one that survives once the prior stops being conjugate.
 
 **Reading the computation.** Vectorising by columns keeps all coefficients of an equation together. The full residual precision creates cross-equation blocks; use the same ordering when reshaping posterior draws.
 

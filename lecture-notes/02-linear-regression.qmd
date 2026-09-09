@@ -306,6 +306,146 @@ both compete to explain the same realised returns through $X^\top X$. Neither ma
 density above could have shown this; it only appears once the two coefficients are
 plotted against each other.
 
+### An equivalent form for the variance update
+
+The remainder $Q = y^\top y + b_0^\top B_0^{-1} b_0 - b_1^\top B_1^{-1} b_1$ is convenient
+to compute but says nothing. There is a second closed form that does. Substituting
+$b_1 = B_1(B_0^{-1}b_0 + X^\top X\hat\beta)$ and collecting terms, the same remainder can be
+written as
+
+$$
+Q = \underbrace{\text{SSR}}_{\text{misfit of the data}}
+\; + \; \underbrace{(b_0 - \hat\beta)^\top\left[B_0 + (X^\top X)^{-1}\right]^{-1}(b_0 - \hat\beta)}_{\text{prior-data conflict}},
+$$
+
+where $\text{SSR} = (y - X\hat\beta)^\top(y - X\hat\beta)$ is the least-squares residual sum
+of squares. Read in this form the variance update is transparent. The data contribute their
+own misfit, and the prior contributes the distance between what it expected and what the
+sample delivered, measured in the metric $[B_0 + (X^\top X)^{-1}]^{-1}$, which weighs that
+disagreement by how precise prior and sample each are. If prior and data agree, the second
+term vanishes and only the residual sum of squares raises $\delta_1$. If they disagree
+sharply while both claim precision, the term is large and the posterior for $\sigma^2$
+shifts up: the model reports that something must absorb the conflict, and the only place
+left is the error variance. Note that this form needs a proper prior, since $B_0$ itself
+appears rather than $B_0^{-1}$.
+
+**Reading the computation.** The first line recovers $Q$ from the posterior parameters, the
+second builds it from the residual sum of squares plus the conflict term. They must agree to
+machine precision, which is what makes the interpretation legitimate rather than decorative.
+
+```{python}
+XtX = X.T @ X
+gap = b0 - b_ols
+conflict = gap @ np.linalg.solve(np.linalg.inv(B0_inv) + np.linalg.inv(XtX), gap)
+Q_from_update = 2.0 * (post["d1"] - d0)
+
+print(f"Q from completing the square    {Q_from_update:.10f}")
+print(f"SSR + prior-data conflict       {ssr + conflict:.10f}")
+print(f"  of which SSR                  {ssr:.10f}")
+print(f"  of which conflict             {conflict:.10f}")
+```
+
+The two agree to ten decimals, and the split shows where the posterior variance comes from
+in this sample: almost all of it is the residual sum of squares, with the conflict term
+adding the little that the CAPM prior and the fitted alpha disagree about.
+
+### The prior as extra observations
+
+There is a way of looking at the conjugate prior that makes the update disappear entirely.
+Write the prior as a set of artificial observations. With $R$ any matrix satisfying
+$R^\top R = B_0^{-1}$, the prior $\beta \mid \sigma^2 \sim \mathcal{N}(b_0, \sigma^2 B_0)$
+can be read as the regression equation
+
+$$
+R b_0 = R\beta + \varepsilon_0, \qquad \varepsilon_0 \sim \mathcal{N}(0, \sigma^2 I_k),
+$$
+
+since rearranging gives $\beta = b_0 - R^{-1}\varepsilon_0$ with the required covariance.
+Stacking these $k$ artificial rows underneath the $n$ real ones produces the extended
+regression
+
+$$
+\begin{pmatrix} y \\ R b_0 \end{pmatrix}
+= \begin{pmatrix} X \\ R \end{pmatrix}\beta + \begin{pmatrix} \varepsilon \\ \varepsilon_0 \end{pmatrix},
+\qquad
+\begin{pmatrix} \varepsilon \\ \varepsilon_0 \end{pmatrix} \sim \mathcal{N}(0, \sigma^2 I_{n+k}).
+$$
+
+Least squares on the extended data gives
+$(\tilde X^\top \tilde X)^{-1}\tilde X^\top \tilde y = (X^\top X + B_0^{-1})^{-1}(X^\top y +
+B_0^{-1}b_0) = b_1$, and its residual sum of squares is exactly $Q$. In other words, a
+conjugate Normal prior is worth $k$ fictitious observations, and Bayesian estimation under it
+is ordinary least squares on the augmented sample. This is not a curiosity. It is how
+shrinkage priors are implemented in practice, and the dummy-observation form of the Minnesota
+prior in Lecture 6 is the same trick applied to a vector autoregression.
+
+**Reading the computation.** The first block builds the artificial rows from a square root of
+the prior precision, the second runs plain least squares on the stacked system and compares
+the result with the analytic posterior mean and with $Q$.
+
+```{python}
+R = np.linalg.cholesky(B0_inv).T             # R'R = B0^{-1}
+X_aug = np.vstack([X, R])
+y_aug = np.concatenate([y, R @ b0])
+
+b_aug = np.linalg.lstsq(X_aug, y_aug, rcond=None)[0]
+ssr_aug = float(((y_aug - X_aug @ b_aug) ** 2).sum())
+print(f"max |OLS on augmented data - b1| = {np.abs(b_aug - post['b1']).max():.2e}")
+print(f"augmented residual sum of squares {ssr_aug:.10f}   Q {Q_from_update:.10f}")
+```
+
+The augmented least-squares estimate reproduces the posterior mean to machine precision and
+its residual sum of squares is $Q$, so the whole conjugate analysis can be executed with a
+least-squares routine and no Bayesian code at all.
+
+### The same posterior from two blocks
+
+The analytic result also has a sampling counterpart worth seeing once, because it is the
+bridge to the computational half of the course. The two conditionals of the joint posterior
+are both standard,
+
+$$
+\beta \mid \sigma^2, y \sim \mathcal{N}(b_1, \sigma^2 B_1), \qquad
+\sigma^2 \mid \beta, y \sim \text{Inverse-Gamma}\!\left(\alpha_1 + \tfrac{k}{2},\;
+\delta_1 + \tfrac{1}{2}(\beta - b_1)^\top B_1^{-1}(\beta - b_1)\right),
+$$
+
+the second differing from the marginal $\text{Inverse-Gamma}(\alpha_1, \delta_1)$ by exactly
+the $k/2$ that integrating the coefficients out removed, plus the quadratic form that the
+fixed $\beta$ contributes. Cycling between the two draws is a two-block Gibbs sampler, the
+subject of Lecture 4. Here we know the answer, so the sampler is a test rather than a tool.
+
+**Reading the computation.** Each sweep draws the coefficients given the current variance,
+then the variance given those coefficients. After discarding the warm-up sweeps the sampled
+marginals must reproduce the analytic ones; if they do not, the conditionals are wrong.
+
+```{python}
+n_sweep, burn = 6000, 1000
+sig2_state = ssr / (n - k)
+P1 = B0_inv + XtX
+L1 = np.linalg.cholesky(post["B1"])
+gibbs_beta = np.empty((n_sweep, k))
+gibbs_sig2 = np.empty(n_sweep)
+
+for r in range(n_sweep):
+    beta_r = post["b1"] + np.sqrt(sig2_state) * (L1 @ rng.standard_normal(k))
+    quad = (beta_r - post["b1"]) @ (P1 @ (beta_r - post["b1"]))
+    sig2_state = stats.invgamma(a=post["a1"] + k / 2.0,
+                                scale=post["d1"] + quad / 2.0).rvs(random_state=rng)
+    gibbs_beta[r], gibbs_sig2[r] = beta_r, sig2_state
+
+kept = gibbs_beta[burn:]
+print(pd.DataFrame({"analytic mean": post["b1"], "Gibbs mean": kept.mean(axis=0),
+                    "analytic sd": sd_beta, "Gibbs sd": kept.std(axis=0)},
+                   index=names).round(4))
+print(f"\nE[sigma^2|y] analytic {post['d1']/(post['a1']-1):.6f}   "
+      f"Gibbs {gibbs_sig2[burn:].mean():.6f}")
+```
+
+The sampled means and standard deviations agree with the analytic ones to three or four
+decimals, which is the sanity check every sampler must pass on a model with a known answer
+before it is trusted on one without.
+
 ## Marginal posteriors
 
 Integrating $\beta$ out leaves $\sigma^2 \mid y \sim \text{Inverse-Gamma}(\alpha_1,
@@ -442,7 +582,271 @@ Monte Carlo error, as symmetry demands. For $\sigma^2$ the mode lies below the m
 the median below the mean, and the HPD is the shorter interval because it trades away part
 of the long right tail; both contain the true variance of $0.0016$.
 
+## Functions of the coefficients
+
+Posterior summaries are rarely wanted for the coefficients themselves. The quantity a desk
+cares about is usually a function of them, and once the posterior is available as draws any
+such function is free: transform every draw and summarise the result. No new derivation is
+needed, because a function of a random vector has whatever distribution the draws induce.
+
+The natural example here is the market return at which this asset is expected to break even.
+Setting the conditional mean to zero, $\beta_0 + \beta_1 x = 0$, gives the break-even market
+return $x^\star = -\beta_0/\beta_1$. It is a ratio of two coefficients, and ratios carry a
+warning that Bauwens states plainly and every applied worker should remember: a ratio whose
+denominator has posterior mass near zero need not possess moments at all. The posterior mean
+may fail to exist even though every individual draw is finite, in which case the sample mean
+never settles as the number of draws grows and reporting it is meaningless. Quantiles always
+exist, so they are the honest summary.
+
+Whether the warning bites is a property of the sample, not of the algebra, and this regression
+lets us see both cases at once. The market beta has posterior mean $1.23$ with standard
+deviation $0.11$, so zero is more than eleven standard deviations away and the denominator is
+effectively never small. The size loading has posterior mean $0.26$ with standard deviation
+$0.13$, so zero sits about two standard deviations away and a noticeable share of the draws
+lands close to it. Dividing by the first is safe; dividing by the second is not.
+
+**Reading the computation.** Both ratios are built from the same posterior draws, changing
+only the denominator. The left panel shows the distribution of the dangerous one, trimmed at
+the first and ninety-ninth percentiles so the tails do not swallow the picture. The right panel
+plots the running mean of each ratio against the number of draws used, which is the diagnostic
+for whether a mean exists at all.
+
+```{python}
+safe = -beta_draws[:, 0] / beta_draws[:, 1]      # denominator far from zero
+risky = -beta_draws[:, 0] / beta_draws[:, 2]     # denominator close to zero
+run = lambda v: np.cumsum(v) / np.arange(1, v.size + 1)
+lo_r, hi_r = np.quantile(risky, [0.01, 0.99])
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+ax1.hist(risky[(risky > lo_r) & (risky < hi_r)], bins=80, density=True, color="steelblue")
+ax1.axvline(np.median(risky), color="black", lw=1, label="median")
+ax1.set_xlabel(r"$-\beta_0/\beta_2$"); ax1.set_ylabel("density"); ax1.legend(fontsize=9)
+ax1.set_title("Ratio with mass near zero in the denominator")
+
+d = np.arange(1, safe.size + 1)
+ax2.plot(d, run(safe), lw=0.9, label=r"$-\beta_0/\beta_1$  (beta far from 0)")
+ax2.plot(d, run(risky), lw=0.9, label=r"$-\beta_0/\beta_2$  (loading near 0)")
+ax2.set_xscale("log"); ax2.set_xlabel("draws used"); ax2.set_ylabel("running mean")
+ax2.legend(fontsize=8); ax2.set_title("One running mean settles, the other does not")
+plt.tight_layout(); plt.show()
+
+for nm, v in (("safe ", safe), ("risky", risky)):
+    print(f"{nm}: median {np.median(v):8.4f}   90% interval "
+          f"[{np.quantile(v, 0.05):8.4f}, {np.quantile(v, 0.95):8.4f}]   "
+          f"running mean 10k {run(v)[9_999]:9.4f}  200k {run(v)[-1]:9.4f}")
+```
+
+The left panel is sharply peaked with tails running far beyond the plotted range, which is what
+dividing by a quantity that can be near zero produces. The right panel makes the practical
+point: the safe ratio's running mean is flat from a few thousand draws onwards, while the risky
+one is still jumping at two hundred thousand draws, each jump caused by one draw with a size
+loading close to zero. Both medians and both intervals, by contrast, are stable to the printed
+precision. Summarise ratios by quantiles.
+
+## Choosing the prior in practice
+
+Everything so far assumed that $b_0$, $B_0$, $\alpha_0$ and $\delta_0$ were given. Getting
+them is the part of applied Bayesian work that no formula settles, so it is worth being
+explicit about the routes available.
+
+The first route uses the interpretability of the conjugate form. Since the prior enters the
+posterior exactly as data do, one can ask a subject-matter question rather than a
+distributional one. For a coefficient with a plausible range $[\beta_L, \beta_U]$ the prior
+mean can be the midpoint $\tfrac{1}{2}(\beta_L + \beta_U)$, and if the marginal prior is
+roughly Normal, a prior standard deviation of $(\beta_U - \beta_L)/6$ puts almost the entire
+prior mass inside the range, because six standard deviations span it. A market beta believed
+to lie between $0.6$ and $1.6$ therefore implies a prior mean of $1.1$ and a prior standard
+deviation of about $0.17$. The same logic handles theoretical restrictions: for a persistence
+coefficient known to be positive and non-explosive, take $\beta_L = 0$ and $\beta_U = 0.8$,
+and for a deliberately vaguer prior widen the range.
+
+The second route starts from prior moments and inverts the parameterisation. Elicited
+marginal moments $\mathbb{E}[\beta]$ and $\operatorname{Var}[\beta]$ translate into
+
+$$
+b_0 = \mathbb{E}[\beta], \qquad
+B_0 = \frac{\operatorname{Var}[\beta]}{\mathbb{E}[\sigma^2]},
+\qquad \text{equivalently} \quad
+B_0^{-1} = \left[\operatorname{Var}[\beta]\right]^{-1}\frac{\delta_0}{\alpha_0 - 1},
+$$
+
+which is the rule the code above already used when it divided the squared prior standard
+deviations by the prior mean of $\sigma^2$. When $\operatorname{Var}[\beta]$ is taken
+diagonal, as is usual, this is one division per coefficient.
+
+That formula also exposes the awkwardness of the conjugate prior, and it is worth stating
+rather than hiding. Because the coefficient prior is scaled by the variance,
+$\operatorname{Var}[\beta \mid \sigma^2] = \sigma^2 B_0$, one cannot fix beliefs about
+$\beta$ without also committing to beliefs about $\sigma^2$. Worse, trying to be
+uninformative about the variance destroys the coefficient prior: letting $\delta_0 \to 0$
+sends $B_0^{-1}$ to zero as well, so being vague about the error variance forces vagueness
+about the coefficients. The practical workaround is to set $\delta_0$ from the residual sum of
+squares of a preliminary least-squares fit, choose a small shape such as $\alpha_0 = 1.5$, and
+deduce $B_0$ from there. It works, but it is a trick, and the honest way out is to give
+$\beta$ and $\sigma^2$ independent priors. That breaks conjugacy, leaves no closed form, and
+is precisely why Lecture 4 builds a sampler.
+
+A cheap and often overlooked middle course is to be informative only where beliefs exist. If
+$\beta$ splits into a block $\beta_1$ we have views on and a block $\beta_2$ we do not, set
+
+$$
+b_0 = \begin{pmatrix} b_{0,1} \\ 0 \end{pmatrix}, \qquad
+B_0^{-1} = \begin{pmatrix} B_{0,11}^{-1} & 0 \\ 0 & 0 \end{pmatrix},
+$$
+
+and the posterior formulas go through unchanged, because they only ever use $B_0^{-1}$. The
+zero block simply contributes no prior precision. For the CAPM regression this is exactly
+right economically: theory says something about the market beta and nothing whatsoever about
+alpha or a size loading, so those two should be left to the data.
+
+**Reading the computation.** The block prior below is informative on the market beta only,
+built from the range $[0.6, 1.6]$ by the six-sigma rule, and flat on the other two
+coefficients. Compare its posterior with the fully informative one and with least squares.
+
+```{python}
+bL, bU = 0.6, 1.6
+beta_mean_e, beta_sd_e = 0.5 * (bL + bU), (bU - bL) / 6.0
+
+tau_block = np.array([np.inf, beta_sd_e, np.inf])          # flat on alpha and size
+B0_inv_block = np.diag(np.where(np.isfinite(tau_block),
+                                sigma2_bar / tau_block**2, 0.0))
+block = nig_update(y, X, np.array([0.0, beta_mean_e, 0.0]), B0_inv_block, a0, d0)
+sd_block = np.sqrt(block["d1"] / (block["a1"] - 1.0) * np.diag(block["B1"]))
+
+print(f"elicited prior for the market beta: mean {beta_mean_e:.2f}, sd {beta_sd_e:.3f}")
+print(pd.DataFrame({"OLS": b_ols, "full prior": post["b1"], "block prior": block["b1"],
+                    "OLS se": se_ols, "block post sd": sd_block}, index=names).round(4))
+```
+
+The market beta is pulled towards the elicited $1.1$, while alpha and the size loading sit on
+their least-squares values with standard errors to match, because the block prior added no
+information about them. This is usually the defensible position: shrink where theory speaks,
+stay quiet elsewhere.
+
+### Zellner's g-prior
+
+One choice of $B_0$ deserves its own name because it removes the matrix from the elicitation
+problem altogether. Zellner proposed tying the prior covariance to the design,
+
+$$
+\beta \mid \sigma^2 \sim \mathcal{N}\!\left(0, \; g\,\sigma^2 (X^\top X)^{-1}\right),
+$$
+
+so that a single scalar $g > 0$ controls prior tightness. Setting $B_0 = g(X^\top X)^{-1}$,
+that is $B_0^{-1} = X^\top X / g$, the posterior precision becomes
+$B_1^{-1} = X^\top X(1 + 1/g)$ and the update collapses to a scalar shrinkage of the
+least-squares estimate:
+
+$$
+B_1 = \frac{g}{1+g}(X^\top X)^{-1}, \qquad
+b_1 = \frac{g}{1+g}\hat\beta, \qquad
+\operatorname{Var}[\beta \mid y] = \mathbb{E}[\sigma^2 \mid y]\frac{g}{1+g}(X^\top X)^{-1}.
+$$
+
+Every coefficient is shrunk towards zero by the same factor $g/(1+g)$, which is $1/2$ at
+$g=1$, rises to one as $g \to \infty$, recovering least squares, and falls to zero as
+$g \to 0$, recovering the prior. The appeal is that the prior inherits the geometry of the
+regressors, so directions the data identify poorly are also the directions the prior is vague
+about, and $g$ has a clean reading as a prior sample size relative to the data. The price is
+that the prior is not a statement about the world at all, since it changes whenever the design
+changes. That is acceptable as a default in model comparison, where the point is comparability
+across specifications rather than realism, and it is why the g-prior reappears in Lecture 9.
+
+**Reading the computation.** The table checks the scalar-shrinkage formula against the general
+update at several values of $g$, and the figure traces the posterior mean of the market beta
+from the prior value of zero to the least-squares estimate as $g$ grows.
+
+```{python}
+g_grid = np.array([0.05, 0.2, 1.0, 5.0, 20.0, 100.0, 1000.0])
+g_means, err = [], 0.0
+for g in g_grid:
+    gp = nig_update(y, X, np.zeros(k), XtX / g, a0, d0)
+    g_means.append(gp["b1"])
+    err = max(err, np.abs(gp["b1"] - g / (1.0 + g) * b_ols).max())
+g_means = np.array(g_means)
+print(f"largest deviation from the g/(1+g) shrinkage formula: {err:.2e}")
+
+fig, ax = plt.subplots()
+ax.semilogx(g_grid, g_means[:, 1], "o-", label="posterior mean of the market beta")
+ax.axhline(b_ols[1], color="grey", lw=1, ls="--", label=f"OLS = {b_ols[1]:.3f}")
+ax.axhline(0.0, color="black", lw=1, ls=":", label="prior mean = 0")
+ax.set_xlabel("prior weight $g$"); ax.set_ylabel(r"$\beta_1$")
+ax.legend(fontsize=9); ax.set_title("The g-prior shrinks by a single scalar factor")
+plt.tight_layout(); plt.show()
+```
+
+The deviation from the closed-form shrinkage is at machine precision, and the curve climbs
+from the prior mean of zero to the least-squares estimate, most of the movement happening
+between $g = 0.2$ and $g = 20$. Reporting a g-prior result without reporting $g$ is therefore
+reporting nothing.
+
 ## The noninformative limit
+
+Before substituting anything it is worth asking what prior the substitution corresponds to.
+The conventional noninformative choice for this model is
+
+$$
+p(\beta, \sigma^2) \propto \frac{1}{\sigma^2},
+$$
+
+flat in $\beta$ over $\mathbb{R}^k$ and flat in $\log \sigma^2$ over $\mathbb{R}$. The second
+half follows from the change-of-variable rule: if $\log\sigma^2$ is uniform then
+$p(\log \sigma^2) \propto 1$, and transforming back multiplies by the Jacobian
+$d\log\sigma^2/d\sigma^2 = 1/\sigma^2$. Flatness on the log scale is the natural statement for
+a positive scale parameter, since it makes the prior invariant to the units in which the
+variance is measured.
+
+This prior is **improper**: neither factor integrates to a finite number, so it is not a
+density. That is tolerable here but never automatic. The posterior can still be proper, and in
+this model it is, provided $X$ has full column rank, $n > k$ and the residual sum of squares
+is positive. A useful way to see that nothing mystical is happening is to replace the flat
+prior on each coefficient by a uniform density on a bounded interval $(-B, B)$. That prior is
+proper for any finite $B$, and for $B$ large enough the posterior is numerically
+indistinguishable from the one the improper prior gives, because the likelihood has long since
+vanished outside the interval. The improper prior is shorthand for the limit, not a new kind
+of object.
+
+Multiplying this prior into the likelihood gives the posterior kernel
+
+$$
+p(\beta, \sigma^2 \mid y) \propto (\sigma^2)^{-(n+2)/2}
+\exp\left[-\frac{\text{SSR} + (\beta - \hat\beta)^\top X^\top X(\beta - \hat\beta)}{2\sigma^2}\right],
+$$
+
+which is a Normal-Inverse-Gamma kernel centred at the least-squares estimate with precision
+matrix $X^\top X$, scale $\text{SSR}$ and $n - k$ degrees of freedom. In the parameterisation
+of this chapter,
+
+$$
+\beta \mid \sigma^2, y \sim \mathcal{N}\!\left(\hat\beta, \sigma^2 (X^\top X)^{-1}\right),
+\qquad
+\sigma^2 \mid y \sim \text{Inverse-Gamma}\!\left(\frac{n-k}{2}, \frac{\text{SSR}}{2}\right).
+$$
+
+The same joint posterior factorises the other way round as well, and both orderings are
+useful. Conditioning on the coefficients instead of on the variance gives
+
+$$
+\sigma^2 \mid \beta, y \sim \text{Inverse-Gamma}\!\left(\frac{n}{2},
+\frac{(y - X\beta)^\top(y - X\beta)}{2}\right),
+\qquad
+\beta \mid y \sim t_{n-k}\!\left(\hat\beta, \; s^2 (X^\top X)^{-1}\right),
+$$
+
+with $s^2 = \text{SSR}/(n-k)$. The first is the conditional a sampler needs, and note that its
+shape is $n/2$ rather than $(n-k)/2$, because holding $\beta$ fixed forgoes the $k$ degrees of
+freedom that estimating it costs. The second is the marginal a reader wants, and it is the
+result that makes the Bayesian and classical answers coincide numerically in this one model.
+The closed-form moments follow directly:
+
+$$
+\mathbb{E}[\beta \mid y] = \hat\beta, \qquad
+\operatorname{Var}[\beta \mid y] = \frac{\text{SSR}}{n-k-2}(X^\top X)^{-1}
+= \mathbb{E}[\sigma^2 \mid y]\,(X^\top X)^{-1},
+$$
+
+the variance existing only for $n - k > 2$, a reminder that the flat prior buys its
+convenience by leaving the tails to the data alone.
 
 A formal kernel substitution is $B_0^{-1} \to 0$ with $\alpha_0 \to -k/2$ and $\delta_0 \to 0$, the
 improper prior $p(\beta, \sigma^2) \propto 1/\sigma^2$, flat in $\beta$ and in
@@ -542,6 +946,40 @@ five separate density curves makes the direction and the diminishing returns of 
 the prior easier to see at a glance.
 
 
+
+## Reading these results in the sources' notation
+
+The textbook treatments of this model use a different but equivalent parameterisation, and the
+translation is worth having in one place, because mixing the two silently is the most common
+source of confusion when checking a formula against a reference.
+
+The sources typically write the variance prior as an inverted-gamma-2 density,
+$\sigma^2 \sim \text{IG}_2(\nu, s)$, with density proportional to
+$(\sigma^2)^{-(\nu+2)/2}\exp[-s/(2\sigma^2)]$, and they parameterise the coefficient prior by a
+precision matrix $M_0$ rather than a covariance factor $B_0$. The multivariate Student density
+appears as $t_k(\mu, s, M, \nu)$, with mean $\mu$ and variance $\frac{s}{\nu - 2}M^{-1}$.
+
+| This course | Sources (Bauwens; Koop) | Relation |
+|---|---|---|
+| $B_0$, prior covariance factor | $M_0$, prior precision | $M_0 = B_0^{-1}$ |
+| $\alpha_0$, inverse-Gamma shape | $\nu_0$, degrees of freedom | $\nu_0 = 2\alpha_0$ |
+| $\delta_0$, inverse-Gamma scale | $s_0$, scale | $s_0 = 2\delta_0$ |
+| $B_1^{-1} = B_0^{-1} + X^\top X$ | $M_* = M_0 + X^\top X$ | identical |
+| $b_1 = B_1(B_0^{-1}b_0 + X^\top y)$ | $\beta_* = M_*^{-1}(M_0\beta_0 + X^\top X\hat\beta)$ | identical |
+| $\alpha_1 = \alpha_0 + n/2$ | $\nu_* = \nu_0 + n$ | $\nu_* = 2\alpha_1$ |
+| $\delta_1 = \delta_0 + Q/2$ | $s_* = s_0 + \text{SSR} + \text{conflict}$ | $s_* = 2\delta_1$ |
+| $\mathbb{E}[\sigma^2\mid y] = \delta_1/(\alpha_1-1)$ | $s_*/(\nu_*-2)$ | identical |
+
+: Notation bridge {.striped}
+
+Two conventions are easy to trip over. The sources' $\hat\beta$-centred form of the likelihood
+uses $s$ for the residual sum of squares, which collides with the $s$ used as an
+inverse-gamma-2 scale in the prior, so the same letter means two things three lines apart. And
+the noninformative prior appears there as the limit $M_0 \to 0$, $s_0 \to 0$, $\nu_0 \to -k$,
+which in this chapter's symbols is $B_0^{-1} \to 0$, $\delta_0 \to 0$, $\alpha_0 \to -k/2$,
+exactly the substitution used above. The degrees-of-freedom limit is $-k$ rather than $0$ so
+that $\nu_* = n - k$ rather than $n$, which is the same degrees-of-freedom correction that
+classical regression applies.
 
 ## Reading guide and sources
 

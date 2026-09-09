@@ -419,6 +419,125 @@ about $0.26$ against $0.45$ at lag one and about $0.07$ against $0.11$ at lag fo
 own-lag prior is looser at every horizon, and the gap between the two lines is exactly
 $\lambda_2$ acting on top of the shared $1/\ell^2$ decay.
 
+### The prior in its original parameterisation
+
+The sources state this prior in standard deviations rather than variances, and it is worth
+seeing in that form because it is how the two tuning numbers were originally described. For the
+coefficient on lag $\ell$ of variable $j$ in the equation for variable $i$, the prior standard
+deviation is
+
+$$
+\text{sd}(A_{ij\ell}) =
+\begin{cases}
+\dfrac{\lambda}{\ell} & i = j \quad (\text{own lag}),\\[2ex]
+\dfrac{\lambda\,\theta\,\sigma_i}{\ell\,\sigma_j} & i \neq j \quad (\text{cross lag}),
+\end{cases}
+$$
+
+with $\lambda > 0$ the overall tightness on a variable's own first lag and
+$\theta \in (0,1)$ the factor by which other variables' lags are believed less. Squaring these
+gives exactly the variances used above, with $\lambda_1 = \lambda^2$ and
+$\lambda_2 = \theta^2$, so the two statements are the same prior in different clothing. The
+point the original form makes more clearly is how little has to be chosen: two numbers, $\lambda$
+and $\theta$, are enough for every equation of the system, however many variables and lags it
+has. The prior mean is equally parsimonious, being the random walk, that is $\mathbb{E}[A_1] = I_m$
+and $\mathbb{E}[A_\ell] = 0$ for $\ell > 1$, with the intercept left essentially unrestricted
+because there is rarely a defensible prior belief about the level.
+
+### Why the scale ratio is there
+
+The factor $\sigma_i/\sigma_j$ in the cross-lag standard deviation looks like a technicality and
+is in fact the part that makes the prior usable at all. Coefficients in a multivariate system
+are not comparable across equations, because each one converts the units of variable $j$ into the
+units of variable $i$. A coefficient linking an interest rate in percentage points to output in
+log levels lives on a completely different scale from one linking two interest rates, so a single
+number $\lambda\theta$ cannot express the same belief about both unless the units are divided
+out. The ratio of residual standard deviations does exactly that: it measures the coefficient in
+units of one standard deviation of the explanatory series per standard deviation of the dependent
+series.
+
+The formal statement is invariance. Suppose variable $j$ is rescaled, $\tilde y_j = c\,y_j$, as
+happens when a series is quoted in fractions instead of percentages. The coefficient that
+multiplies it must change by $1/c$ to leave the equation unchanged, and the residual standard
+deviation of that series changes by $c$. The prior standard deviation
+$\lambda\theta\sigma_i/(\ell\sigma_j)$ therefore also changes by $1/c$, so the prior expresses the
+same belief before and after the change of units. Without the ratio it would not, and a harmless
+change of units would silently retighten or loosen the prior.
+
+**Reading the computation.** The block rescales the second variable by a factor of one hundred,
+rebuilds the prior standard deviations, and compares the ratio of the two versions with the
+factor the invariance argument predicts. Agreement to machine precision is the claim being
+tested.
+
+```{python}
+c_scale = 100.0                                  # percentages to basis points, say
+sig_rescaled = sig * np.array([1.0, c_scale, 1.0])
+
+def cross_sd(sig_vec, i, j, ell, lam=np.sqrt(0.2), theta=np.sqrt(0.5)):
+    return lam * theta * sig_vec[i] / (ell * sig_vec[j])
+
+rows = []
+for (i, j) in [(0, 1), (2, 1), (1, 0)]:
+    for ell in (1, 2):
+        base = cross_sd(sig, i, j, ell)
+        resc = cross_sd(sig_rescaled, i, j, ell)
+        rows.append({"eq i": i + 1, "regressor j": j + 1, "lag": ell,
+                     "prior sd": base, "prior sd rescaled": resc,
+                     "ratio": resc / base})
+print(pd.DataFrame(rows).round(6).to_string(index=False))
+print(f"\nexpected ratio when variable 2 is the regressor: 1/c = {1/c_scale:g}")
+print(f"expected ratio when variable 2 is the dependent variable: c = {c_scale:g}")
+```
+
+The coefficients that take the rescaled variable as a regressor have their prior standard
+deviation divided by exactly one hundred, and the equation in which the rescaled variable is the
+dependent variable has it multiplied by one hundred. Both are what the algebra demands, so the
+prior belief itself is untouched by the change of units. A prior specified without the ratio
+would have failed this test, and the failure would have been invisible in the output.
+
+### What the prior does to the posterior
+
+The effect of the prior on the results is worth stating in two separate parts, because they are
+often conflated. The first is precision. Prior and sample information enter the posterior
+precision additively, exactly as in Lecture 2, so every coefficient is estimated more precisely
+than by least squares, whether or not the prior mean is any good. The second is location. The
+posterior mean is a matrix-weighted average of the prior mean and the least-squares estimate, so
+coefficients about which the sample is weakly informative are pulled towards their prior means,
+which for the Minnesota prior means towards zero for cross lags and towards one for the own first
+lag, and correspondingly away from least squares. In vector autoregressions the least-squares
+estimates are routinely very imprecisely determined, which is why the pull is usually towards
+values that forecast better rather than towards values that fit worse.
+
+**Reading the computation.** For one coefficient at a time the shrinkage factor is scalar:
+the weight on the least-squares estimate is the sample precision divided by the total precision.
+The block evaluates that weight for an own lag and for a cross lag at two lag lengths, using the
+prior variances built above and a nominal sample precision, so the asymmetry the prior imposes is
+visible as numbers rather than as a claim.
+
+```{python}
+sample_prec = 40.0                              # nominal sample precision for one coefficient
+for ell in (1, 4):
+    own = lam1 / ell**2
+    cross = lam1 * lam2 / ell**2 * sig[0]**2 / sig[1]**2
+    w_own = sample_prec / (sample_prec + 1.0 / own)
+    w_cross = sample_prec / (sample_prec + 1.0 / cross)
+    print(f"lag {ell}:  own-lag weight on OLS {w_own:.3f}   "
+          f"cross-lag weight on OLS {w_cross:.3f}")
+```
+
+At the first lag the own coefficient keeps most of its least-squares content while the cross
+coefficient is already pulled appreciably towards zero, and by the fourth lag both are dominated
+by the prior, the cross coefficient almost entirely. That pattern, and not any single number, is
+what the Minnesota prior contributes.
+
+One consequence matters for the next lecture. A prior variance that differs across the elements
+of the coefficient matrix cannot be written as a Kronecker product of a coefficient covariance
+and the error covariance, which is what the conjugate matricvariate posterior of a vector
+autoregression requires. The Minnesota specification is therefore not conjugate in the strict
+sense: it is an independent Normal prior on the vectorised coefficients combined with a prior on
+the error covariance, the Normal-diffuse setup of Lecture 7, and it is estimated by the two-block
+sampler derived there rather than in closed form.
+
 ## The illusion of sparsity
 
 A natural alternative to dense shrinkage is *sparse selection*: assume most
