@@ -175,6 +175,34 @@ An uncertain parameter need not change randomly in the world. A firm's default
 probability can be fixed while our information about it changes. The posterior
 describes that uncertainty conditional on the specified model.
 
+## What changes when the unknown is a parameter?
+
+Suppose a lender wants to learn a default probability. There are two kinds of uncertainty.
+Even if the probability were known, the next borrower could default or repay. In addition,
+the probability itself is unknown. We use a conditional data model for the first uncertainty
+and a prior over the probability for the second.
+
+For one borrower, record $x=1$ for default and $x=0$ for repayment. Write the unknown
+default probability as $\theta$. The statements $P(x=1\mid\theta)=\theta$ and
+$P(x=0\mid\theta)=1-\theta$ can be written together as
+
+$$p(x\mid\theta)=\theta^x(1-\theta)^{1-x}.$$
+
+Check the two cases: substituting $x=1$ leaves $\theta$; substituting $x=0$ leaves
+$1-\theta$. The exponents are a convenient switch, not a new probability assumption.
+
+Now **assume conditional independence** across borrowers with the same $\theta$.
+The probability of their observed sequence is a product. If $y=\sum_i x_i$ of $n$
+borrowers default, collecting powers gives $\theta^y(1-\theta)^{n-y}$.
+If we record only the count, there are $\binom ny$ sequences with that count, so
+the binomial probability also includes that factor. Both observations give the same
+posterior for $\theta$ because the factor does not depend on $\theta$.
+
+The independence and common-probability assumptions came from our model of borrowers,
+not from Bayes' theorem. Shared exposure to a recession might make them inappropriate.
+Bayes' theorem tells us how to update **after** specifying that model. We next apply the
+event calculation to candidate values of $\theta$, which is how a posterior density arises.
+
 ## From events to parameters
 
 So far the unknown was which of three doors hid a prize. In econometrics the unknown is

@@ -38,6 +38,30 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## Reconstruct an equation before trying to remember it
+
+Take the simplest exam example: observations with a common unknown mean and known
+variance $\sigma^2$. Begin with the assumption $y_i=\mu+\varepsilon_i$, with independent
+Normal errors. For one observation, replace the Normal error by the residual
+$y_i-\mu$. Multiply the densities across observations. Then multiply by the chosen
+Normal prior for $\mu$.
+
+Why does completing the square work? Both log densities are negative quadratic
+functions of the same unknown. Expanding and collecting the coefficient of $\mu^2$
+adds the data precision and the prior precision. Collecting the coefficient of $\mu$
+gives the information-weighted mean. A Normal posterior is the result of those
+particular assumptions, not a separate rule to memorise.
+
+If the variance becomes unknown, the calculation needs its prior too. If observations
+are correlated, multiplying independent one-observation densities is no longer valid.
+If the outcome is binary, its likelihood is not a Normal residual density. These changes
+tell you which earlier step to revise, rather than which final formula to guess.
+
+For each formula on the cheat sheet, be able to state what is observed, what is unknown,
+what assumption introduces the distribution, and which algebraic operation produces
+the next line. Finally explain what its output answers: an unknown coefficient, a future
+observation and an optimal decision are different objects even when all use posterior draws.
+
 ## The through-line
 
 It is worth naming the stages explicitly, because the exam will test your ability to
@@ -51,8 +75,7 @@ move between them.
   Carlo estimates expectations by averaging draws. The Gibbs sampler cycles through full
   conditionals when each is easy to sample. Metropolis-Hastings proposes a move and
   accepts it with probability $\min\{1, r\}$ when direct sampling is impossible.
-  Diagnostics such as $\hat{R}$ and effective sample size tell us whether the chain has
-  converged and how much information the draws contain.
+  Diagnostics such as $\hat{R}$ and effective sample size help detect mixing problems and estimate how much information the draws contain; they do not prove convergence.
 - **Applications.** The same posterior machinery powered shrinkage priors and BVARs for
   high-dimensional macro forecasting, state-space models and the Kalman filter for
   latent dynamics, stochastic volatility and portfolio choice in finance, and Bayesian

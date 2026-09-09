@@ -38,6 +38,36 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 
 Every random draw below comes from this one generator, so the printed numbers reproduce exactly.
 
+## Build a system from two ordinary regressions
+
+Suppose we want to forecast growth $g_t$ and inflation $\pi_t$ using last quarter's
+information. A one-lag linear specification gives one equation for each outcome:
+
+$$\begin{aligned}
+g_t&=c_g+a_{gg}g_{t-1}+a_{g\pi}\pi_{t-1}+u_{g,t},\\
+\pi_t&=c_\pi+a_{\pi g}g_{t-1}+a_{\pi\pi}\pi_{t-1}+u_{\pi,t}.
+\end{aligned}$$
+
+Each line is a regression familiar from Week 2. The new feature is that both regressions
+use both variables' past values. Neither requires knowing the other variable's current
+value to construct a forecast. For example, $a_{g\pi}$ describes how last quarter's
+inflation helps predict current growth, conditional on last quarter's growth.
+
+Put the two outcomes in $y_t=(g_t,\pi_t)^\top$. The first row of $A_1$ contains
+$(a_{gg},a_{g\pi})$; the second contains $(a_{\pi g},a_{\pi\pi})$.
+Matrix multiplication then reproduces the two equations exactly. Adding variables or
+lags enlarges this same bookkeeping, rather than introducing a different statistical idea.
+
+We allow the two forecast errors to be correlated: news within the quarter may move
+growth and inflation together. The diagonal of $\Sigma$ records each error variance;
+the off-diagonal records their covariance. A multivariate Normal error is a modelling
+assumption that makes the joint likelihood tractable. It does **not** label the errors
+as monetary, demand or supply shocks. A policy-rate surprise may contain news about
+several structural disturbances; that ambiguity motivates identification later in the chapter.
+
+In the stacked notation below, each row is a date and each column of $B$ belongs to one
+outcome equation. Check these orientations before translating the model into Python.
+
 ## The reduced-form VAR and its stacked regression form
 
 A VAR($p$) for the $m$-vector $y_t$ is
@@ -114,6 +144,46 @@ why cross-equation covariance must enter the update. The code uses column-wise
 vectorisation, so each equation occupies one consecutive block of coefficients.
 The first illustration conditions on the OLS covariance estimate; the later
 Gibbs sampler also learns that covariance.
+
+### Derive the joint coefficient update
+
+Before vectorising, consider one date's residual vector, defined by
+$u_t^\top=y_t^\top-x_tB$ because $x_t$ is a regressor row.
+The multivariate Normal density replaces the scalar squared residual divided by its
+variance with $u_t^\top\Sigma^{-1}u_t$. This measures a forecast error relative to the
+joint covariance: a movement common to highly correlated series can be less surprising
+than an equally large movement in opposite directions. Multiplying densities over dates
+adds these quadratic terms. This is the same likelihood construction as in Week 2.
+
+Let $b=\operatorname{vec}(B)$ stack columns and $z=\operatorname{vec}(Y)$.
+Then $z=(I_m\otimes X)b+u$, with covariance $\Sigma\otimes I_N$.
+Here $N$ is the number of usable dates and $\otimes$ is the Kronecker product: each
+entry of its left matrix multiplies a copy of the right matrix. Thus $I_m\otimes X$
+places one design matrix on each diagonal block, while $\Sigma\otimes I_N$ correlates
+different equations' errors at the same date. Write out the two-equation blocks once
+to check that this reproduces the stacked regressions.
+An independent Normal prior $b\sim N(b_0,V_0)$ yields
+
+$$
+P_n=V_0^{-1}+\Sigma^{-1}\otimes X^\top X,\qquad
+b_n=P_n^{-1}[V_0^{-1}b_0+(\Sigma^{-1}\otimes X^\top)z].
+$$
+
+Expand the GLS likelihood quadratic and add the prior quadratic; completing
+the square gives $b\mid\Sigma,Y\sim N(b_n,P_n^{-1})$. Off-diagonal entries
+of $\Sigma^{-1}$ couple equations. Separate equation updates using only
+$\Sigma_{ii}$ are exact only for a diagonal covariance under this prior.
+
+For an independent $\Sigma\sim IW(\nu_0,S_0)$ prior, holding $B$ fixed gives
+
+$$
+\Sigma\mid B,Y\sim IW(\nu_0+N,S_0+(Y-XB)^\top(Y-XB)).
+$$
+
+These two conditionals form the BVAR Gibbs sampler used in the exercise. The
+residual sum of products must be evaluated at the current coefficient draw;
+an OLS residual covariance combined with a different shrinkage posterior is
+not the same joint model.
 
 **Reading the computation.** Vectorising by columns keeps all coefficients of an equation together. The full residual precision creates cross-equation blocks; use the same ordering when reshaping posterior draws.
 
@@ -201,33 +271,6 @@ a quarter to a half between the first step and the sixteenth, as errors compound
 handled jointly, so forecasts respect the cross-dependence, and because coefficients were drawn from
 the posterior rather than fixed the bands carry coefficient and shock uncertainty.
 They still condition on Sigma_hat; covariance uncertainty is included in the next sampler.
-
-### Derive the joint coefficient update
-
-Let $b=\operatorname{vec}(B)$ stack columns and $z=\operatorname{vec}(Y)$.
-Then $z=(I_m\otimes X)b+u$, with covariance $\Sigma\otimes I_N$.
-An independent Normal prior $b\sim N(b_0,V_0)$ yields
-
-$$
-P_n=V_0^{-1}+\Sigma^{-1}\otimes X^\top X,\qquad
-b_n=P_n^{-1}[V_0^{-1}b_0+(\Sigma^{-1}\otimes X^\top)z].
-$$
-
-Expand the GLS likelihood quadratic and add the prior quadratic; completing
-the square gives $b\mid\Sigma,Y\sim N(b_n,P_n^{-1})$. Off-diagonal entries
-of $\Sigma^{-1}$ couple equations. Separate equation updates using only
-$\Sigma_{ii}$ are exact only for a diagonal covariance under this prior.
-
-For an independent $\Sigma\sim IW(\nu_0,S_0)$ prior, holding $B$ fixed gives
-
-$$
-\Sigma\mid B,Y\sim IW(\nu_0+N,S_0+(Y-XB)^\top(Y-XB)).
-$$
-
-These two conditionals form the BVAR Gibbs sampler used in the exercise. The
-residual sum of products must be evaluated at the current coefficient draw;
-an OLS residual covariance combined with a different shrinkage posterior is
-not the same joint model.
 
 ### Why the likelihood does not identify a policy shock
 

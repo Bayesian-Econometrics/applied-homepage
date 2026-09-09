@@ -41,6 +41,38 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## Build the return equation from a changing scale
+
+Start with a standardised surprise $u_t$ of mean zero and variance one. If today's
+return standard deviation is $s_t>0$, then $r_t=s_tu_t$ has conditional variance
+$s_t^2$. This separates the size of the day's risk from the sign and realised size of
+the surprise. A large return can result from a large $s_t$, an unusual $u_t$, or both.
+One squared return therefore measures volatility very noisily.
+
+We need a process for a variance that is always positive. Introduce
+$h_t=\log(s_t^2)$, which can take any real value. Solving this definition gives
+$s_t^2=e^{h_t}$ and $s_t=e^{h_t/2}$. Substitution produces the first equation below.
+The factor one half comes from converting variance to standard deviation; it is not
+an extra parameter.
+
+To describe clustering, assume a deviation of log variance from its long-run level
+partly persists into the next date:
+
+$$\underbrace{h_t-\mu}_{\text{today's deviation}}
+=\underbrace{\phi(h_{t-1}-\mu)}_{\text{remaining previous deviation}}
++\underbrace{\sigma_h\zeta_t}_{\text{new state disturbance}}.$$
+
+For $\phi=0.95$, 95% of a deviation survives one period in conditional expectation.
+The Normal distribution for the disturbances and the AR(1) evolution are modelling
+choices. They are not implied by taking logarithms.
+
+Finally, substitute $s_t^2=e^{h_t}$ into a Normal return density. Its log kernel is
+$-h_t/2-r_t^2e^{-h_t}/2$. The first term discourages arbitrarily large variances;
+the second discourages variances too small to explain the return. Combining this
+likelihood with the neighbouring-state information produces the latent-state posterior
+used by the sampler. It is not quadratic in $h_t$, which explains why a direct
+Gaussian Kalman update is unavailable for this observation model.
+
 ## The stochastic-volatility model
 
 Let $r_t$ be a demeaned return and $h_t$ the log of its conditional variance. The model

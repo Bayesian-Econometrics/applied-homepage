@@ -12,7 +12,7 @@ chapter's practice questions.
 
 ## From macroeconomic shrinkage to the factor zoo
 
-Lectures 8 to 10 built a toolkit for high-dimensional macroeconometrics, where a zero-mean Normal prior turns out to
+Lectures 6 to 8 built a toolkit for high-dimensional macroeconometrics, where a zero-mean Normal prior turns out to
 be exactly ridge regression and the same idea carries over to Bayesian VARs and state-space models. Throughout, the
 prior did the regularising and the question of *which* variables belong never arose: we kept them all and shrank them.
 
@@ -44,8 +44,7 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 With $p$ candidates, and any subset admissible as a model, the model space contains $2^p$ members. The count defeats
 brute force at once: $p = 20$ gives about a million models, $p = 50$ gives $1.1 \times 10^{15}$, a genuine
 quadrillion, which at a billion marginal likelihoods per second would take a fortnight, and the $p \approx 300$ of a
-realistic factor zoo gives $2 \times 10^{90}$, more than the atoms in the observable universe. Any procedure must
-therefore *sample* the model space, which is what a Gibbs sampler over inclusion indicators does.
+realistic factor zoo gives $2 \times 10^{90}$, more than the atoms in the observable universe. Exhaustive enumeration is therefore impractical; sampling indicators is one way to explore this space without visiting every model.
 
 The second difficulty is statistical. Screening $p$ candidates at the five per cent level yields about $0.05p$
 spurious rejections even when nothing predicts anything, so a zoo of 1000 characteristics delivers some fifty
@@ -65,6 +64,34 @@ Kozak, Nagel and Santosh, who argue that the stochastic discount factor implied 
 approximated by a dense combination of characteristic portfolios. Because a Normal prior can make a coefficient
 arbitrarily small without setting it to zero, a dense model can mimic a sparse one arbitrarily well in fit, which is
 why the two are hard to separate.
+
+## Why introduce a hidden indicator for a coefficient?
+
+Suppose a new finance factor has coefficient $\beta_j$. We want to express two possible
+prior stories: its effect is negligible, or its effect may be economically substantial.
+A single moderately wide Normal distribution cannot give much concentration near zero
+while also putting substantial probability on large effects. We instead mix two Normals.
+
+Let $\gamma_j=0$ select a narrow component and $\gamma_j=1$ select a wide one.
+Draw this indicator first, with probability $\pi$ of the wide component, and then draw
+the coefficient conditional on it. Averaging over the unobserved indicator gives
+
+$$p(\beta_j)=(1-\pi)p(\beta_j\mid\gamma_j=0)
++\pi p(\beta_j\mid\gamma_j=1).$$
+
+This is the law of total probability from Week 1. The two densities describe possible
+effect sizes; $\pi$ describes how often we expect the wide component. In the continuous
+SSVS version used below, even the narrow component has positive variance. Thus
+$\gamma_j=0$ means strong shrinkage, **not an exactly zero coefficient**.
+
+How is the indicator updated? Given a coefficient draw, ask which component makes that
+value more plausible. Bayes' theorem says posterior odds equal prior odds times the ratio
+of the two component densities. A coefficient very close to zero usually favours the
+narrow component because its density is concentrated there. A sufficiently large
+coefficient favours the wide component. The regression data affect this comparison
+through the coefficient draw; once all coefficients and the variance are conditioned on,
+the likelihood contains no additional indicator term. That is the cancellation in the
+full conditional below, not an omission of the data.
 
 ## The spike-and-slab prior and its full conditionals
 
@@ -89,7 +116,7 @@ forced near zero, so the design matrix never changes size.
 
 Collecting the prior variances into $D_\gamma = \operatorname{diag}(d_1, \dots, d_p)$ with $d_j = (1-\gamma_j)\tau_j^2
 + \gamma_j c^2\tau_j^2$ gives $\beta \mid \gamma \sim \mathcal{N}(0, D_\gamma)$. Conditional on $\gamma$ the model is
-the conjugate Normal regression of Lecture 2:
+a conditionally Normal regression update. The coefficient prior here is independent of the error variance, unlike the scaled NIG prior in Lecture 2:
 $$
 \beta \mid \gamma, \sigma^2, y \sim \mathcal{N}(b_1, B_1), \quad
 B_1 = \Big(D_\gamma^{-1} + \tfrac{1}{\sigma^2} X^\top X\Big)^{-1}, \quad b_1 = \tfrac{1}{\sigma^2} B_1 X^\top y,

@@ -17,8 +17,7 @@ well. A causal question is different in kind. We do not want to know what a trea
 we want to know what that same firm would have looked like had it not been treated. That comparison
 is never observed for any single unit, which is why causal inference is often called a missing-data
 problem wearing econometric clothing. Once the causal effect is an unknown parameter, a posterior
-gives a whole distribution over it, and the assumptions that make it learnable sit in the
-likelihood.
+gives a whole distribution over it, conditional on the causal identification assumptions and the statistical model. Identification assumptions are additional restrictions; they are not established by a good likelihood fit.
 
 Two obstacles recur in applied work and this lecture takes them in turn. The first is
 **confounding**: units select into treatment on characteristics that also drive the outcome, so the
@@ -44,6 +43,33 @@ rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
+
+## Specify the comparison before writing a regression
+
+Consider a training subsidy and a firm's subsequent employment. For one particular firm,
+$Y_i(1)$ means employment if it receives the subsidy; $Y_i(0)$ means employment if the
+same firm does not. These are two possible outcomes for the same unit, not the observed
+outcomes of two different firms. Their difference defines the causal effect.
+
+Why write the observed outcome as $D_iY_i(1)+(1-D_i)Y_i(0)$? Substitute the two possible
+values of the treatment indicator. For $D_i=1$, the expression selects $Y_i(1)$; for
+$D_i=0$, it selects $Y_i(0)$. This equation records which potential outcome is observed.
+It does not yet tell us how to infer the missing one.
+
+Comparing a treated firm with an untreated firm fills in that missing comparison only
+under further assumptions. Suppose larger firms both seek subsidies and hire more people
+without them. Their higher employment cannot all be attributed to the subsidy.
+Conditioning on size compares firms with the same observed size, but is sufficient only
+if no remaining unmeasured factor confounds treatment and employment.
+
+The adjustment formula below therefore has three separate reasons: average within
+covariate groups; use conditional exchangeability to compare treatment arms within a
+group; use consistency to connect the potential outcome to the recorded outcome.
+Overlap ensures that the relevant comparisons exist in the data. A flexible BART
+regression helps estimate those within-group means. Bayes' theorem supplies uncertainty
+conditional on the assumptions; it cannot turn an unjustified comparison into an
+identified causal effect. We keep the causal assumptions separate from the distributional
+assumptions that make the posterior computable.
 
 ## Potential outcomes and the treatment effect
 

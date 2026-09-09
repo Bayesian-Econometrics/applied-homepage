@@ -40,6 +40,39 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## Why there are two equations, not one
+
+Suppose monthly measured inflation jumps. Did underlying inflation change, or was this
+month's number noisy? One observation cannot settle that question. We need assumptions
+about both how a measurement differs from the underlying quantity and how that quantity
+changes over time.
+
+Call underlying inflation $\alpha_t$. A simple measurement assumption is
+$y_t=\alpha_t+\varepsilon_t$: the reported number equals the state plus measurement noise.
+A separate evolution assumption is $\alpha_{t+1}=\alpha_t+\eta_t$: next month's state
+equals this month's state plus a new disturbance. The symbols have different jobs.
+$\varepsilon_t$ changes what we observe without changing the state; $\eta_t$ changes the
+state itself and therefore affects subsequent observations.
+
+If measurement noise is large and state disturbances are small, one unusual report
+should move our estimate only a little. If measurements are reliable but the state
+changes rapidly, we should respond much more. For example, suppose today's prior for
+the state has mean 2 and variance 1, while the new report is 4 with measurement variance 3.
+Normal updating gives
+
+$$\text{posterior mean}=2+\frac{1}{1+3}(4-2)=2.5.$$
+
+The report changes the estimate by one quarter of its surprise. The multiplier will be
+called the Kalman gain. It comes from combining two uncertain pieces of information,
+not from an arbitrary smoothing rule. Its derivation below collects the two Normal
+quadratics exactly as in Week 2.
+
+The general matrices now extend this scalar story. $Z_t$ selects or combines the state
+components we measure; $T_t$ propagates them; $R_t$ specifies where state disturbances
+enter. Their covariance matrices quantify the two sources of uncertainty. In the
+time-varying-beta exercise, the market return determines how informative an asset return
+is about the hidden beta: a market return near zero reveals little about its slope.
+
 ## The state-space form
 
 A linear Gaussian state-space model is a pair of equations. The **measurement

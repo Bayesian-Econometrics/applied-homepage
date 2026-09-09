@@ -16,6 +16,12 @@ uv run quarto render
 The output goes to `_site/`. The existing GitHub Actions workflow builds and publishes
 on pushes to `main`; a local render does not publish anything.
 
+Quarto generates JavaScript libraries for navigation, mathematical notation and slides.
+These live in `_site/`, `.quarto/` and the `_freeze/` execution cache; they are not
+hand-written course source files. All three directories and temporary `.quarto_ipynb`
+notebooks are ignored by Git. The current CI workflow rebuilds from the source, so the
+local cache does not need to be committed.
+
 ## Teaching material
 
 - `lecture-notes/`: intuition, posterior derivations, interpreted code and reading guides.

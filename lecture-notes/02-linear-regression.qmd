@@ -35,6 +35,42 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## Build the likelihood from one return observation
+
+Consider an asset and the market in a single month. Let $y_i$ be the asset's excess return
+and $x_i$ the market's excess return. We want to learn an intercept $\beta_0$ and a market
+exposure $\beta_1$. Our first modelling choice is that the expected asset return changes
+linearly with the market return. The realised return can differ from that expectation:
+
+$$y_i=\underbrace{\beta_0+\beta_1x_i}_{\text{conditional mean}}+
+\underbrace{\varepsilon_i}_{\text{unexplained return}}.$$
+
+For example, $\beta_0=0.002$, $\beta_1=1.2$ and $x_i=0.01$ imply a conditional mean
+of $0.014$, or 1.4%. They do not imply that the asset must return 1.4%.
+We still need a model for the unexplained part. Here we **assume** independent
+Normal errors with mean zero and variance $\sigma^2$. Symmetry, constant variance and
+independence are substantive simplifications, not consequences of being Bayesian.
+
+To find the density of the observed return, insert its residual
+$y_i-\beta_0-\beta_1x_i$ into the Normal density:
+
+$$p(y_i\mid\beta_0,\beta_1,\sigma^2,x_i)
+=\frac{1}{\sqrt{2\pi\sigma^2}}
+\exp\left[-\frac{(y_i-\beta_0-\beta_1x_i)^2}{2\sigma^2}\right].$$
+
+Why the squared residual? It is the exponent of the assumed Normal error density.
+Why divide by $\sigma^2$? A 2% error is surprising when the typical error is 0.5%,
+but much less surprising when it is 5%. The density measures the discrepancy in those units.
+
+For $n$ conditionally independent months, multiply these densities. Their prefactors
+become $(2\pi\sigma^2)^{-n/2}$ and their exponents add, producing a sum of squared
+residuals. After observing the data, hold $y$ and $X$ fixed and read this expression
+as a function of the unknowns: that is the **likelihood**.
+
+The matrix notation below only abbreviates this calculation. A row of $X$ is
+$(1,x_i)$, or $(1,x_i,z_i)$ when we add the size factor. The vector $y-X\beta$
+contains the individual residuals, and its inner product with itself sums their squares.
+
 ## The model in matrix form
 
 Stack the $n$ observations of the dependent variable into $y$ and the $k$ regressors into
@@ -79,6 +115,19 @@ down only to within about $\pm 0.22$, the size loading is indistinguishable from
 the estimated alpha is five times the truth. Prior information has something to add here.
 
 ## The Normal-Inverse-Gamma prior
+
+We need beliefs about two different unknowns: plausible exposures and plausible residual
+variance. The variance must be positive, so an unrestricted Normal prior would be a poor
+choice for it. An inverse-Gamma is one convenient positive distribution. Its kernel has
+a power of $\sigma^2$ and an exponential in $1/\sigma^2$, matching the variance terms in
+our Normal likelihood. This matching is the reason for choosing it here; other positive
+priors are possible and usually require different computation.
+
+For the coefficients, a Normal prior states a centre and uncertainty around it. Scaling
+that uncertainty by $\sigma^2$ creates the particular joint prior below: if the model is
+very noisy, it allows more prior variation in the coefficients too. That dependence buys
+the closed-form joint posterior. An independent coefficient prior is a different model,
+which we study with Gibbs sampling in Week 4.
 
 Conjugacy requires the prior on $\beta$ to be scaled by the same $\sigma^2$ that appears
 in the likelihood, so the **Normal-Inverse-Gamma** (NIG) prior is hierarchical,
@@ -154,9 +203,26 @@ and turns the first two terms into $(\beta - b_1)^\top B_1^{-1}(\beta - b_1) + Q
 remainder $Q = y^\top y + b_0^\top B_0^{-1}b_0 - b_1^\top B_1^{-1}b_1$. Precisions add, and
 $b_1$ is a matrix-weighted average of the prior mean and the least-squares fit.
 
-Integrating $\beta$ out contributes a factor $(\sigma^2)^{k/2}$ cancelling the
-$(\sigma^2)^{-k/2}$ from the prior, leaving an inverse-Gamma kernel whose shape becomes
-$\alpha_1 = \alpha_0 + n/2$ and whose scale becomes $\delta_1 = \delta_0 + Q/2$.
+There are two steps left after completing the square. **Holding the variance fixed**,
+the coefficient kernel is
+$\exp[-(\beta-b_1)^\top B_1^{-1}(\beta-b_1)/(2\sigma^2)]$.
+Reading its centre and quadratic coefficient identifies a Normal density with mean
+$b_1$ and covariance $\sigma^2B_1$. This is the conditional coefficient posterior.
+
+**To find the variance marginal**, integrate that coefficient kernel. A normalised
+$k$-dimensional Normal density integrates to one, so its unnormalised kernel integrates
+to its missing normalising factor:
+
+$$\int \exp\left[-\frac{(\beta-b_1)^\top B_1^{-1}(\beta-b_1)}{2\sigma^2}\right]d\beta
+=(2\pi\sigma^2)^{k/2}|B_1|^{1/2}.$$
+
+The only variance-dependent contribution is $(\sigma^2)^{k/2}$. Multiplying it into
+the joint kernel changes the power from $-(n+k)/2-\alpha_0-1$ to
+$-n/2-\alpha_0-1$. The remaining exponential is
+$\exp[-(\delta_0+Q/2)/\sigma^2]$. Comparing these two terms with the inverse-Gamma
+density identifies $\alpha_1=\alpha_0+n/2$ and $\delta_1=\delta_0+Q/2$.
+The $k/2$ disappears because we integrated the coefficients out; it would remain in
+the variance full conditional if we instead held them fixed.
 
 We now set the prior and encode the four formulas as one function, taking $B_0^{-1}$ as an
 argument so that we can later pass a matrix of zeros. The prior is the CAPM itself: alpha

@@ -44,6 +44,35 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## Why a prior pulls a noisy coefficient toward zero
+
+Suppose a single coefficient has an approximately Normal likelihood centred at its OLS
+estimate $\hat\beta$, with squared standard error $s^2$. A Normal prior with mean zero
+and variance $\tau^2$ gives the posterior kernel
+
+$$\exp\left[-\frac{(\beta-\hat\beta)^2}{2s^2}
+-\frac{\beta^2}{2\tau^2}\right].$$
+
+The first term penalises disagreement with the data, relative to their uncertainty.
+The second penalises disagreement with the prior, relative to its uncertainty.
+Expand the first square. The coefficient of $\beta^2$ is $s^{-2}+\tau^{-2}$;
+the coefficient of the linear term is $-2\hat\beta/s^2$. Matching these to
+$(\beta-m)^2/V$ gives
+
+$$V=(s^{-2}+\tau^{-2})^{-1},\qquad
+m=\frac{\tau^2}{\tau^2+s^2}\hat\beta.$$
+
+If $\hat\beta=0.4$, $s=0.5$ and $\tau=0.2$, the posterior mean is about $0.055$.
+If the same estimate has $s=0.05$, it is about $0.376$. The prior barely moves the
+precise estimate but substantially moves the noisy one. Shrinkage responds to the
+strength of evidence; it is not an instruction that every coefficient must be zero.
+
+The multivariate calculation below repeats this argument using a matrix of information.
+Correlated regressors make some combinations of coefficients poorly measured, which is
+why merely shrinking each OLS coefficient by a common fraction is generally incorrect.
+The Minnesota prior later assigns different prior variances and means to different
+lag coefficients. It uses the same updating logic with beliefs specific to time series.
+
 ## Shrinkage as a prior: from Normal prior to ridge
 
 Consider the linear regression

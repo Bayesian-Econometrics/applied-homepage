@@ -9,6 +9,31 @@ Practise the derivation and implementation in [Week 3: Vanilla Monte Carlo](../e
 :::
 
 
+## An integral is a probability-weighted average
+
+Before working with a continuous posterior, imagine only three possible parameter values:
+$0.1$, $0.3$ and $0.6$, with posterior probabilities $0.2$, $0.5$ and $0.3$.
+The posterior mean is
+
+$$0.2(0.1)+0.5(0.3)+0.3(0.6)=0.35.$$
+
+The probability that the parameter exceeds $0.4$ is $0.3$: only the last possibility
+satisfies the event. We obtained two answers from the same posterior by changing what we
+average. For a mean, average the parameter itself. For an event probability, average a
+variable that equals one when the event holds and zero otherwise.
+
+With a continuous parameter, a small interval of width $\Delta$ near $\theta_j$ has
+probability approximately $p(\theta_j\mid y)\Delta$. The corresponding weighted sum is
+$\sum_j g(\theta_j)p(\theta_j\mid y)\Delta$. Making the intervals finer gives the
+integral below. The function $g$ simply records the question we are asking.
+
+Monte Carlo uses a different way to represent the probabilities. In a large sample from
+our three-point posterior, roughly 20% of draws equal $0.1$, 50% equal $0.3$ and 30%
+equal $0.6$. Their **unweighted** average already incorporates the posterior probabilities
+through those frequencies. Weighting those draws by the posterior again would count it
+twice. Importance weights become necessary only when draws instead come from a different
+distribution. Keep this distinction in mind when we introduce the two estimators.
+
 ## Why posterior expectations are integrals
 
 Lecture 1 ended on a specific complaint: the grid trick that solved the coin-tossing
@@ -29,11 +54,12 @@ $$
 for some choice of $g$: the identity function for a mean, an indicator for a
 probability, a squared deviation for a variance. In the conjugate models of Lecture 1
 these integrals had closed forms because we could recognise the kernel. That was a
-lucky accident of the beta and gamma families. As soon as the model has more than a
-couple of parameters, or the prior and likelihood do not pair into a known family, the
-integral has no analytic solution, and the grid we used as a stopgap scales
-exponentially in the dimension rather than linearly. Quadrature is not a smaller,
-slower version of the right method; it is the wrong method entirely once $d$ grows.
+consequence of the chosen distribution families. A higher-dimensional conjugate model
+can still have analytic answers, as the regression model showed. With other prior and
+likelihood combinations, the required integral may lack a convenient closed form.
+Regular-grid quadrature remains useful in low dimensions, but its number of evaluation
+points grows exponentially with dimension. Monte Carlo offers a different approximation
+whose error is governed by variation in the quantity we are estimating.
 
 The resolution is to stop trying to cover the whole parameter space with points and
 instead put points where the posterior actually has mass, by drawing random samples

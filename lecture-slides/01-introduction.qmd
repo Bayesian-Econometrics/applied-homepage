@@ -111,29 +111,11 @@ and basic scientific computing.
 
 # The Bayesian paradigm
 
-## Bayes' theorem
-
-For parameters $\theta$ and data $y$:
-
-$$
-p(\theta \mid y) \;=\; \frac{p(y \mid \theta)\,p(\theta)}{p(y)}
-\;\propto\; \underbrace{p(y \mid \theta)}_{\text{likelihood}}\;\underbrace{p(\theta)}_{\text{prior}}
-$$
-
-- The **posterior** $p(\theta \mid y)$ is what we report
-- The **prior** $p(\theta)$ encodes what we knew beforehand
-- The marginal likelihood $p(y)$ is a normalising constant
-
-. . .
-
-Everything in this course is, in one way or another, a strategy for computing or
-approximating that posterior.
-
 ## Frequentist vs. Bayesian, in one slide
 
 | | Frequentist | Bayesian |
 |---|---|---|
-| Parameter | fixed, unknown | random, uncertain |
+| Parameter | fixed, unknown | uncertainty represented by a distribution |
 | Probability | long-run frequency | degree of belief |
 | Output | estimate + CI | posterior distribution |
 | Uncertainty | sampling variability | full posterior |
@@ -167,16 +149,57 @@ $$P(D\mid W)=\frac{P(W\mid D)P(D)}{P(W\mid D)P(D)+P(W\mid D^c)P(D^c)}.$$
 
 The denominator counts **all ways** a warning can occur.
 
-## A first example: estimating a probability
+## Bayes' theorem
 
-Suppose we observe $y$ successes in $n$ trials and want the success probability $\theta$.
+For parameters $\theta$ and data $y$:
 
-- Likelihood: $y \mid \theta \sim \text{Binomial}(n, \theta)$
-- Prior: $\theta \sim \text{Beta}(a, b)$
-- Posterior: $\theta \mid y \sim \text{Beta}(a + y,\; b + n - y)$
+$$
+p(\theta \mid y) \;=\; \frac{p(y \mid \theta)\,p(\theta)}{p(y)}
+\;\propto\; \underbrace{p(y \mid \theta)}_{\text{likelihood}}\;\underbrace{p(\theta)}_{\text{prior}}
+$$
 
-The Beta prior is **conjugate** to the binomial likelihood, so the posterior is
-again Beta. We will lose conjugacy quickly, which is exactly why we need MCMC.
+- The **posterior** $p(\theta \mid y)$ is what we report
+- The **prior** $p(\theta)$ encodes what we knew beforehand
+- The marginal likelihood $p(y)$ is a normalising constant
+
+. . .
+
+Everything in this course is, in one way or another, a strategy for computing or
+approximating that posterior.
+
+## One binary observation
+
+Record $x=1$ for a success and $x=0$ for a failure. Let $\theta$ be the success probability.
+
+$$p(x\mid\theta)=\theta^x(1-\theta)^{1-x}.$$
+
+Substitute $x=1$: the expression is $\theta$.
+Substitute $x=0$: it is $1-\theta$.
+
+The exponents combine the two cases in one line.
+
+## Why the binomial likelihood has those powers
+
+Assume $n$ trials are independent conditional on the same $\theta$.
+Multiplying their probabilities gives one factor $\theta$ per success and one
+factor $1-\theta$ per failure.
+
+For a count of $y$ successes, sum over its $\binom ny$ possible sequences:
+
+$$p(y\mid\theta)=\binom ny\theta^y(1-\theta)^{n-y}.$$
+
+Independence and a common probability are modelling assumptions.
+
+## Choosing a prior on the unknown probability
+
+A prior must put its probability on $0<\theta<1$.
+The Beta family is a convenient flexible choice:
+
+$$p(\theta)\propto\theta^{a-1}(1-\theta)^{b-1}.$$
+
+- Its mean $a/(a+b)$ expresses the prior centre.
+- Its concentration $a+b$ controls how firmly we hold that belief.
+- Its powers match the likelihood, which makes the update easy to derive.
 
 ## Deriving the Beta posterior: collect powers
 

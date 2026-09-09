@@ -10,6 +10,37 @@ The [Week 13 exercise session](../exercise-sessions/13-portfolio-choice.qmd) con
 chapter's practice questions.
 :::
 
+## Separate the uncertain return from the chosen action
+
+An investor chooses weights today, before seeing tomorrow's returns. With two assets,
+$w_1r_1+w_2r_2$ is the portfolio's excess return: each asset return contributes in
+proportion to the chosen exposure. We write this sum as $w^\top r$. The weights are
+decision variables; the return vector is uncertain. A posterior describes uncertainty
+about the return model, not uncertainty about an action we control.
+
+Why not simply maximise expected return? Without position constraints, that would call
+for arbitrarily large exposure to any asset with positive expected excess return.
+Concave utility makes a loss more painful than an equally sized gain is attractive.
+We evaluate utility in each possible return scenario and then average using its
+predictive probability. In general, utility of the average return is not the same thing.
+
+For the first calculation we make two explicit simplifying assumptions: the return
+vector is Normal with known mean and covariance, and utility is exponential with
+risk-aversion parameter $\gamma>0$. If the portfolio return is $R=m+sZ$ with
+$Z\sim N(0,1)$, completing the square in its expectation gives
+
+$$E[e^{-\gamma R}]=e^{-\gamma m}
+\int e^{-\gamma sz}\frac{e^{-z^2/2}}{\sqrt{2\pi}}\,dz
+=e^{-\gamma m+\gamma^2s^2/2}.$$
+
+The last step uses $-z^2/2-\gamma sz=-(z+\gamma s)^2/2+\gamma^2s^2/2$;
+the shifted Normal density integrates to one. This is where the mean–variance
+expression below comes from. Its unconstrained weights allow risky exposures to sum
+to something other than one, with the remainder in cash. Long-only or fully invested
+constraints require a different optimisation problem. Later, integrating parameter
+uncertainty changes the return distribution, so we must revisit the utility calculation
+instead of assuming that the Normal formula still applies.
+
 ## The investor's problem
 
 An investor with wealth to allocate across $n$ risky assets chooses portfolio weights $w$
@@ -62,7 +93,7 @@ the truth, the *known-parameter* problem at an estimated point rather than the i
 actual problem of weighing outcomes given everything, including the parameters, that is
 uncertain. The damage is not spread evenly: the rule inverts the covariance matrix, and
 inversion amplifies error along directions where the matrix is nearly singular. Assets
-with high sample correlation make $\hat\Sigma$ close to singular in their common
+with high sample correlation make $\hat\Sigma$ close to singular in a difference
 direction, so $\hat\Sigma^{-1}$ has a huge eigenvalue there and stretches any noise in
 $\hat\mu$ into an enormous, offsetting position, the instability of plug-in portfolios.
 

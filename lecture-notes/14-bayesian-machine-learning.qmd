@@ -12,7 +12,7 @@ chapter's practice questions.
 
 ## Priors over functions
 
-Every model so far has been parametric. We wrote down a likelihood indexed by a finite vector, put a
+Our early models were parametric. We wrote down a likelihood indexed by a finite vector, put a
 prior on that vector and reported its posterior. The parameters carried the economics: an
 autoregressive coefficient, a persistence in volatility, a treatment effect. The functional form was
 assumed known and the uncertainty lived in the coefficients. That is reasonable when theory pins the
@@ -42,6 +42,39 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
 
+## A prior over two unknown function values
+
+Suppose $x$ is a valuation measure and $f(x)$ is the expected return at that valuation.
+We observe noisy returns, not $f$ itself. Before introducing a whole random function,
+consider only two unknown values, $f(x_1)$ and $f(x_2)$. If nearby valuations should
+have similar expected returns, learning about one value should inform the other.
+One way to express this is a joint Normal prior:
+
+$$\begin{pmatrix}f(x_1)\\f(x_2)\end{pmatrix}
+\sim N\left(\begin{pmatrix}0\\0\end{pmatrix},
+\sigma_f^2\begin{pmatrix}1&\rho\\\rho&1\end{pmatrix}\right).$$
+
+The zero means refer to deviations around the chosen baseline. The variance
+$\sigma_f^2$ measures plausible deviations; $\rho$ says how strongly the two values
+move together in our prior. If we observed $f(x_1)=a$ without noise, Normal conditioning
+would give $E[f(x_2)\mid f(x_1)=a]=\rho a$ and variance $\sigma_f^2(1-\rho^2)$.
+At $\rho=0$ the observation teaches us nothing about the second point. At $\rho=0.9$
+it teaches us a great deal. Observation noise reduces that information transfer.
+
+A **kernel** generalises this covariance assignment to any pair of inputs.
+It must produce a positive semidefinite covariance matrix for every finite set of
+inputs; an arbitrary similarity score is not enough. A Gaussian process asks that all
+these finite collections be jointly Gaussian with those covariances. Prediction then
+uses the same finite-dimensional Normal conditioning rule, even though we describe
+the unknown object as a function.
+
+The basis calculation below shows another route to this prior. A random intercept
+and slope already produce a random line: $f(x)=w_0+w_1x$. If independent prior
+variances are $v_0,v_1$, then $\operatorname{Cov}(f(x),f(x'))=v_0+v_1xx'$.
+The general formula is this same multiplication with more features. Gaussianity and
+the chosen covariance structure are prior assumptions, not properties guaranteed by
+financial data.
+
 ## From basis expansions to Gaussian processes
 
 Start from something familiar. Take a Bayesian linear model in a **basis expansion**, so that the
@@ -57,24 +90,28 @@ $$
 The weights have vanished. Whatever the basis was, all that survives into the distribution of the
 function is the **kernel** $k$, a function of two inputs, and prediction never needs $w$ at all.
 
-Let the basis get rich: put $M$ radial features $\phi_m(x) = \exp\{-(x - c_m)^2 / (2h^2)\}$ at
-centres $c_m$ spread over the input space, with $\Sigma_w = (\sigma_f^2 / M) I$ so the prior
-variance of $f$ stays finite as $M$ grows. The kernel is an average of products of bumps, and as the
-centres become dense that average becomes an integral. Since $(x - c)^2 + (x' - c)^2 = 2\{c - (x +
-x')/2\}^2 + (x - x')^2/2$, integrating out the centre leaves a factor depending only on their
-distance,
+A useful smooth kernel can be derived from overlapping Gaussian bumps. Let
+$\phi_c(x)=\exp[-(x-c)^2/(2h^2)]$ and define
+$k(x,x')=C\int_{-\infty}^{\infty}\phi_c(x)\phi_c(x')\,dc$ for $C>0$.
+This is a covariance construction: any finite quadratic form in $k$ is the integral
+of a square and is nonnegative. Completing the square gives
 
-$$
-k(x, x') \;\propto\; \exp\!\left\{ -\frac{(x - x')^2}{4 h^2} \right\}
-\;=\; \sigma_f^2 \exp\!\left\{ -\frac{(x - x')^2}{2 \ell^2} \right\},
-\qquad \ell = h \sqrt{2} .
-$$
+$$\begin{aligned}
+(x-c)^2+(x'-c)^2&=2\left(c-\frac{x+x'}2\right)^2+\frac{(x-x')^2}{2},\\
+k(x,x')&=Ch\sqrt{\pi}\exp\left[-\frac{(x-x')^2}{4h^2}\right].
+\end{aligned}$$
 
-The infinitely rich basis expansion has collapsed to the **squared-exponential kernel** with signal
-variance $\sigma_f^2$ and length scale $\ell$, and a model with infinitely many parameters turns out
-cheaper than one with a thousand. This is what $f \sim \mathcal{GP}(0, k)$ means: a **Gaussian
-process** prior is a prior over functions under which every finite set of values is jointly Gaussian
-with covariance $k$ (Rasmussen and Williams, 2006).
+Choose $C=\sigma_f^2/(h\sqrt{\pi})$ and write $\ell=\sqrt2h$. Then
+$k(x,x')=\sigma_f^2\exp[-(x-x')^2/(2\ell^2)]$, the **squared-exponential kernel**.
+Its amplitude controls marginal function variance, and its length scale controls
+how quickly covariance decays with input distance. Integrating bumps only over a
+bounded range generally introduces boundary effects; simply adding more features
+on a fixed finite interval does not yield this exact translation-invariant kernel.
+
+Writing $f\sim\mathcal{GP}(0,k)$ specifies the associated prior over function values.
+We compute with covariance matrices at the observed and requested inputs, not with
+an explicit infinite list of coefficients. Its computational cost still grows with
+the number of observations, as the implementation below makes clear.
 
 ### Derive a posterior over functions using a familiar Gaussian identity
 

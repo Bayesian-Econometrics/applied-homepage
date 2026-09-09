@@ -21,7 +21,7 @@ and becomes essentially hopeless as the dimension of $\theta$ grows: a proposal 
 covers a $k$-dimensional target well needs to get every marginal and every correlation
 roughly right at once, and the fraction of its draws that land where $f$ actually lives
 shrinks geometrically in $k$. Choosing $q$ was already the hard part of Lecture 3; in
-more than a few dimensions it stops being feasible at all.
+higher dimensions it can become prohibitively difficult without a well-adapted proposal.
 
 The Gibbs sampler responds to this by giving up on independent draws from the joint
 distribution altogether. Instead of proposing a whole vector $\theta$ at once, it updates
@@ -44,6 +44,33 @@ rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
+
+## What does conditioning on the current variance mean?
+
+Imagine observing a short series of returns and trying to learn both its average and its
+volatility. With a large volatility, a proposed average can be quite far from the sample
+mean without making the observations implausible. With a small volatility, the same
+discrepancy is strong evidence against that average. The two unknowns therefore interact.
+
+Gibbs sampling temporarily fixes one unknown **for one calculation**. Given a particular
+variance, learning the mean is a one-parameter Normal update. Then, given the newly drawn
+mean, squared residuals tell us about the variance. The next iteration repeats both
+calculations using new values. We are not claiming that either parameter is actually
+known, nor fixing either at its estimated value forever.
+
+Below we describe volatility by its **precision** $\tau=1/\sigma^2$.
+For a known precision, one observation has density proportional to
+$\sqrt{\tau}\exp[-\tau(x_i-\mu)^2/2]$. Thus a large $\tau$ means a narrow density:
+the observation is informative about $\mu$. For $n$ independent observations, multiplication
+produces $\tau^{n/2}\exp[-\tau\sum_i(x_i-\mu)^2/2]$.
+Read this expression once as a function of $\mu$, and once as a function of $\tau$.
+In the first reading it is a quadratic exponential; in the second it is a power times
+an exponential. That is why Normal and Gamma full conditionals will appear.
+
+Choosing an independent Normal prior for $\mu$ and a Gamma prior for $\tau$ expresses
+separate beliefs about location and precision. It differs from Week 2's scaled NIG
+prior. The conditional derivations must follow the prior actually chosen; changing the
+prior while keeping the old sampler would change the question without changing the answer.
 
 ## A model where the joint is hard but the pieces are easy
 

@@ -46,6 +46,33 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 
 Every random quantity below comes from this one generator, so the printed numbers reproduce exactly.
 
+## Why an accept/reject correction is needed
+
+Imagine a posterior over two states, $A$ and $B$, with probabilities $0.8$ and $0.2$.
+Suppose our proposal always suggests the other state. If we accepted every proposal,
+the chain would alternate and spend half its time in each state. The proposal alone
+would give the wrong distribution.
+
+Instead, accept every proposal from $B$ to $A$, but only one quarter of proposals from
+$A$ to $B$. At the desired posterior distribution, the probability flowing in each
+direction in one step is now equal:
+
+$$\underbrace{0.8}_{P(A)}\underbrace{1}_{q(B\mid A)}
+\underbrace{0.25}_{\text{accept}}=
+\underbrace{0.2}_{P(B)}\underbrace{1}_{q(A\mid B)}
+\underbrace{1}_{\text{accept}}.$$
+
+Both flows are $0.2$. Rejected moves leave the chain in $A$, giving it the extra time
+there that the posterior requires. We must record those repeated states: recording
+only accepted moves would again give equal visits to $A$ and $B$.
+
+For a continuous parameter the same argument compares flow between small neighbourhoods.
+Replace the two probabilities by posterior densities and include the proposal density in
+each direction. Solving that balance gives the acceptance ratio below. If the proposal
+favours one direction, its density ratio corrects that preference too. The accept/reject
+step is therefore a device for obtaining the right long-run frequencies, not a test of
+whether a proposed parameter is economically correct.
+
 ## The Metropolis-Hastings algorithm
 
 Let $\pi(\theta) \propto p(y \mid \theta)\,p(\theta)$ be the target posterior, known only up to the
