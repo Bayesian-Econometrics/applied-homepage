@@ -10,6 +10,42 @@ The [Week 14 exercise session](../exercise-sessions/14-bayesian-machine-learning
 chapter's practice questions.
 :::
 
+## Start with a forecasting question: can a nonlinear signal survive return noise?
+
+A strategist claims that small market falls and large market falls have
+different implications for next month's sector return. **Does a nonlinear model
+learn a repeatable relationship, or simply fit yesterday's noise?**
+
+Let $x_t$ contain information available at the forecast date and write
+$r_{t+1}=f(x_t)+\varepsilon_{t+1}$. This first equation separates a conditional
+mean from unpredictable news. OLS restricts $f$ to a plane; BART and Gaussian
+processes place priors on more flexible functions. They do not remove the news term.
+
+Understand one BART leaf before an entire ensemble. After subtracting other
+trees' contributions, suppose a leaf contains four partial residuals averaging
+0.6 percentage points. Let residual variance be 1 and the leaf prior be
+$\mu_\ell\sim N(0,0.25^2)$. Multiplying likelihood and prior yields precision
+$4+16=20$ and posterior mean
+
+$$E[\mu_\ell\mid\text{rest}]=\frac{4(0.6)+16(0)}{20}=0.12.$$
+
+The posterior variance is $1/20$. A small group with an apparently high return
+does not get its sample mean reproduced without restraint. The prior shrinks
+each tree's adjustment, while the ensemble can build a flexible overall curve.
+The algorithm must also learn split locations and tree sizes; fitting fixed
+groups alone is not BART.
+
+A GP expresses a related intuition differently: inputs judged similar by the
+kernel should have related function values. Its posterior updates those beliefs
+using observed returns. Both approaches distinguish uncertainty about $f(x)$
+from the larger uncertainty about a realised return.
+
+The empirical comparison must use lagged predictors and held-out dates. Using
+this month's realised market factor to explain this month's sector return is
+an exposure regression, not an implementable forecast of that return. The
+scheduled BART-versus-OLS exercise repeats the comparison at weaker signals so
+students can see when flexibility contributes little.
+
 ## Priors over functions
 
 Our early models were parametric. We wrote down a likelihood indexed by a finite vector, put a

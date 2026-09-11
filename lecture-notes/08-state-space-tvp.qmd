@@ -10,6 +10,41 @@ The [Week 8 exercise session](../exercise-sessions/08-state-space-tvp.qmd) conta
 chapter's practice questions.
 :::
 
+## Start with a changing exposure: has a bank's market beta risen?
+
+A bank may take on more market risk during a crisis. Estimating one beta over
+twenty years averages over that change; fitting a new regression each month
+throws away useful history. **How should today's return update yesterday's
+belief about exposure?**
+
+For the first calculation, omit alpha and write
+$y_t=x_t\beta_t+\varepsilon_t$. This relates the observed bank return to the
+observed market return. We need a second equation because beta is not observed:
+$\beta_t=\beta_{t-1}+\eta_t$. Small state variance says exposures usually change
+gradually; small observation variance says a return is a precise signal about beta.
+
+Suppose our predicted beta is $N(1,0.04)$. Today the market rises by 2 percentage
+points and the bank by 3; let return-noise variance be 1 squared percentage point.
+The predicted bank return is 2, so the innovation is $3-2=1$. Its variance has
+two sources: $F=2^2(0.04)+1=1.16$. The gain is $K=0.04(2)/1.16\approx0.069$.
+The updated beta mean is $1+K(1)=1.069$, with variance about 0.0345.
+
+These formulas can be derived without memorising a filter. Multiply
+$N(\beta_t;m^-,C^-)$ by $N(y_t;x_t\beta_t,R)$ and complete the square:
+
+$$C^+=(1/C^-+x_t^2/R)^{-1},\qquad
+m^+=C^+(m^-/C^-+x_ty_t/R).$$
+
+Rearranging gives $m^+=m^-+K(y_t-x_tm^-)$: prior forecast plus a fraction of
+the forecast error. If the market return were zero, this observation equation
+would provide no direct information about beta. If idiosyncratic noise were much
+larger, the update would also be smaller.
+
+That is the Kalman filter's intuition. Carry today's posterior forward, add
+state uncertainty, and repeat. The exercise tracks market betas with these
+recursions. Later smoothing uses future observations to revise the past and
+must not be presented as information available to an investor at the time.
+
 ## Why state-space models
 
 Many macroeconomic quantities we care about are not observed directly. Trend output,

@@ -10,6 +10,42 @@ The [Week 13 exercise session](../exercise-sessions/13-portfolio-choice.qmd) con
 chapter's practice questions.
 :::
 
+## Start with an allocation decision: how much confidence should a weight express?
+
+An investor chooses between a risky portfolio and cash. **Should a noisy estimate
+of a high expected return lead to a large risky position?** The posterior is an
+input to the decision, not the decision itself.
+
+For an illustrative one-year calculation, let risky excess return satisfy
+$R\mid\mu\sim N(\mu,0.04)$ and let the posterior mean-return distribution be
+$\mu\mid y\sim N(0.06,0.01)$. Return units are decimals: 0.06 means 6%.
+The future shock and mean uncertainty are independent, so
+$R\mid y\sim N(0.06,0.05)$. The extra 0.01 is uncertainty about the expected
+return, not additional historical return variation.
+
+Use utility $U(wR)=-\exp(-\gamma wR)$ with $\gamma=3$. Completing the square in
+the Normal expectation gives
+
+$$E[U(wR)\mid y]=-exp[-\gamma w(0.06)+\tfrac12\gamma^2w^2(0.05)].$$
+
+Maximising it is equivalent to maximising
+$0.06w-\gamma(0.05)w^2/2$. Differentiate: $0.06-\gamma(0.05)w=0$,
+so $w^*=0.4$. Plugging in the mean and ignoring its uncertainty instead gives
+$0.06/(3\cdot0.04)=0.5$. Here parameter uncertainty lowers the risky weight
+from 50% to 40%; neither number is a recommendation for an actual investor.
+
+The result is exact for this Normal predictive model and this utility function.
+It is not permission to apply the same formula to every posterior predictive
+distribution. With nonlinear utility, average utility across predictive draws,
+not utility evaluated at the average draw. Some heavy-tailed distributions do
+not even have finite expected exponential utility, which is why the later
+discussion checks the objective before optimising it.
+
+In the exercise, specify wealth units, constraints and preferences first. Then
+choose the allocation that maximises the stated predictive expected utility.
+Use the same predictive scenarios when comparing weights, so Monte Carlo noise
+does not masquerade as a better investment decision.
+
 ## Separate the uncertain return from the chosen action
 
 An investor chooses weights today, before seeing tomorrow's returns. With two assets,

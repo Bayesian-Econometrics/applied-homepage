@@ -10,6 +10,41 @@ The [Week 12 exercise session](../exercise-sessions/12-stochastic-volatility.qmd
 chapter's practice questions.
 :::
 
+## Start at a risk desk: does one large return imply a new volatility regime?
+
+A large market move raises the next day's risk estimate, but a single surprise
+need not mean risk has permanently doubled. **How do we separate an unusually
+large shock from a persistently high volatility state?**
+
+Write a demeaned return as $r_t=\exp(h_t/2)\varepsilon_t$ with
+$\varepsilon_t\sim N(0,1)$. The multiplier is the conditional standard deviation;
+$h_t$ is its log variance. Exponentiating ensures a positive variance.
+For persistence, let $h_t-\mu=\phi(h_{t-1}-\mu)+\eta_t$.
+The first equation describes returns given risk; the second describes how risk changes.
+
+Compare two hypothetical daily standard deviations, 1% and 2%, after observing
+a 3% return. In percentage-point units, the Normal likelihood ratio favouring
+2% over 1% is
+
+$$\frac{p(r=3\mid s=2)}{p(r=3\mid s=1)}
+=\frac12\exp\left[-\frac9{8}+\frac9{2}\right]\approx14.6.$$
+
+With prior probability 0.1 on the high-volatility state, its posterior probability
+would become $1.46/(1.46+0.9)\approx0.619$ in this two-state illustration.
+A large move is evidence for higher risk, but the prior and neighbouring dates
+still matter. The continuous SV model makes this comparison over all plausible states.
+
+If neighbouring states imply a conditional prior $h_t\sim N(m_t,v_t)$, the
+return density contributes $\exp[-h_t/2-r_t^2e^{-h_t}/2]$. Multiplication gives
+
+$$\log p(h_t\mid\text{rest})=
+-\frac{(h_t-m_t)^2}{2v_t}-\frac{h_t}{2}-\frac{r_t^2e^{-h_t}}2+\text{constant}.$$
+
+The first term discourages implausible jumps, the second prevents arbitrarily
+large variance, and the third penalises variance too small to explain the return.
+The exponential in the last term prevents a Normal full conditional. The JPR
+exercise is machinery for drawing from this economically interpretable target.
+
 ## Volatility as a latent state
 
 Asset returns are not homoskedastic. Quiet weeks and turbulent weeks arrive in clusters,
@@ -27,19 +62,29 @@ delivers the likelihood, which becomes a high-dimensional integral with no close
 Simulation is then indispensable rather than merely convenient: the only practical way to
 learn about the parameters is to sample the volatility path and the parameters jointly. We
 build such a sampler from scratch in the single-move Metropolis-within-Gibbs style of
-Jacquier, Polson and Rossi, apply it to a simulated series where the truth is known, and
-use the output to show how weakly the data identify the persistence of volatility.
+Jacquier, Polson and Rossi and apply it to eighteen years of daily US market excess
+returns spanning the financial crisis and the pandemic crash. The output answers three
+questions a risk desk actually asks: how persistent volatility is, where the estimated
+volatility path puts its peaks, and whether the model tells us anything a simple
+exponentially weighted variance does not.
 
 ```{python}
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy import stats
 import matplotlib.pyplot as plt
 
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+
 rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
+
+The seed fixes the sampler's random numbers. No returns are simulated anywhere in this
+chapter; every figure and every number below comes from the daily market data loaded next.
 
 ## Build the return equation from a changing scale
 
@@ -93,31 +138,49 @@ slowly, with half-life $\log(0.5)/\log\phi$. Since $r_t$ is normal with a random
 its unconditional distribution is a scale mixture of normals with kurtosis
 $3\exp\big(\sigma_h^2/(1-\phi^2)\big)$, so the model delivers fat tails with no
 non-Gaussian ingredient, while $\mathbb{E}[r_t \mid h_t] = 0$ keeps returns unpredictable
-in level. The chunk below simulates $700$ observations, three years of daily data.
+in level.
 
-**Reading the computation.** The stationary initial draw and AR transition generate persistent log variance. Exponentiating half the state turns log variance into return standard deviation; exponentiating the full state gives variance.
+The data are the daily excess return on the US market portfolio from the Kenneth French
+data library, over the window from January 2005 to December 2022. That window is chosen
+so that the sample contains more than one crisis rather than one: the financial crisis of
+2008 and 2009, the flash crash of May 2010, the euro area and downgrade turmoil of August
+2011, the pandemic crash of March 2020 and the inflation and rate shock of 2022. Eighteen
+years is also short enough that the whole sampler, path and parameters together, runs in
+about ten seconds, so nothing in this chapter needs subsampling or a shortened chain; the
+budget is spent on iterations instead, as the sampler mixes slowly.
+
+The model is written for a demeaned return, so we subtract the sample mean of the window
+before doing anything else. The mean daily excess return is small relative to the daily
+standard deviation, so this step changes very little, but the model has no intercept in
+the measurement equation and leaving one in would push it into the volatility state.
+
+**Reading the computation.** The block loads the daily factor file, cuts the window,
+subtracts the sample mean, and reports the moments that any volatility model has to
+account for.
 
 ```{python}
-T = 700
-mu_true, phi_true, sig_true = -9.0, 0.95, 0.30
+ff_d = pd.read_parquet(DATA / "ff_factors_daily.parquet")
+window = ff_d["2005-01-01":"2022-12-31"]
+dates = window.index
+r = (window["mkt_rf"] - window["mkt_rf"].mean()).to_numpy()
+T = r.size
 
-h_true = np.empty(T)
-h_true[0] = mu_true + (sig_true / np.sqrt(1 - phi_true**2)) * rng.standard_normal()
-for t in range(1, T):
-    h_true[t] = mu_true + phi_true * (h_true[t-1] - mu_true) \
-        + sig_true * rng.standard_normal()
-r = np.exp(h_true / 2) * rng.standard_normal(T)
-vol_true = np.exp(h_true / 2)
-
-print(f"lowest / highest daily volatility  {vol_true.min():.4f} / {vol_true.max():.4f}")
-print(f"sample excess kurtosis of returns  {stats.kurtosis(r):.2f}")
-print(f"half-life of a volatility shock    {np.log(0.5)/np.log(phi_true):.1f} days")
+print(f"{T} trading days, {dates[0]:%Y-%m-%d} to {dates[-1]:%Y-%m-%d}")
+print(f"mean daily excess return removed  {window['mkt_rf'].mean():.6f}")
+print(f"daily standard deviation          {r.std(ddof=1):.6f} "
+      f"({np.sqrt(252)*r.std(ddof=1):.2%} a year)")
+print(f"sample excess kurtosis            {stats.kurtosis(r):.2f}")
+print(f"worst day  {r.min():.4f} on {dates[r.argmin()]:%Y-%m-%d}")
+print(f"best day   {r.max():.4f} on {dates[r.argmax()]:%Y-%m-%d}")
 ```
 
-The simulated series behaves like a real one: daily volatility ranges over more than a
-factor of ten between the calmest and the most turbulent day, the excess kurtosis is far
-above the Gaussian value of zero even though every shock is normal, and a volatility shock
-takes a fortnight to decay by half.
+The sample is $4{,}531$ trading days. Its unconditional daily standard deviation is
+$1.2570\%$, an annualised volatility of $19.95\%$, and its excess kurtosis is $11.14$,
+far above the Gaussian value of zero. The worst day is $-12.05\%$ on 16 March 2020 and
+the best is $11.32\%$ on 13 October 2008, and it is not a coincidence that the two
+largest moves of either sign sit inside the two largest crises: the fat tails and the
+volatility clustering are two descriptions of the same phenomenon, which is precisely
+what the stochastic-volatility model is built to say.
 
 ## Why the likelihood is intractable
 
@@ -130,7 +193,7 @@ p(r_{1:T} \mid \theta)
 $$
 
 where $p(r_t \mid h_t)$ is the $\mathcal{N}(0, e^{h_t})$ density. This integral has
-dimension $700$ and no closed form. In a linear Gaussian state-space model the Kalman
+dimension $4{,}531$, one for every trading day in the window, and no closed form. In a linear Gaussian state-space model the Kalman
 filter would compute it recursively because each step maps a Gaussian into a Gaussian;
 here the measurement density is Gaussian in $r_t$ but not in $h_t$, so the product of
 measurement density and Gaussian prior is not Gaussian and the recursion cannot be closed.
@@ -168,7 +231,12 @@ The workhorse construction, due to Jacquier, Polson and Rossi, updates the path 
 at a time. Because the state equation is a first-order Markov chain, the full conditional
 of $h_t$ involves only its neighbours and the return observed at $t$, so that $p(h_t \mid
 h_{t-1}, h_{t+1}, r_t, \theta) \propto p(r_t \mid h_t)\, p(h_t \mid h_{t-1})\, p(h_{t+1}
-\mid h_t)$. Write the state equation in regression form as $h_t = \alpha + \phi h_{t-1} +
+\mid h_t)$.
+
+::: {.callout-note collapse="true"}
+## Derivation: the Gaussian part of a single state's conditional
+
+Write the state equation in regression form as $h_t = \alpha + \phi h_{t-1} +
 \sigma_h \zeta_t$ with $\alpha = \mu(1-\phi)$. Completing the square in the exponent of
 the two Gaussian transition densities, $-(h_t - \alpha - \phi h_{t-1})^2 - (h_{t+1} -
 \alpha - \phi h_t)^2$, gives their product as a normal density with
@@ -182,7 +250,11 @@ $$
 At the ends of the sample this simplifies: for $t = T$ only the incoming transition
 applies, giving mean $\alpha + \phi h_{T-1}$ and variance $\sigma_h^2$, while for $t = 1$
 the stationary prior replaces it and yields mean $\mu(1-\phi) + \phi h_2$ with the same
-variance. What remains is the measurement density, which is not conjugate: $p(r_t \mid
+variance.
+:::
+
+The neighbouring states therefore supply a Normal prior for $h_t$ centred between them,
+tighter the more persistent volatility is. What remains is the measurement density, which is not conjugate: $p(r_t \mid
 h_t) \propto \exp\big(-\tfrac{1}{2}h_t - \tfrac{1}{2} r_t^2 e^{-h_t}\big)$. We therefore
 propose from the Gaussian part, $h_t^{\text{new}} \sim \mathcal{N}(h_t^\ast, v_t^\ast)$;
 the proposal density then cancels against the transition part of the target and the
@@ -211,7 +283,12 @@ p(s_t\mid\mathrm{rest})\propto s_t^{-3/2}
 \exp\left[-\frac{r_t^2}{2s_t}-\frac{(\log s_t-m_t)^2}{2v_t}\right].
 $$
 
-The extra $s_t^{-1}$ relative to the log-state density is a Jacobian. To build
+The extra $s_t^{-1}$ relative to the log-state density is a Jacobian.
+
+::: {.callout-note collapse="true"}
+## Derivation: the moment-matched inverse-gamma blanket
+
+To build
 a convenient blanket, match the mean and variance of $\operatorname{Lognormal}(m_t,v_t)$
 with $IG(a_L,b_L)$. Since a lognormal has relative variance $e^{v_t}-1$, while
 an inverse-Gamma has relative variance $1/(a_L-2)$,
@@ -222,7 +299,10 @@ b_L=(a_L-1)e^{m_t+v_t/2}.
 $$
 
 Multiplication by the return-likelihood kernel gives the blanket
-$q=IG(a_L+1/2,b_L+r_t^2/2)$. This is a proposal, not an assertion that the
+$q=IG(a_L+1/2,b_L+r_t^2/2)$.
+:::
+
+The resulting inverse-Gamma is a proposal, not an assertion that the
 conditional posterior is inverse-Gamma.
 
 The JPR construction first retains a proposal from $q$ with probability
@@ -306,7 +386,7 @@ def initial_log_density(h0: float, alpha: float, phi: float, s2: float) -> float
 g0, G0 = np.array([0.0, 0.9]), np.diag([10.0, 0.25])
 G0_inv = np.linalg.inv(G0)
 c0, d0 = 6.0, 0.20                       # prior mean of sigma_h^2 equals 0.04
-n_iter, burn = 8000, 3000
+n_iter, burn = 10_000, 3000
 h, phi, s2 = np.full(T, np.log(r.var())), 0.9, 0.05
 alpha = np.log(r.var()) * (1 - phi)
 even, odd, r2 = np.arange(0, T, 2), np.arange(1, T, 2), r**2
@@ -351,7 +431,7 @@ and compare independent runs, especially for persistence.
 
 ## Posterior estimates of the state equation
 
-We summarise the marginal posteriors against the simulated values, adding an inefficiency
+We summarise the marginal posteriors, adding an inefficiency
 factor: the ratio of the variance of the chain's sample mean to the variance under
 independent sampling, estimated as $1 + 2\sum_\ell \rho_\ell$ from the autocorrelations.
 
@@ -365,17 +445,42 @@ def inefficiency(x, lag_max=250):
 
 q = np.quantile(par_draws, [0.05, 0.95], axis=0)
 print(pd.DataFrame({
-    "true": [mu_true, phi_true, sig_true],
     "post mean": par_draws.mean(axis=0),
     "5%": q[0], "95%": q[1],
     "inefficiency": [inefficiency(par_draws[:, j]) for j in range(3)],
-}, index=["mu", "phi", "sigma_h"]).round(3))
+}, index=["mu", "phi", "sigma_h"]).round(4))
+
+phi_hat, sig_hat, mu_hat = par_draws[:, 1].mean(), par_draws[:, 2].mean(), par_draws[:, 0].mean()
+print(f"\nhalf-life of a volatility shock  {np.log(0.5)/np.log(phi_hat):.1f} days")
+print(f"90% interval for the half-life   "
+      f"[{np.log(0.5)/np.log(np.quantile(par_draws[:, 1], 0.05)):.1f}, "
+      f"{np.log(0.5)/np.log(np.quantile(par_draws[:, 1], 0.95)):.1f}] days")
+print(f"annualised volatility at the long-run level  "
+      f"{np.exp(mu_hat/2)*np.sqrt(252):.2%}")
+print(f"stationary sd of log variance  {sig_hat/np.sqrt(1-phi_hat**2):.4f}")
 ```
 
-Compare each interval with its generating value; a credible interval need not contain that value in every simulated sample. Inspect the inefficiency estimates alongside independent runs: the path and the state-equation parameters are strongly dependent in
+The two parameters the desk cares about are the persistence and the volatility of
+volatility. Persistence has posterior mean $0.9773$ with a ninety percent credible
+interval from $0.9707$ to $0.9836$, which is squarely inside the range financial data
+usually deliver and comfortably below the unit root that would make volatility shocks
+permanent. Read as a half-life, a shock to log variance decays by half in $30.2$ days,
+with a ninety percent interval from $23.3$ to $41.9$ days: about six trading weeks, which
+is why a crisis that is over in the news is not over in a risk model. The volatility of
+volatility has posterior mean $0.2255$ with interval $0.2041$ to $0.2503$, so a one
+standard deviation state shock moves the log variance by about a fifth, that is the daily
+standard deviation by about twelve percent of itself, in a single day. Together the two
+imply a stationary standard deviation of the log variance of $\sigma_h/\sqrt{1-\phi^2} =
+1.0650$, which is the sense in which volatility varies over an enormous range: plus or
+minus two of those is a factor of $e^{2 \times 1.0650} \approx 8.4$ in variance. The
+long-run level $\mu$ corresponds to an annualised volatility of $13.93\%$, below the
+unconditional $19.95\%$ of the window because the log scale means the average log
+variance sits below the log of the average variance.
+
+The inefficiency factors are the warning attached to all of this. Read them alongside independent runs: the path and the state-equation parameters are strongly dependent in
 the posterior, and a sampler that shifts one date at a time moves through that dependence
-slowly, so the nominal draw count overstates precision by roughly that factor and five
-thousand draws deliver only tens of effectively independent ones.
+slowly, so the nominal draw count overstates precision by roughly that factor and seven
+thousand draws deliver only tens of effectively independent ones for $\sigma_h$.
 
 The table already gives the interval; it is worth seeing the two marginal shapes directly, since a symmetric-looking
 interval can still hide a skewed posterior.
@@ -384,20 +489,20 @@ interval can still hide a skewed posterior.
 
 ```{python}
 fig, (axL, axR) = plt.subplots(1, 2, figsize=(10, 4))
-axL.hist(par_draws[:, 0], bins=40, density=True, color="C0", alpha=0.75)
-axL.axvline(mu_true, color="black", ls="--", lw=1.3, label="true value")
-axL.set_xlabel(r"$\mu$"); axL.set_ylabel("posterior density"); axL.legend(fontsize=8)
-axL.set_title("Long-run level")
-axR.hist(par_draws[:, 1], bins=40, density=True, color="C1", alpha=0.75)
-axR.axvline(phi_true, color="black", ls="--", lw=1.3, label="true value")
-axR.set_xlabel(r"$\phi$"); axR.legend(fontsize=8)
-axR.set_title("Persistence")
+axL.hist(par_draws[:, 1], bins=40, density=True, color="C1", alpha=0.75)
+axL.set_xlabel(r"$\phi$"); axL.set_ylabel("posterior density")
+axL.set_title("Persistence")
+axR.hist(par_draws[:, 2], bins=40, density=True, color="C0", alpha=0.75)
+axR.set_xlabel(r"$\sigma_h$")
+axR.set_title("Volatility of volatility")
 plt.tight_layout(); plt.show()
 ```
 
-The long-run level is pinned down tightly and symmetrically around its true value. Persistence is comfortably
-covered too but its histogram is visibly wider relative to its range, the same weak identification the printed
-interval already showed and that the next section explains.
+Persistence is left-skewed, with a long tail towards lower values and a hard economic
+ceiling at one, while the volatility of volatility is mildly right-skewed. Neither
+marginal is well described by its mean alone, which is the first reason to report
+intervals rather than point estimates, and the second reason appears below when the two
+are plotted against each other.
 
 A trace of the persistence draws makes the inefficiency number concrete. The chunk below plots the retained chain
 together with its running mean.
@@ -411,7 +516,6 @@ running_mean_phi = np.cumsum(phi_chain) / np.arange(1, len(phi_chain) + 1)
 fig, ax = plt.subplots()
 ax.plot(phi_chain, color="C1", lw=0.4, alpha=0.6, label="retained draws of phi")
 ax.plot(running_mean_phi, color="black", lw=1.5, label="running mean")
-ax.axhline(phi_true, color="grey", ls=":", lw=1, label="true value")
 ax.set_xlabel("retained iteration"); ax.set_ylabel(r"$\phi$")
 ax.legend(fontsize=9); ax.set_title("Persistence draws mix slowly")
 plt.tight_layout(); plt.show()
@@ -423,38 +527,154 @@ information than consecutive independent draws would.
 
 ## The posterior volatility path
 
-The chief output is not the parameter vector but the volatility path. For each retained
-draw we convert the log variance into a standard deviation, then take pointwise means and
-quantiles to obtain a credible band to compare with the truth.
+The chief output is not the parameter vector but the volatility path, and on real data it
+is the object a risk officer would actually look at. For each retained
+draw we convert the log variance into an annualised standard deviation, then take
+pointwise means and quantiles to obtain a credible band. Because every draw conditions on
+the whole sample, this is a **smoothed** path rather than a filtered one: the estimate of
+volatility on a given day uses the returns that came after it as well as those before,
+which is the right thing for describing history and the wrong thing for forecasting.
 
-**Reading the computation.** Transform each state draw before summarising volatility. The mean of exp(h/2) generally differs from exp(mean(h)/2), because exponentiation is nonlinear.
+**Reading the computation.** Transform each state draw before summarising volatility. The mean of exp(h/2) generally differs from exp(mean(h)/2), because exponentiation is nonlinear. The final block picks the six highest points of the path, forcing them to be at least ninety trading days apart so that one crisis does not occupy every place in the list.
 
 ```{python}
-vol_draws = np.exp(h_draws / 2)
+ann = np.sqrt(252)
+vol_draws = ann * np.exp(h_draws / 2)
 vol_mean = vol_draws.mean(axis=0)
 vol_lo, vol_hi = np.quantile(vol_draws, [0.05, 0.95], axis=0)
 
-fig, ax = plt.subplots()
-ax.fill_between(np.arange(T), vol_lo, vol_hi, color="C0", alpha=0.25,
-                label="90% credible band")
-ax.plot(vol_mean, color="C0", lw=1.2, label="posterior mean")
-ax.plot(vol_true, color="black", lw=1.0, label="true volatility")
-ax.set_xlabel("time"); ax.set_ylabel(r"volatility $e^{h_t/2}$")
-ax.set_title("Estimated and true volatility path")
-ax.legend()
-plt.tight_layout()
-plt.show()
+available = np.ones(T, bool)
+peaks = []
+for i in np.argsort(-vol_mean):
+    if len(peaks) == 6:
+        break
+    if available[i]:
+        peaks.append(i)
+        available[max(0, i - 90):i + 90] = False
+peaks = sorted(peaks)
 
-print(f"correlation with the truth {np.corrcoef(vol_mean, vol_true)[0, 1]:.3f}, "
-      f"coverage {np.mean((vol_true >= vol_lo) & (vol_true <= vol_hi)):.3f}")
+fig, ax = plt.subplots(figsize=(9, 4.4))
+ax.fill_between(dates, vol_lo, vol_hi, color="C0", alpha=0.25,
+                label="90% credible band")
+ax.plot(dates, vol_mean, color="C0", lw=1.0, label="posterior mean")
+ax.plot(dates[peaks], vol_mean[peaks], "o", color="black", ms=5)
+for i in peaks:
+    ax.annotate(f"{dates[i]:%b %Y}", (dates[i], vol_mean[i]),
+                textcoords="offset points", xytext=(4, 7), fontsize=8)
+ax.set_xlabel("date"); ax.set_ylabel("annualised volatility")
+ax.set_title("Posterior stochastic volatility of the US market, 2005-2022")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+print(pd.DataFrame({"date": dates[peaks].strftime("%Y-%m-%d"),
+                    "post mean": vol_mean[peaks],
+                    "5%": vol_lo[peaks], "95%": vol_hi[peaks]}).round(3).to_string(index=False))
+print(f"calmest day {dates[vol_mean.argmin()]:%Y-%m-%d} at {vol_mean.min():.2%}, "
+      f"most turbulent {dates[vol_mean.argmax()]:%Y-%m-%d} at {vol_mean.max():.2%}")
 ```
 
-The posterior mean tracks the broad movements of the true volatility closely and the band
-covers the truth at very nearly its nominal rate, so the sampler is calibrated as well as
-accurate. The band is nonetheless wide, often spanning a factor of two in volatility, and
+The six marked peaks are a list of the last two decades of financial history, and the
+sampler was never told any of the dates. The highest is 16 March 2020, at an annualised
+$92.97\%$, the Monday after the pandemic was declared and the day the Federal Reserve cut
+to zero. The second is 13 October 2008, at $83.6\%$, a month after Lehman Brothers
+failed. Then come 10 March 2009 at $48.0\%$, the week the market bottomed; 9 August 2011
+at $49.5\%$, the first trading day after the United States lost its AAA rating; 5 May
+2022 at $35.3\%$, in the middle of the inflation and rate shock; and 10 May 2010 at
+$32.4\%$, the aftermath of the flash crash. The calmest day of the whole eighteen years is
+13 October 2017, at $4.63\%$ annualised, in the exceptionally quiet run-up to the
+volatility spike of February 2018. Between the calmest day and the most turbulent lies a
+factor of twenty in volatility, which is a fact about markets that any model with a
+constant $\sigma$ simply cannot represent.
+
+The band is wide, often spanning a factor of two in volatility, and
 that width is intrinsic: a single return is a very noisy signal about the variance that
 generated it, since $r_t^2 / e^{h_t}$ is a $\chi^2_1$ variate with variance two. It is
-widest where volatility is high, because the log makes uncertainty multiplicative.
+widest where volatility is high, because the log makes uncertainty multiplicative: on 16
+March 2020 the ninety percent band runs from $70.7\%$ to $121.9\%$ annualised, so even at
+the peak of the crisis the model declines to say whether volatility was seventy percent
+or a hundred and twenty.
+
+## Comparing with an exponentially weighted benchmark
+
+A practitioner who wanted a volatility path would probably not fit a state-space model at
+all. The industry default is an **exponentially weighted moving average** of squared
+returns, $\hat\sigma_t^2 = \lambda \hat\sigma_{t-1}^2 + (1-\lambda) r_{t-1}^2$ with
+$\lambda = 0.94$, the RiskMetrics convention, which requires no estimation whatsoever. The
+honest question is what the Bayesian treatment adds over that, and the fair way to ask it
+is to put both series against a third, model-free measurement of how volatile each day
+actually was.
+
+For that measurement we use a **local realised volatility**, the root mean square of the
+returns in an eleven-day window centred on the day in question. It is a crude estimate,
+but it is computed from the data alone with no model and no parameters, and it is
+two-sided, which matters because the posterior path is two-sided as well. The comparison
+therefore asks which of the two model-based series describes the volatility of a given day
+better, not which forecasts it better; the exponentially weighted average uses only the
+past and is at a disadvantage on the first question and an advantage on the second.
+
+**Reading the computation.** The first loop builds the exponentially weighted variance
+recursively from the same returns, the second block forms the centred realised
+volatility, and the printed lines compare each series with it by correlation and by root
+mean squared error, on the level and on the log scale.
+
+```{python}
+lam = 0.94
+ewma_var = np.empty(T)
+ewma_var[0] = r[:50].var()
+for t in range(1, T):
+    ewma_var[t] = lam * ewma_var[t - 1] + (1 - lam) * r[t - 1] ** 2
+ewma_vol = ann * np.sqrt(ewma_var)
+
+realised = ann * (pd.Series(r).rolling(11, center=True, min_periods=11)
+                  .apply(lambda z: np.sqrt((z ** 2).mean()), raw=True).to_numpy())
+ok = ~np.isnan(realised)
+
+fig, ax = plt.subplots(figsize=(9, 4.4))
+ax.plot(dates, realised, color="grey", lw=0.8, label="centred 11-day realised volatility")
+ax.plot(dates, ewma_vol, color="C3", lw=0.9, label="EWMA, $\\lambda = 0.94$")
+ax.plot(dates, vol_mean, color="C0", lw=1.1, label="stochastic volatility, posterior mean")
+ax.set_yscale("log")
+ax.set_xlabel("date"); ax.set_ylabel("annualised volatility (log scale)")
+ax.set_title("Three volatility measures on the same returns")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+for name, v in (("stochastic volatility", vol_mean), ("EWMA(0.94)", ewma_vol)):
+    print(f"{name:22s} correlation with realised {np.corrcoef(v[ok], realised[ok])[0, 1]:.4f}   "
+          f"RMSE {np.sqrt(np.mean((v[ok]-realised[ok])**2)):.4f}   "
+          f"log RMSE {np.sqrt(np.mean((np.log(v[ok])-np.log(realised[ok]))**2)):.4f}")
+print(f"correlation between the two model series {np.corrcoef(vol_mean, ewma_vol)[0, 1]:.4f}")
+print(f"share of days on which EWMA lies inside the 90% band "
+      f"{np.mean((ewma_vol >= vol_lo) & (ewma_vol <= vol_hi)):.4f}")
+```
+
+The three lines tell the same broad story, which is the first thing to say: the
+exponentially weighted average is not a bad tool, and its correlation with the posterior
+path is $0.8975$. On the log scale, where volatility comparisons belong, the differences
+are nonetheless visible. Against the centred realised measure the stochastic-volatility
+path has a correlation of $0.9757$ and a log root mean squared error of $0.1691$, while
+the exponentially weighted average manages $0.8437$ and $0.3326$; the latter's errors are
+about twice as large in log terms, and the picture shows why. The exponentially weighted
+line jumps the day after every large return and then decays mechanically, so it lags at
+the start of each crisis and overshoots on the way out, while the smoothed posterior path
+turns before the peak because it is allowed to use both sides of the data.
+
+The EWMA line lies inside the ninety percent credible band on $86.2\%$ of days, so the two
+are rarely in outright conflict. What the Bayesian treatment adds is not usually a
+different number but four things the recursion cannot supply. It reports **uncertainty**:
+the band, which on a crisis day is a factor of nearly two wide, is the honest statement
+that one return per day is a poor measurement of a variance, and the exponentially
+weighted average conceals that entirely behind a single line. It **estimates the decay
+rather than assuming it**: $\lambda = 0.94$ is a convention, whereas $\phi = 0.9773$ with
+an interval attached is a measurement, and the two are not the same, since the
+exponentially weighted scheme has no mean reversion at all and the estimated model pulls
+volatility back to $13.93\%$ annualised. It supplies **interpretable parameters**, the
+half-life of thirty days and the volatility of volatility, which are quantities a risk
+committee can discuss and a fixed $\lambda$ is not. And because the model is generative,
+it delivers a **predictive distribution** for returns rather than only a variance
+estimate, which is what a value-at-risk calculation actually needs. The price is the
+inefficiency factors printed above and about ten seconds of computation instead of one
+line of arithmetic.
 
 ## Why persistence is hard to pin down
 
@@ -466,12 +686,9 @@ identify least sharply. The next chunk plots the joint posterior of $\phi$ and $
 ```{python}
 fig, ax = plt.subplots()
 ax.scatter(par_draws[:, 1], par_draws[:, 2], s=3, alpha=0.15, color="C0")
-ax.scatter([phi_true], [sig_true], color="black", s=70, marker="x",
-           label="true values")
 ax.set_xlabel(r"persistence $\phi$")
 ax.set_ylabel(r"volatility of volatility $\sigma_h$")
 ax.set_title("Joint posterior of persistence and volatility of volatility")
-ax.legend()
 plt.tight_layout()
 plt.show()
 
@@ -480,47 +697,54 @@ print(f"posterior correlation: {np.corrcoef(par_draws[:, 1], par_draws[:, 2])[0,
 
 The cloud is a pronounced ridge running from low persistence with high volatility of
 volatility to high persistence with low volatility of volatility, and the posterior
-correlation is strongly negative. The data speak mainly about how much the log variance
+correlation is $-0.565$. The data speak mainly about how much the log variance
 moves in total, that is about the stationary variance $\sigma_h^2/(1-\phi^2)$, and not
-about its two ingredients separately: a jagged path with $\phi = 0.90$ and $\sigma_h =
-0.40$ and a smooth path with $\phi = 0.97$ and $\sigma_h = 0.20$ produce return series
-that are nearly indistinguishable over a few hundred observations. On top of this near
+about its two ingredients separately: a jagged path with $\phi = 0.95$ and $\sigma_h =
+0.33$ and a smooth path with $\phi = 0.99$ and $\sigma_h = 0.15$ produce return series
+that are nearly indistinguishable, and both lie on this ridge. On top of this near
 non-identification sits measurement noise, since each $h_t$ is inferred from a single
-$\chi^2_1$ observation, so sampled paths are rougher than the true one and the posterior
+$\chi^2_1$ observation, so sampled paths are rougher than the underlying one and the posterior
 is nudged down the ridge towards lower $\phi$. Long samples, or informative priors, are
-the only remedies.
+the only remedies, and eighteen years of daily data is already a long sample.
 
 ### Fat tails without any non-Gaussian ingredient
 
 Every shock in the model, $u_t$ and $\zeta_t$, is Gaussian, yet the return itself is not: a return is a Gaussian
 scaled by a random, time-varying standard deviation, and mixing over that randomness is exactly the mechanism the
-earlier kurtosis formula describes. We check that directly on the simulated returns already generated.
+earlier kurtosis formula describes. We check that directly on the market returns of this window.
 
-**Reading the computation.** The histogram uses the same simulated returns from the opening chunk, standardised to unit variance so that the Gaussian benchmark is on the same scale. A logarithmic vertical axis makes the tails visible instead of letting them disappear near zero.
+**Reading the computation.** The histogram uses the demeaned market returns loaded at the start, standardised to unit variance so that the Gaussian benchmark is on the same scale. A logarithmic vertical axis makes the tails visible instead of letting them disappear near zero. The final line evaluates the model-implied kurtosis at the posterior means of the two state-equation parameters.
 
 ```{python}
 r_std = (r - r.mean()) / r.std()
-grid_r = np.linspace(-6, 6, 400)
+grid_r = np.linspace(-10, 10, 400)
 
 fig, ax = plt.subplots()
-ax.hist(r_std, bins=60, density=True, alpha=0.6, color="C0",
-        label="simulated returns (standardised)")
+ax.hist(r_std, bins=80, density=True, alpha=0.6, color="C0",
+        label="market excess returns (standardised)")
 ax.plot(grid_r, stats.norm.pdf(grid_r), color="black", lw=1.5, label="Gaussian benchmark")
 ax.set_yscale("log")
 ax.set_xlabel("standardised return"); ax.set_ylabel("density (log scale)")
 ax.legend(); ax.set_title("Stochastic volatility generates fat tails from Gaussian shocks")
 plt.tight_layout(); plt.show()
 
-kurt_theory = 3 * np.exp(sig_true ** 2 / (1 - phi_true ** 2)) - 3
+kurt_model = 3 * np.exp(sig_hat ** 2 / (1 - phi_hat ** 2)) - 3
 print(f"excess kurtosis: sample {stats.kurtosis(r):.2f}, "
-      f"model-implied 3*exp(sigma_h^2/(1-phi^2))-3 = {kurt_theory:.2f}")
+      f"model-implied 3*exp(sigma_h^2/(1-phi^2))-3 = {kurt_model:.2f}")
 ```
 
 On the log scale the histogram sits visibly above the Gaussian curve away from the centre, exactly where the two
-would coincide if returns were really normal. The printed sample kurtosis and the model-implied value are both far
-above the Gaussian benchmark of zero, though they do not match closely, because seven hundred observations pin down
-a fourth moment only loosely; the fat tails are nonetheless not a modelling add-on but a direct, quantifiable
-consequence of letting the variance itself be random.
+would coincide if returns were really normal. The sample excess kurtosis is $11.14$ and the value implied by the
+posterior means of $\phi$ and $\sigma_h$ is $6.33$: both are far above the Gaussian benchmark of zero, so the
+mechanism is clearly the right one, but the model accounts for only part of the observed
+tail thickness. That gap is informative rather than embarrassing. A fourth moment is
+estimated very imprecisely from four thousand observations, and it is dominated by the
+handful of crash days that Lecture 4 showed to be barely compatible with any finite
+kurtosis at all; the standard response, and the one taken in the literature, is to give
+the return equation a Student-$t$ error on top of the stochastic volatility, so that
+clustering and jumps are modelled separately. The fat tails the basic model does produce
+are nonetheless not an add-on but a direct, quantifiable consequence of letting the
+variance itself be random.
 
 ## The mixture-of-normals alternative
 
@@ -543,14 +767,20 @@ Starting from $r_t=\exp(h_t/2)\varepsilon_t$, with
 $\varepsilon_t\sim N(0,1)$, squaring and taking logs gives
 $\log r_t^2=h_t+z_t$, where $z_t=\log\varepsilon_t^2$.
 The equation is linear in the latent state, but its observation error is not
-Normal. To see its density, put $v=\varepsilon^2\sim\chi_1^2$ and substitute
+Normal.
+
+::: {.callout-note collapse="true"}
+## Derivation: the density of the log squared standard normal
+
+To see its density, put $v=\varepsilon^2\sim\chi_1^2$ and substitute
 $v=e^z$ into $f_v(v)$, multiplying by the Jacobian $e^z$:
 
 $$
 f_z(z)=\frac{1}{\sqrt{2\pi}}\exp\left(\frac z2-\frac{e^z}{2}\right).
 $$
+:::
 
-It has mean $-\gamma-\log 2\approx-1.27036$ and variance $\pi^2/2$.
+That density has mean $-\gamma-\log 2\approx-1.27036$ and variance $\pi^2/2$.
 Matching these moments with a Normal distribution misses the asymmetry.
 
 ```{python}
@@ -593,6 +823,17 @@ $T$-dimensional integral with no closed form, and inference proceeds by sampling
 jointly with the parameters. The single-move sampler does this with one Metropolis step
 per date. The implemented JPR construction uses an inverse-Gamma accept-reject proposal followed by an MH correction. The state-equation coefficient proposal also receives an MH correction for the stationary initial state, while the innovation variance has an inverse-Gamma full conditional. The volatility path is
 recovered accurately up to a wide band, while persistence stays weakly identified.
+
+On eighteen years of daily US market excess returns the sampler puts persistence at
+$0.9773$, a half-life of thirty trading days, and the volatility of volatility at
+$0.2255$. The estimated path locates its peaks, unprompted, on the days of the Lehman
+collapse, the March 2020 pandemic crash, the March 2009 bottom, the 2011 downgrade, the
+flash crash and the 2022 rate shock, and it tracks a model-free realised measure
+considerably more closely than the industry-standard exponentially weighted average
+does. What the Bayesian treatment adds over that benchmark is an estimated rather than
+assumed decay, interpretable parameters, a predictive distribution, and above all a
+credible band that states how little a single daily return reveals about the variance
+that produced it.
 
 
 

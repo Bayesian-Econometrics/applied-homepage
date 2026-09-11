@@ -10,6 +10,53 @@ The [Week 6 exercise session](../exercise-sessions/06-minnesota-priors.qmd) cont
 chapter's practice questions.
 :::
 
+## Start at a central bank: how much history should an inflation forecast use?
+
+Suppose we forecast inflation using its own lags, unemployment and the policy
+rate. Adding more lags appears to add information, but also adds coefficients
+estimated from the same short history. **Which apparent relationships are stable
+enough to trust?** Minnesota priors translate this concern into different amounts
+of prior information for different coefficients.
+
+Write one forecast equation in words first: next inflation equals a baseline,
+plus contributions from past inflation and other variables, plus a surprise.
+For a simple illustration, measure all variables on comparable scales. We might
+centre inflation's first own-lag coefficient on one and a distant cross-lag on
+zero. A random-walk target is a modelling choice, not an obligation when the
+series is stationary or transformed.
+
+Reduce one conditional update to a noisy estimate
+$\widehat b\mid b\sim N(b,s^2)$ and prior $b\sim N(b_0,v_0)$.
+The two squared deviations are weighted by their precisions:
+
+$$p(b\mid\widehat b)\propto
+\exp\{-\tfrac12[(\widehat b-b)^2/s^2+(b-b_0)^2/v_0]\}.$$
+
+Expanding and completing the square gives
+$V=(s^{-2}+v_0^{-1})^{-1}$ and
+$m=V(\widehat b/s^2+b_0/v_0)$.
+If $\widehat b=0.8$, $s=0.4$, $b_0=1$ and prior standard deviation is 0.2,
+the posterior mean is 0.96. A cross-lag estimate of 0.3 with the same sampling
+error but prior $N(0,0.1^2)$ becomes about 0.018. The prior deliberately asks for
+stronger evidence before trusting the cross-lag.
+
+Minnesota extends this logic to a covariance matrix: more distant lags receive
+less prior variance, and scale adjustments prevent measurement units from
+determining shrinkage. The exercise makes that matrix manually. Before plotting
+forecasts, identify which entries express persistence, which express weak
+cross-variable effects, and which merely correct for different units.
+
+The chapter answers the central bank's question twice over, once on simulated data where the
+truth is known and once on the real monthly record. The real version is a vector
+autoregression in industrial production growth, consumer price inflation and the federal
+funds rate with twelve monthly lags, which is $111$ coefficients estimated at first from
+$120$ observations, and the verdict is quantitative: over $317$ forecast origins from
+December 1999 onwards the Minnesota-shrunk system beats the unrestricted least-squares
+system at every horizon and for every variable, while the unrestricted system barely
+improves on a random walk for inflation. How much history to use turns out to be the wrong
+question. The right one is how much of that history to believe, and the prior variance is
+the answer.
+
 ## The high-dimensional problem
 
 Most of the models we care about in macroeconomics and finance carry many parameters
@@ -43,6 +90,24 @@ rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
                      "grid.alpha": 0.3, "font.size": 11})
 ```
+
+The second half of this chapter works with the monthly FRED snapshot rather than with
+simulated numbers, so we also locate the data directory exactly as the earlier lectures
+did and read the macroeconomic file once.
+
+```{python}
+from pathlib import Path
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+fred = pd.read_parquet(DATA / "fred_macro_monthly.parquet")
+print(f"{fred.shape[0]} months, {fred.index[0]:%Y-%m} to {fred.index[-1]:%Y-%m}")
+print(list(fred.columns))
+```
+
+The file holds six series from January 1960 to August 2026. Three of them will carry the
+real example of this chapter: industrial production, the consumer price index and the
+federal funds rate, which between them describe output, prices and the policy stance,
+the three blocks that every small monetary model contains.
 
 ## Why a prior pulls a noisy coefficient toward zero
 
@@ -115,6 +180,89 @@ $$
 So ridge regression is not a competitor to the Bayesian approach. It *is* the Bayesian
 posterior mean under a zero-mean Normal prior, and the Bayesian view gives us the bonus
 of a full posterior covariance $V$ for free.
+
+That statement is worth deriving rather than asserting, because the algebra reveals
+something the formula hides: the posterior mean is the least-squares estimate passed
+through a matrix, and every property of shrinkage that this chapter uses later is a
+property of that matrix. The derivation below completes the square in the multivariate
+case and then rewrites the answer as a shrinkage operator acting on $\hat\beta_{\text{OLS}}$.
+
+::: {.callout-note collapse="true"}
+## Derivation: the Normal posterior mean as a shrinkage matrix, and its ridge equivalence
+
+Start from the log posterior kernel, dropping every term that does not involve $\beta$,
+$$
+\log p(\beta \mid y) = -\frac{1}{2\sigma^2}(y - X\beta)^\top(y - X\beta)
+-\frac{1}{2\tau^2}\beta^\top\beta + \text{const}.
+$$
+Expand the first quadratic,
+$$
+(y - X\beta)^\top(y-X\beta) = y^\top y - 2\beta^\top X^\top y + \beta^\top X^\top X \beta,
+$$
+and collect the terms by their power of $\beta$. The quadratic terms are
+$$
+-\frac{1}{2}\beta^\top\left(\frac{X^\top X}{\sigma^2} + \frac{I_k}{\tau^2}\right)\beta
+\;\equiv\; -\frac{1}{2}\beta^\top V^{-1}\beta,
+\qquad
+V^{-1} = \frac{X^\top X}{\sigma^2} + \frac{I_k}{\tau^2},
+$$
+and the linear term is $+\beta^\top X^\top y/\sigma^2$. A multivariate Normal density with
+mean $m$ and covariance $V$ has log kernel $-\tfrac12\beta^\top V^{-1}\beta + \beta^\top
+V^{-1}m$, so matching the linear terms coefficient by coefficient gives
+$V^{-1}m = X^\top y/\sigma^2$, hence
+$$
+m = V\,\frac{X^\top y}{\sigma^2}
+= \left(\frac{X^\top X}{\sigma^2} + \frac{I_k}{\tau^2}\right)^{-1}\frac{X^\top y}{\sigma^2}
+= \left(X^\top X + \lambda I_k\right)^{-1}X^\top y, \qquad \lambda = \frac{\sigma^2}{\tau^2},
+$$
+where the last step multiplied numerator and denominator by $\sigma^2$, which cancels the
+$1/\sigma^2$ in both. Matching the quadratic terms confirms the posterior covariance is
+$V = \sigma^2(X^\top X + \lambda I_k)^{-1}$. The kernel had no other terms in $\beta$, so
+the posterior is exactly Normal and these two moments describe it completely. That the
+mean coincides with the ridge minimiser is now visible without any optimisation: both
+solve the same linear system $(X^\top X + \lambda I_k)\beta = X^\top y$.
+
+To read the result as shrinkage, insert the least-squares estimate. Whenever $X^\top X$ is
+invertible, $X^\top y = X^\top X\,\hat\beta_{\text{OLS}}$, so
+$$
+m = \underbrace{\left(X^\top X + \lambda I_k\right)^{-1}X^\top X}_{\textstyle W}\;
+\hat\beta_{\text{OLS}}.
+$$
+The matrix $W$ is the shrinkage matrix. It is not a scalar multiple of the identity
+unless $X^\top X$ is, which is why shrinking every coefficient by a common fraction is
+generally wrong. Three properties follow directly. First, $W \to I_k$ as $\lambda \to 0$,
+recovering least squares, and $W \to 0$ as $\lambda \to \infty$, recovering the prior mean
+of zero. Second, writing $X^\top X = QDQ^\top$ with $Q$ orthogonal and
+$D = \operatorname{diag}(d_1,\dots,d_k)$,
+$$
+W = Q\left(D + \lambda I_k\right)^{-1}D\,Q^\top
+= Q\operatorname{diag}\!\left(\frac{d_j}{d_j+\lambda}\right)Q^\top,
+$$
+so in the coordinate system of the eigenvectors of $X^\top X$ the shrinkage is a diagonal
+scaling with factors $d_j/(d_j + \lambda) \in (0,1)$: the direction along which the data
+carry the least information, smallest $d_j$, is shrunk the hardest. Third, because every
+eigenvalue of $W$ lies strictly inside $(0,1)$, the posterior mean is strictly shorter
+than the least-squares estimate in the metric defined by $Q$, which is the formal sense in
+which a Normal prior always pulls in.
+
+The same algebra with a general prior $\beta \sim \mathcal{N}(b_0, B_0)$ gives
+$$
+V = \left(\frac{X^\top X}{\sigma^2} + B_0^{-1}\right)^{-1},
+\qquad
+m = V\left(\frac{X^\top y}{\sigma^2} + B_0^{-1}b_0\right)
+= \tilde W \hat\beta_{\text{OLS}} + (I_k - \tilde W)\,b_0,
+$$
+with $\tilde W = (X^\top X/\sigma^2 + B_0^{-1})^{-1}X^\top X/\sigma^2$, a matrix-weighted
+average of the data estimate and the prior mean whose weights are the two precisions. This
+is the form the Minnesota prior uses, with $B_0$ diagonal but with entries that differ
+across coefficients, and it is the reason the Minnesota posterior mean pulls own first lags
+towards one while pulling distant cross lags towards zero. In this course's notation the
+prior scaled by the error variance, $\beta \mid \sigma^2 \sim \mathcal{N}(b_0, \sigma^2 B_0)$
+with $\sigma^2 \sim \mathcal{IG}(\alpha_0, \delta_0)$, replaces $B_0^{-1}$ above by
+$B_0^{-1}$ and cancels $\sigma^2$ from both terms, leaving
+$m = (X^\top X + B_0^{-1})^{-1}(X^\top y + B_0^{-1}b_0)$, which is why that version needs no
+estimate of $\sigma^2$ to locate the posterior mean.
+:::
 
 ### Solve the optimisation and interpret the geometry
 
@@ -249,6 +397,84 @@ it, and before aggregating into a single error curve it is worth watching what i
 to one coefficient. The block below tracks the ridge estimate of the first coefficient,
 which has a genuine effect, as $\tau$ sweeps from very tight to very loose.
 
+Before the picture, the trade-off deserves to be written out, because the algebra says
+exactly where the optimum comes from and predicts the U-shape we are about to see. The
+derivation below decomposes the mean squared error of the shrinkage estimator into a
+squared bias and a variance, both as explicit functions of $\lambda$, and then shows that
+the derivative of the total at $\lambda = 0$ is strictly negative, so some shrinkage always
+helps.
+
+::: {.callout-note collapse="true"}
+## Derivation: the bias-variance decomposition of the shrinkage estimator
+
+Work in the eigenbasis of $X^\top X$, which loses no generality and makes every matrix
+diagonal. Write $X^\top X = QDQ^\top$, define the rotated coefficients
+$\gamma = Q^\top\beta$ and the rotated least-squares estimate
+$\hat\gamma = Q^\top\hat\beta_{\text{OLS}}$. Since
+$\hat\beta_{\text{OLS}} \sim \mathcal{N}(\beta, \sigma^2(X^\top X)^{-1})$ and $Q$ is
+orthogonal, the rotated estimate satisfies
+$$
+\hat\gamma_j \sim \mathcal{N}\!\left(\gamma_j, \; \frac{\sigma^2}{d_j}\right),
+\qquad j = 1, \dots, k,
+$$
+independently across $j$, because $Q^\top(X^\top X)^{-1}Q = D^{-1}$ is diagonal. The
+previous derivation showed that the posterior mean in this basis is the coordinate-wise
+scaling $\hat\gamma_j^{\text{ridge}} = w_j\hat\gamma_j$ with $w_j = d_j/(d_j+\lambda)$.
+
+Take one coordinate. Its expectation is $\mathbb{E}[w_j\hat\gamma_j] = w_j\gamma_j$, so the
+bias is
+$$
+\text{bias}_j = w_j\gamma_j - \gamma_j = -(1 - w_j)\gamma_j
+= -\frac{\lambda}{d_j+\lambda}\,\gamma_j,
+$$
+which is zero at $\lambda = 0$ and grows in absolute value with $\lambda$, towards
+$-\gamma_j$: an infinitely tight prior reports zero and is wrong by the whole coefficient.
+Its variance is
+$$
+\operatorname{Var}[w_j\hat\gamma_j] = w_j^2\,\frac{\sigma^2}{d_j}
+= \frac{d_j\sigma^2}{(d_j+\lambda)^2},
+$$
+which starts at the least-squares value $\sigma^2/d_j$ and falls monotonically to zero.
+Adding the squared bias to the variance and summing over coordinates gives the total mean
+squared error of the estimator,
+$$
+\text{MSE}(\lambda)
+= \sum_{j=1}^{k}\left[\frac{\lambda^2\gamma_j^2}{(d_j+\lambda)^2}
++ \frac{d_j\sigma^2}{(d_j+\lambda)^2}\right]
+= \sum_{j=1}^{k}\frac{\lambda^2\gamma_j^2 + d_j\sigma^2}{(d_j+\lambda)^2}.
+$$
+At $\lambda = 0$ this is $\sum_j \sigma^2/d_j$, the variance of least squares and nothing
+else, which is large precisely when some $d_j$ is small, that is when regressors are many
+or collinear. As $\lambda \to \infty$ it tends to $\sum_j\gamma_j^2$, pure squared bias.
+
+Now differentiate one term. With $f_j(\lambda) = (\lambda^2\gamma_j^2 + d_j\sigma^2)/(d_j+\lambda)^2$,
+$$
+f_j'(\lambda) = \frac{2\lambda\gamma_j^2(d_j+\lambda)^2 - 2(d_j+\lambda)(\lambda^2\gamma_j^2 + d_j\sigma^2)}{(d_j+\lambda)^4}
+= \frac{2\left[\lambda\gamma_j^2 d_j - d_j\sigma^2\right]}{(d_j+\lambda)^3}
+= \frac{2d_j\left(\lambda\gamma_j^2 - \sigma^2\right)}{(d_j+\lambda)^3},
+$$
+after expanding the numerator and cancelling the $\lambda^2\gamma_j^2$ terms. Two
+conclusions follow immediately. First, $f_j'(0) = -2\sigma^2/d_j^2 < 0$ for every
+coordinate, so $\text{MSE}'(0) < 0$ and a small amount of shrinkage strictly reduces mean
+squared error no matter what the true coefficients are. This is the precise sense in which
+least squares is inadmissible here, and it is why the curve we are about to plot must fall
+before it rises. Second, the coordinate-wise optimum is at
+$\lambda_j^\ast = \sigma^2/\gamma_j^2$: the ideal penalty for one direction is the noise
+variance divided by the squared true coefficient, which is exactly the prior variance
+$\tau^2 = \gamma_j^2$ read backwards through $\lambda = \sigma^2/\tau^2$. A prior whose
+variance matches the true dispersion of the coefficients is therefore the one that
+minimises mean squared error, which is the formal justification for tuning $\tau$ to the
+scale of the coefficients one expects rather than to convenience.
+
+Because a single $\lambda$ must serve every coordinate, the practical optimum is a
+compromise, $\text{MSE}'(\lambda) = 0$ at
+$\sum_j 2d_j(\lambda\gamma_j^2 - \sigma^2)/(d_j+\lambda)^3 = 0$, a weighted average of the
+coordinate-wise optima with weights $d_j/(d_j+\lambda)^3$. Directions with small $d_j$,
+which are the poorly measured ones, carry the largest weights when $\lambda$ is small, so
+they dominate the choice, which is again why shrinkage pays most in exactly the situations
+that make least squares unreliable.
+:::
+
 **Reading the computation.** Reusing `fit_ridge`, `X_tr`, `y_tr` and `beta_ols` from the previous block, only the prior standard deviation changes along the horizontal axis. Watch how far the ridge line has to travel before it meets the OLS line.
 
 ```{python}
@@ -338,6 +564,97 @@ Here $\lambda_1$ is the overall tightness, $\lambda_2 \in (0,1)$ down-weights cr
 lags, the $1/\ell^2$ term produces the lag decay, and the variance ratio
 $\sigma_i^2/\sigma_j^2$ corrects for the different scales of the variables. The
 intercept usually gets a diffuse prior so it is barely shrunk.
+
+Each of the three ingredients of that formula can be derived from a statement about what
+the system is believed to look like, rather than taken on faith, and the asymmetry between
+own lags and cross lags is the one worth spelling out because it is the piece students most
+often read as arbitrary.
+
+::: {.callout-note collapse="true"}
+## Derivation: the Minnesota prior variance, and why own lags are treated differently
+
+Begin with the benchmark the prior is built around. The prior mean is the univariate random
+walk, $y_{it} = y_{i,t-1} + u_{it}$, one equation per variable with no cross terms at all.
+Write the deviation of the true system from that benchmark as
+$$
+A_{ij\ell} = \delta_{ij}\mathbb{1}\{\ell = 1\} + \eta_{ij\ell},
+$$
+where $\delta_{ij}$ is one if $i = j$ and zero otherwise, so $\eta_{ij\ell}$ is the amount
+by which the coefficient departs from the random walk. The prior is a statement about the
+dispersion of $\eta$, and the whole construction reduces to choosing
+$\operatorname{Var}(\eta_{ij\ell})$.
+
+Step one, the units. A coefficient $A_{ij\ell}$ multiplies variable $j$ and contributes
+to variable $i$, so it carries the units of $y_i$ per unit of $y_j$. A statement of the form
+"this coefficient is probably no larger than $0.2$" is therefore meaningless until the
+units are fixed: if $y_j$ is a rate in percent and $y_i$ a rate in basis points, the same
+economic relation multiplies the coefficient by one hundred. Make the statement in
+dimensionless form instead. Let $\sigma_i$ be the scale of variable $i$, measured by its
+residual standard deviation, and define the standardised coefficient
+$\tilde\eta_{ij\ell} = \eta_{ij\ell}\,\sigma_j/\sigma_i$, which answers the question "how
+many standard deviations of $y_i$ move when $y_j$ moves by one of its own standard
+deviations". A belief expressed as
+$\operatorname{Var}(\tilde\eta_{ij\ell}) = \kappa_{ij\ell}$ for a dimensionless
+$\kappa_{ij\ell}$ translates back into
+$$
+\operatorname{Var}(\eta_{ij\ell}) = \kappa_{ij\ell}\,\frac{\sigma_i^2}{\sigma_j^2},
+$$
+which is where the scale ratio comes from. It is not a correction bolted on afterwards; it
+is what makes the number $\kappa$ mean the same thing in every cell of the matrix. For an
+own lag, $i = j$, the ratio is exactly one, which is why the ratio is absent from the
+own-lag line of the formula rather than being treated differently there: it is present and
+equal to one.
+
+Step two, the lag decay. Consider the contribution of lag $\ell$ to the variance of the
+fitted value. If a coefficient at lag $\ell$ has prior standard deviation $s_\ell$, the
+term $A_{ij\ell}y_{j,t-\ell}$ contributes a prior variance of order $s_\ell^2\sigma_j^2$,
+and summing over lags gives a total of order $\sigma_j^2\sum_{\ell}s_\ell^2$. For this sum
+to converge as more lags are added, so that lengthening $p$ does not keep inflating the
+implied variability of the fitted value, $s_\ell^2$ must be summable. The choice
+$s_\ell \propto 1/\ell$, that is $s_\ell^2 \propto 1/\ell^2$, is the simplest summable
+sequence with the right qualitative shape, and it gives $\sum_\ell 1/\ell^2 = \pi^2/6$, a
+finite number barely larger than one, so the entire lag structure beyond the first
+contributes less prior variability than the first lag alone. Adding lags to a Minnesota VAR
+is therefore close to free, which is the property that lets practitioners use twelve monthly
+lags where least squares would be hopeless. Writing $\lambda_1$ for the variance at
+$\ell = 1$ gives $\kappa_{ij\ell} = \lambda_1/\ell^2$ up to the own/cross distinction.
+
+Step three, why own lags are treated differently. Two separate arguments point the same
+way. The first is about the benchmark. The prior mean is a random walk, in which a
+variable's own first lag enters with coefficient one and no other coefficient enters at all.
+The own first lag is the only coefficient whose prior mean is non-zero, so it is the only
+one for which the prior is making a substantive claim about a value rather than about an
+absence; a tight prior around zero for a cross lag says "this channel probably is not
+there", while a tight prior around one for an own lag would say "this variable is exactly a
+random walk", a far stronger claim that no one wants to make. Loosening the own lags and
+tightening the cross lags is the only assignment consistent with being confident about the
+absences and agnostic about the persistence.
+
+The second argument is about how much evidence the sample actually contains. A
+macroeconomic series is strongly autocorrelated, so its own lags are measured relatively
+precisely; the sample information about a cross lag is much weaker, since it must be
+extracted from the part of $y_j$ that is not already explained by $y_i$'s own history, and
+in a persistent system that residual part is small. Recall from the shrinkage derivation
+that the weight on the data is $d_j/(d_j + \lambda)$, increasing in the sample information
+$d_j$. If we used the same prior variance everywhere, the coefficients that are already
+well measured, the own lags, would keep almost all of their least-squares content while the
+badly measured cross lags would be shrunk only moderately, and the estimator would still
+inherit most of the noise. Shrinking cross lags by an extra factor $\lambda_2 \in (0,1)$
+targets the shrinkage where the sample is uninformative. Putting the three steps together,
+$$
+\operatorname{Var}(A_{ij\ell}) =
+\begin{cases}
+\dfrac{\lambda_1}{\ell^2}, & i = j,\\[2ex]
+\dfrac{\lambda_1\lambda_2}{\ell^2}\dfrac{\sigma_i^2}{\sigma_j^2}, & i \neq j,
+\end{cases}
+$$
+which is the formula displayed above, now with each factor traceable to a statement about
+units, about summability across lags, or about where the sample is informative. The
+intercept is left with a large variance because the benchmark makes no claim at all about
+the level of a series, and shrinking an intercept towards zero would force the variable
+towards zero rather than towards a random walk, which is the opposite of the intended
+belief.
+:::
 
 The following block builds this prior-variance pattern for a small VAR and visualises
 it, so the structure is tangible before we use it in the next lecture.
@@ -538,6 +855,460 @@ sense: it is an independent Normal prior on the vectorised coefficients combined
 the error covariance, the Normal-diffuse setup of Lecture 7, and it is estimated by the two-block
 sampler derived there rather than in closed form.
 
+## A real high-dimensional problem: a twelve-lag monthly VAR
+
+The simulated regression above was built so that shrinkage would win, with forty
+regressors, sixty observations and coefficients drawn from a distribution the prior
+happens to describe correctly. That is the right way to see the mechanism, and the wrong
+way to be convinced by it. This section rebuilds the same problem out of data nobody chose
+for our convenience: a monthly vector autoregression in industrial production growth,
+consumer price inflation and the federal funds rate, with twelve lags, which is the lag
+length a monthly macroeconomic model normally carries because seasonality and policy
+transmission both operate over about a year.
+
+### The panel and why its parameter count is a problem
+
+The two index levels have to be transformed before they enter a vector autoregression,
+because industrial production and the price index both trend upwards without bound and a
+regression on their own lags would be a regression of one trend on another. We use monthly
+log differences times one hundred, so a value of $0.3$ reads as growth of three tenths of a
+percent in that month, and we leave the federal funds rate in percentage points, since a
+policy rate has no trend to remove and its level is the object policy makers actually
+choose.
+
+```{python}
+mac = pd.DataFrame({
+    "ip_growth": 100 * np.log(fred["industrial_prod"]).diff(),
+    "inflation": 100 * np.log(fred["cpi"]).diff(),
+    "fed_funds": fred["fed_funds"],
+}).dropna()
+
+m_var, p_var = 3, 12
+var_names = list(mac.columns)
+print(f"{len(mac)} months, {mac.index[0]:%Y-%m} to {mac.index[-1]:%Y-%m}")
+print(mac.describe().loc[["mean", "std", "min", "max"]].round(3))
+```
+
+The transformed panel runs from February 1960 to July 2026, $796$ months. Industrial
+production grows by $0.183$ percent a month on average with a standard deviation of
+$0.948$, and its minimum of $-14.142$ percent is April 2020, a single observation an order
+of magnitude beyond anything else in the sample. Inflation averages $0.305$ percent a month,
+which compounds to about $3.7$ percent a year, with a standard deviation of $0.313$ and a
+minimum of $-1.786$ percent in November 2008. The federal funds rate averages $4.783$
+percent and ranges from $0.05$ to $19.1$, the latter being the Volcker disinflation of 1981,
+so the sample contains monetary regimes that have very little in common with each other.
+
+Now the arithmetic that makes this a shrinkage problem. With $m = 3$ variables and
+$p = 12$ lags, each equation has $1 + mp = 37$ coefficients and the system has $3 \times 37
+= 111$. We estimate first on the ten years from January 1990 to December 1999, a decade
+of low and stable inflation with an active but not extreme policy rate, which leaves $120$
+usable observations once twelve lags are consumed.
+
+```{python}
+def build_var_xy(data, p):
+    T, m = data.shape
+    Y = data[p:]
+    X = np.ones((T - p, 1 + m * p))
+    for ell in range(1, p + 1):
+        X[:, 1 + (ell - 1) * m: 1 + ell * m] = data[p - ell: T - ell]
+    return X, Y
+
+est_start, est_end = "1989-01", "1999-12"
+win = mac.loc[est_start:est_end].to_numpy()
+X_var, Y_var = build_var_xy(win, p_var)
+k_var = X_var.shape[1]
+print(f"estimation window {est_start} to {est_end}: "
+      f"{X_var.shape[0]} usable observations")
+print(f"coefficients per equation k = {k_var}, system total = {k_var * m_var}")
+print(f"observations per coefficient in the system: "
+      f"{X_var.shape[0] * m_var / (k_var * m_var):.2f}")
+```
+
+One hundred and twenty observations for thirty-seven coefficients per equation is about
+$3.24$ observations per coefficient, which is the regime in which least squares has no
+chance. The comparison with the simulated example is direct: there we had sixty
+observations and forty regressors, a ratio of $1.5$; here the ratio is a little better but
+the regressors are lagged values of persistent series rather than independent Gaussian
+draws, so the design matrix is badly conditioned in a way the simulation never was.
+
+```{python}
+#| label: fig-macro-panel
+#| fig-cap: "The three series of the real VAR over the whole snapshot, with the 1990s estimation window shaded. Output growth and inflation are monthly log changes in percent; the funds rate is in percentage points."
+fig, axes = plt.subplots(3, 1, figsize=(7.5, 6.4), sharex=True)
+for ax, nm, lab in zip(axes, var_names,
+                       ["IP growth (% per month)", "CPI inflation (% per month)",
+                        "federal funds rate (%)"]):
+    ax.plot(mac.index, mac[nm], lw=0.7, color="steelblue")
+    ax.axvspan(pd.Timestamp(est_start), pd.Timestamp(est_end),
+               color="grey", alpha=0.25)
+    ax.axhline(0, color="black", lw=0.6)
+    ax.set_ylabel(lab, fontsize=9)
+axes[0].set_title("Output, prices and the policy rate, 1960-2026")
+axes[-1].set_xlabel("date")
+plt.tight_layout()
+plt.show()
+
+print(f"IP growth std: full sample {mac['ip_growth'].std():.3f}, "
+      f"window {mac.loc[est_start:est_end, 'ip_growth'].std():.3f}")
+print(f"inflation std: full sample {mac['inflation'].std():.3f}, "
+      f"window {mac.loc[est_start:est_end, 'inflation'].std():.3f}")
+```
+
+The three panels explain why the window matters. Output growth is dominated by a handful of
+enormous observations, the 2020 collapse and rebound above all, and by the recessions of
+1974, 1980 and 2008; inside the shaded 1990s window it is visibly calmer, with a standard
+deviation of $0.526$ against $0.948$ over the whole sample. Inflation shows the 1970s
+plateau and then a long quiet stretch from the mid-1980s, which is the period the window
+sits in. The funds rate panel makes the regime problem unmistakable: a series that reaches
+nineteen percent in 1981 and sits at essentially zero from 2009 to 2015 and again in
+2020 and 2021 is not generated by one stable rule, and a twelve-lag linear model fitted
+across all of it is describing an average of several different monetary policies.
+
+### Unrestricted least squares against the Minnesota posterior mean
+
+We now fit the same system twice, once by least squares and once with the Minnesota prior
+of the previous section, and look at what shrinkage does to the coefficients themselves.
+The prior needs one adjustment relative to the textbook statement. The random-walk prior
+mean is right for the funds rate, a highly persistent level, but wrong for the two growth
+rates: the claim that industrial production growth equals last month's growth plus noise is
+much stronger and much less plausible than the claim that the log level of industrial
+production is a random walk, which is what a prior mean of zero on the growth rate's own
+first lag says. So the prior mean on the own first lag is one for the funds rate and zero
+for the two differenced series, which is the standard practice whenever a system mixes
+levels and growth rates.
+
+```{python}
+def minn_prior_pieces(m, p, sig, lam1, lam2, lam_c, rw_mean):
+    k = 1 + m * p
+    B0 = np.zeros((k, m))
+    V = np.zeros((k, m))
+    V[0, :] = lam_c                                  # near-diffuse intercept
+    for ell in range(1, p + 1):
+        for j in range(m):                           # regressor: lag ell of variable j
+            row = 1 + (ell - 1) * m + j
+            for i in range(m):                       # equation for variable i
+                V[row, i] = (lam1 / ell**2 if i == j else
+                             lam1 * lam2 / ell**2 * sig[i]**2 / sig[j]**2)
+            if ell == 1:
+                B0[row, j] = rw_mean[j]              # own first lag only
+    return B0, V
+
+def minn_post_mean(X, Y, Sigma, sig, lam1, lam2=0.5, lam_c=100.0,
+                   rw_mean=(0.0, 0.0, 1.0), p=12):
+    k, m = X.shape[1], Y.shape[1]
+    B0, V = minn_prior_pieces(m, p, sig, lam1, lam2, lam_c, np.asarray(rw_mean))
+    inv_sigma = np.linalg.inv(Sigma)
+    prec0 = np.diag(1.0 / V.ravel(order="F"))
+    Vfull = np.linalg.inv(prec0 + np.kron(inv_sigma, X.T @ X))
+    b = Vfull @ (prec0 @ B0.ravel(order="F") + (X.T @ Y @ inv_sigma).ravel(order="F"))
+    return b.reshape(k, m, order="F")
+
+B_ols_var = np.linalg.solve(X_var.T @ X_var, X_var.T @ Y_var)
+resid_var = Y_var - X_var @ B_ols_var
+Sigma_ols_var = resid_var.T @ resid_var / (X_var.shape[0] - k_var)
+sig_var = win.std(axis=0, ddof=1)
+
+lam1_var, lam2_var = 0.05, 0.5
+B_minn_var = minn_post_mean(X_var, Y_var, Sigma_ols_var, sig_var, lam1_var, lam2_var)
+
+print(f"residual std devs used for the scale ratios: {np.round(sig_var, 4)}")
+print(f"largest |lag coefficient|: OLS {np.abs(B_ols_var[1:]).max():.3f}, "
+      f"Minnesota {np.abs(B_minn_var[1:]).max():.3f}")
+print(f"sum of |lag coefficients|: OLS {np.abs(B_ols_var[1:]).sum():.3f}, "
+      f"Minnesota {np.abs(B_minn_var[1:]).sum():.3f}")
+print(f"std dev across lag coefficients: OLS {B_ols_var[1:].std():.4f}, "
+      f"Minnesota {B_minn_var[1:].std():.4f}")
+```
+
+The two fits describe very different systems. Least squares spreads a total absolute
+coefficient mass of $18.644$ across the $108$ lag coefficients, and its single largest entry
+is $-1.598$, the coefficient on the second lag of the federal funds rate in the industrial
+production equation, which asserts that a one point rise in the policy rate two months ago
+cuts this month's output growth by more than one and a half percent. The Minnesota posterior
+mean spreads $4.334$ in total, and its largest entry is $1.148$, the funds-rate own first lag
+sitting just above its prior mean of one, which is a coefficient nobody would call
+implausible. The dispersion across coefficients falls from $0.3071$ to $0.1274$. Nothing in the
+data changed between the two fits, only the willingness to believe that a coefficient on
+the ninth lag of inflation in the industrial production equation is genuinely large.
+
+```{python}
+#| label: fig-ols-vs-minnesota-coefs
+#| fig-cap: "The 108 lag coefficients of the twelve-lag monthly VAR, least squares against the Minnesota posterior mean. The left panel orders them by lag; the right panel plots one against the other."
+lag_index = np.repeat(np.arange(1, p_var + 1), m_var)
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
+
+jitter = np.linspace(-0.28, 0.28, m_var * m_var)
+for eq in range(m_var):
+    axes[0].plot(lag_index + jitter[eq], B_ols_var[1:, eq], "o", ms=3.2,
+                 alpha=0.55, color="grey",
+                 label="OLS" if eq == 0 else None)
+    axes[0].plot(lag_index + jitter[eq], B_minn_var[1:, eq], "s", ms=3.2,
+                 alpha=0.8, color="firebrick",
+                 label="Minnesota posterior mean" if eq == 0 else None)
+axes[0].axhline(0, color="black", lw=0.8)
+axes[0].set_xlabel("lag"); axes[0].set_ylabel("coefficient")
+axes[0].set_title("Coefficients by lag"); axes[0].legend(fontsize=8)
+
+lims = [min(B_ols_var[1:].min(), B_minn_var[1:].min()) - 0.1,
+        max(B_ols_var[1:].max(), B_minn_var[1:].max()) + 0.1]
+axes[1].plot(lims, lims, "k--", lw=1, label="45 degree line")
+axes[1].axhline(0, color="grey", lw=0.6); axes[1].axvline(0, color="grey", lw=0.6)
+axes[1].scatter(B_ols_var[1:].ravel(), B_minn_var[1:].ravel(), s=14, alpha=0.7)
+axes[1].set_xlabel("OLS coefficient"); axes[1].set_ylabel("Minnesota posterior mean")
+axes[1].set_title("Shrinkage across all 108 lag coefficients")
+axes[1].legend(fontsize=8)
+plt.tight_layout()
+plt.show()
+
+far = np.abs(B_minn_var[1:] - B_ols_var[1:])
+print(f"mean |Minnesota - OLS| over lag coefficients: {far.mean():.4f}, "
+      f"largest: {far.max():.4f}")
+print(f"share of lag coefficients closer to zero under the prior: "
+      f"{np.mean(np.abs(B_minn_var[1:]) < np.abs(B_ols_var[1:])):.3f}")
+```
+
+The left panel shows least squares scattering coefficients of either sign across all twelve
+lags with no visible decline in magnitude as the lag grows, which is exactly what one would
+expect if most of what it is fitting at long lags is noise. The Minnesota points sit in a
+tight band around zero that narrows further with the lag, the $1/\ell^2$ decay made visible.
+The right panel is the honest summary of the exercise: the cloud lies systematically inside
+the forty-five degree line, closer to the horizontal axis than to it, and $88.0$ percent of
+the lag coefficients end up smaller in absolute value than their least-squares counterparts,
+with the average coefficient moving by $0.1424$ and the largest by $1.5881$. The few points that sit close to the line are the coefficients the sample
+genuinely pins down, mostly short own lags.
+
+The two fits also imply different dynamics, which is easier to judge on the largest
+eigenvalue of the companion matrix than on individual coefficients.
+
+```{python}
+def companion_matrix(B, m, p):
+    C = np.zeros((m * p, m * p))
+    for ell in range(p):
+        C[:m, ell * m:(ell + 1) * m] = B[1 + ell * m: 1 + (ell + 1) * m, :].T
+    if p > 1:
+        C[m:, :m * (p - 1)] = np.eye(m * (p - 1))
+    return C
+
+eig_ols = np.abs(np.linalg.eigvals(companion_matrix(B_ols_var, m_var, p_var))).max()
+eig_minn = np.abs(np.linalg.eigvals(companion_matrix(B_minn_var, m_var, p_var))).max()
+print(f"largest eigenvalue modulus: OLS {eig_ols:.4f}, Minnesota {eig_minn:.4f}")
+```
+
+Both systems are stable, but the least-squares one is closer to the unit circle at $0.9623$
+against $0.9300$. That difference sounds small and is not: a root of $0.9623$ has a half-life
+of about eighteen months, a root of $0.9300$ about ten, so the unrestricted fit projects
+shocks persisting roughly twice as long. Over a twelve-month forecast horizon the two
+models therefore extrapolate the last observed year of data very differently, which is the
+mechanism behind the forecast comparison below.
+
+### What the overall tightness does to forecasts
+
+The Minnesota prior has two dials, and $\lambda_1$, the overall tightness on a variable's
+own first lag, is the one that matters most. Setting it is a genuine choice, so rather than
+asserting a value we measure its consequences on real forecasts. The exercise is an
+expanding-window pseudo out-of-sample experiment. Fix the start of the estimation sample at
+January 1990. For each forecast origin from December 1999 to the end of the data, estimate
+the system on everything available up to that month, iterate it forward twelve months, and
+record the errors against what actually happened. Nothing from after the origin ever enters
+the estimation, which is what makes the comparison informative about forecasting rather
+than about fit.
+
+Three benchmarks share the same origins. The random walk predicts that every variable
+stays where it is, which for the two growth rates is a deliberately naive statement and for
+the funds rate is a serious competitor. The AR(1) fits each variable on its own single
+lag, re-estimated at every origin, and is the natural univariate alternative. The
+unrestricted VAR is the same twelve-lag system fitted by least squares. Because the
+estimation window expands, the parameter count stays at $111$ while the count of usable observations grows from
+$108$ usable observations at the first origin to $424$ at the last, so the experiment also
+shows how the value of shrinkage decays
+as data accumulate.
+
+```{python}
+def var_forecast_path(B, hist, H):
+    out = np.zeros((H, B.shape[1]))
+    window = hist.copy()                            # (p, m), newest row first
+    for h in range(H):
+        ynew = np.concatenate([[1.0], window.ravel()]) @ B
+        out[h] = ynew
+        window = np.vstack([ynew, window[:-1]])
+    return out
+
+H_var = 12
+fc_start = pd.Timestamp("1999-12-01")
+origins = [d for d in mac.index if fc_start <= d <= mac.index[-1] - pd.DateOffset(months=1)]
+lam_grid = [0.001, 0.002, 0.005, 0.01, 0.03, 0.1, 0.3, 1.0]
+models = ["ols", "rw", "ar1"] + [f"minn{lam:g}" for lam in lam_grid]
+err = {(mod, h): [] for mod in models for h in range(1, H_var + 1)}
+
+for origin in origins:
+    D = mac.loc["1990-01":origin].to_numpy()
+    Xo, Yo = build_var_xy(D, p_var)
+    sig_o = D.std(axis=0, ddof=1)
+    B_o = np.linalg.solve(Xo.T @ Xo, Xo.T @ Yo)
+    r_o = Yo - Xo @ B_o
+    Sig_o = r_o.T @ r_o / (Xo.shape[0] - Xo.shape[1])
+    hist = D[-p_var:][::-1]
+    future = mac.loc[origin + pd.DateOffset(months=1):
+                     origin + pd.DateOffset(months=H_var)].to_numpy()
+    nh = future.shape[0]
+
+    paths = {"ols": var_forecast_path(B_o, hist, H_var)}
+    for lam in lam_grid:
+        paths[f"minn{lam:g}"] = var_forecast_path(
+            minn_post_mean(Xo, Yo, Sig_o, sig_o, lam), hist, H_var)
+    paths["rw"] = np.tile(D[-1], (H_var, 1))
+    ar = np.array([np.linalg.solve(
+        np.column_stack([np.ones(len(D) - 1), D[:-1, i]]).T
+        @ np.column_stack([np.ones(len(D) - 1), D[:-1, i]]),
+        np.column_stack([np.ones(len(D) - 1), D[:-1, i]]).T @ D[1:, i])
+        for i in range(m_var)])
+    ar_path = np.zeros((H_var, m_var)); cur = D[-1].copy()
+    for h in range(H_var):
+        cur = ar[:, 0] + ar[:, 1] * cur
+        ar_path[h] = cur
+    paths["ar1"] = ar_path
+
+    for mod, path in paths.items():
+        for h in range(1, nh + 1):
+            err[(mod, h)].append(path[h - 1] - future[h - 1])
+
+def rmsfe(mod):
+    return np.array([np.sqrt(np.mean(np.array(err[(mod, h)])**2, axis=0))
+                     for h in range(1, H_var + 1)])
+
+print(f"{len(origins)} forecast origins, {origins[0]:%Y-%m} to {origins[-1]:%Y-%m}")
+print(f"usable observations at the first origin: "
+      f"{len(mac.loc['1990-01':origins[0]]) - p_var}, at the last: "
+      f"{len(mac.loc['1990-01':origins[-1]]) - p_var}")
+print(f"one-month-ahead errors: {len(err[('ols', 1)])}, "
+      f"twelve-month-ahead errors: {len(err[('ols', 12)])}")
+```
+
+Three hundred and seventeen origins, from December 1999 to June 2026, give $317$
+one-month-ahead errors and $298$ twelve-month-ahead errors, the difference being the
+horizons that run past the end of the sample. The first figure reads off what $\lambda_1$
+does at the one-month horizon, relative to the random walk so that the three variables can
+be compared on one axis.
+
+```{python}
+#| label: fig-tightness-sweep
+#| fig-cap: "One-month-ahead root mean squared forecast error as a function of the overall Minnesota tightness, each variable scaled by the random-walk benchmark. The unrestricted VAR is the horizontal dashed line for the same variable."
+rmsfe_rw = rmsfe("rw")
+curves = {lam: rmsfe(f"minn{lam:g}") for lam in lam_grid}
+rmsfe_ols = rmsfe("ols")
+
+fig, ax = plt.subplots()
+for i, nm in enumerate(var_names):
+    ax.plot(lam_grid, [curves[lam][0, i] / rmsfe_rw[0, i] for lam in lam_grid],
+            "-o", ms=4, color=f"C{i}", label=nm)
+    ax.axhline(rmsfe_ols[0, i] / rmsfe_rw[0, i], color=f"C{i}", ls="--", lw=1)
+ax.axhline(1.0, color="black", lw=1, label="random walk")
+ax.set_xscale("log")
+ax.set_xlabel(r"overall tightness $\lambda_1$  (looser $\to$)")
+ax.set_ylabel("RMSFE relative to the random walk, h = 1")
+ax.legend(fontsize=8)
+ax.set_title("Forecast accuracy against prior tightness, one month ahead")
+plt.tight_layout()
+plt.show()
+
+best = {nm: lam_grid[int(np.argmin([curves[lam][0, i] for lam in lam_grid]))]
+        for i, nm in enumerate(var_names)}
+print("best lambda_1 at h = 1 by variable:", best)
+sweep_tab = pd.DataFrame({nm: [curves[lam][0, i] for lam in lam_grid]
+                          for i, nm in enumerate(var_names)},
+                         index=[f"lambda1={lam:g}" for lam in lam_grid])
+sweep_tab.loc["OLS VAR"] = rmsfe_ols[0]
+sweep_tab.loc["random walk"] = rmsfe_rw[0]
+print("\nRMSFE at h = 1 across the tightness grid:")
+print(sweep_tab.round(4).to_string())
+for i, nm in enumerate(var_names):
+    print(f"{nm}: RMSFE at h=1  OLS {rmsfe_ols[0, i]:.4f}, "
+          f"Minnesota(0.05-ish grid best) {min(curves[lam][0, i] for lam in lam_grid):.4f}, "
+          f"RW {rmsfe_rw[0, i]:.4f}")
+```
+
+Every Minnesota curve lies below its own dashed least-squares line at every value of
+$\lambda_1$ on the grid, which is the first result: on this panel there is no tightness so
+loose that shrinkage hurts relative to the unrestricted VAR. The curves are not monotone
+in the same direction, though, and the differences are economically legible. Inflation is
+best forecast at $\lambda_1 = 0.03$ and the funds rate at $0.005$, both interior minima, so
+for those two variables there is a genuine trade-off and over-shrinking eventually costs
+accuracy. Output growth keeps improving as the prior tightens all the way to $0.001$,
+because monthly industrial production growth is close to unforecastable at a one-month
+horizon and a prior that shrinks its own and cross lags nearly to zero is very close to the
+right model. The dashed lines also record how badly the unrestricted VAR does on inflation
+in particular, where it barely improves on the random walk at all, a ratio of $0.997$
+against $0.889$ at the best tightness.
+
+### The forecast comparison by horizon
+
+Reading one horizon is not enough, because shrinkage and the benchmarks trade places as the
+horizon lengthens. The figure below fixes $\lambda_1 = 0.03$, a value in the middle of the
+useful range rather than one chosen separately for each variable and horizon, and traces
+root mean squared forecast error across all twelve horizons for the four models.
+
+```{python}
+#| label: fig-rmsfe-by-horizon
+#| fig-cap: "Root mean squared forecast error by horizon for the three variables of the monthly VAR, over 317 expanding-window origins from December 1999. Lower is better."
+lam_show = 0.03
+rmsfe_minn = rmsfe(f"minn{lam_show:g}")
+rmsfe_ar1 = rmsfe("ar1")
+hgrid = np.arange(1, H_var + 1)
+
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.8))
+for i, (ax, nm) in enumerate(zip(axes, var_names)):
+    ax.plot(hgrid, rmsfe_ols[:, i], "-o", ms=3, color="grey", label="OLS VAR")
+    ax.plot(hgrid, rmsfe_minn[:, i], "-s", ms=3, color="firebrick",
+            label=rf"Minnesota $\lambda_1={lam_show}$")
+    ax.plot(hgrid, rmsfe_rw[:, i], "-^", ms=3, color="steelblue", label="random walk")
+    ax.plot(hgrid, rmsfe_ar1[:, i], "-v", ms=3, color="seagreen", label="AR(1)")
+    ax.set_xlabel("horizon (months)"); ax.set_title(nm, fontsize=10)
+    if i == 0:
+        ax.set_ylabel("RMSFE"); ax.legend(fontsize=7)
+fig.suptitle("Out-of-sample forecast accuracy, 317 expanding-window origins")
+plt.tight_layout()
+plt.show()
+
+tab = pd.DataFrame(index=[f"h={h}" for h in (1, 3, 6, 12)])
+for nm_mod, R in [("OLS VAR", rmsfe_ols), (f"Minnesota", rmsfe_minn),
+                  ("random walk", rmsfe_rw), ("AR(1)", rmsfe_ar1)]:
+    for i, nm in enumerate(var_names):
+        tab[f"{nm_mod}: {nm}"] = [R[h - 1, i] for h in (1, 3, 6, 12)]
+print(tab.T.round(4).to_string())
+print("\nMinnesota relative to OLS VAR (ratio of RMSFE):")
+print(pd.DataFrame(rmsfe_minn / rmsfe_ols, index=[f"h={h}" for h in hgrid],
+                   columns=var_names).round(3).to_string())
+```
+
+The three panels tell one story with three different endings. The random walk is the worst
+model for output growth and inflation at every horizon and gets steadily worse, which is
+what a naive persistence forecast does to a series that is nearly mean-reverting at monthly
+frequency; for the funds rate it is competitive at short horizons and only falls behind
+later, because the policy rate genuinely is close to a random walk over a month or two. The
+unrestricted VAR beats the random walk on the two growth rates but is beaten by every other
+model almost everywhere, and the gap does not close as the sample grows, because the
+estimation window expands while the parameter count stays at $111$ and the extra
+observations are spread across three regimes rather than concentrated in one.
+
+The Minnesota VAR improves on the unrestricted VAR in all thirty-six cells of the ratio
+table printed above, by between two percent for output growth ten months ahead and sixteen
+percent for inflation four months ahead. The improvement is smallest for the funds
+rate in percentage terms, because a one-month-ahead policy rate forecast is easy for any
+model, and yet in levels that is where the Minnesota system does the most useful work: at
+twelve months its error of $1.4605$ is the lowest of the four models, below the AR(1)'s
+$1.5154$, the unrestricted VAR's $1.5466$ and the random walk's $1.5540$. Against the AR(1)
+the verdict on the other two variables is more honest than flattering: the univariate
+benchmark is marginally better for output growth at every horizon, $1.2397$ against $1.2453$
+at one month and $1.1955$ against $1.2084$ at twelve, and marginally better for inflation
+too, $0.2717$ against $0.2774$ at one month. The cross-variable information in this
+three-variable system is therefore worth very little for forecasting those two series at
+monthly frequency. Where the multivariate model earns its keep is the funds rate at long
+horizons, which is exactly where one would expect it to, because the policy rate responds to
+output and prices and a univariate model cannot see that. The lesson is not that shrinkage
+manufactures forecasting power out of nothing. It is that shrinkage is what makes a
+richly parameterised system usable at all, and having made it usable, the system is only as
+informative as the economics inside it.
+
 ## The illusion of sparsity
 
 A natural alternative to dense shrinkage is *sparse selection*: assume most
@@ -636,6 +1407,20 @@ applies this idea to VAR coefficients with structure: random-walk prior means, l
 priors on own lags than cross lags, and variance decaying with the lag. The illusion-of-
 sparsity evidence suggests that dense shrinkage of this kind often outperforms sparse
 variable selection in economics.
+
+The real monthly system makes those claims concrete. Estimating a three-variable,
+twelve-lag vector autoregression on the 1990s leaves $120$ observations for $111$
+coefficients, and least squares responds by spreading an absolute coefficient mass of
+$18.644$ across the lag structure with no decline at long lags and a companion root of
+$0.9623$; the Minnesota posterior mean spreads $4.334$, moves $88.0$ percent of the lag
+coefficients closer to zero and brings the root down to $0.9300$. Out of sample over $317$
+origins from December 1999, that discipline pays in all thirty-six horizon-by-variable
+cells,
+and the tightness sweep shows the payoff is robust to the choice of $\lambda_1$ rather than
+dependent on tuning it well. The comparison with an AR(1) is the sobering half of the
+result: shrinkage makes the multivariate system usable, but the cross-variable information
+it then exploits is worth a great deal for the policy rate at long horizons and very little
+for monthly output growth and inflation.
 
 
 

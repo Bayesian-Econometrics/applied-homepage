@@ -8,6 +8,51 @@ subtitle: "Lecture 5"
 Practise the derivation and implementation in [Week 5: HMC versus MH](../exercise-sessions/05-metropolis-hastings-nuts.qmd).
 :::
 
+## Start with a risk forecast: does the yield curve predict a losing month?
+
+A risk committee wants a forward-looking statement rather than a backward-looking
+one. **Given what the macroeconomy looks like today, what is the probability that
+the market's excess return next month is negative?** A linear probability model
+could answer below zero or above one, so we need a model whose predictions
+remain probabilities.
+
+Let $L_{t+1}$ indicate a negative excess return in month $t+1$ and $x_t$ summarise
+information available at the end of month $t$. Assume that log odds, rather than
+probability itself, respond linearly: $\log[p_t/(1-p_t)]=a+b'x_t=\eta_t$.
+Exponentiating and solving for $p_t$ gives
+
+$$p_t=\frac{e^{\eta_t}}{1+e^{\eta_t}}.$$
+
+For one observed loss, the likelihood contribution is $p_t$; for a non-loss it
+is $1-p_t$. Thus its log contribution is
+$L_{t+1}\eta_t-\log(1+e^{\eta_t})$. Summing observations and adding independent
+zero-centred Normal priors gives the log posterior used by the sampler. The
+$\log(1+e^\eta)$ term prevents the quadratic completion that worked in regression,
+which is precisely why this chapter needs a sampler at all.
+
+The two predictors we use are the **term spread**, the ten-year Treasury yield
+minus the federal funds rate, and the **change in the unemployment rate**, both
+taken from the FRED monthly file and both dated so that they were public before
+the return they are asked to predict. A worked illustration first: coefficients
+$a=-0.4$ and $b=0.8$ on a single standardised predictor give probabilities 0.23,
+0.40 and 0.60 at $x=-1,0,1$. Those are hypothetical numbers chosen to show the
+shape of the logistic curve, not a finding. The empirical question is whether
+$795$ months of real data move the term-spread coefficient away from zero, and by
+the end of this chapter we report a posterior probability of $0.9895$ that it is
+negative, meaning that a steeper curve makes a losing month less likely.
+
+How does MH turn a computable log posterior into draws? For a symmetric proposal,
+accept with probability $\min(1,\exp(\ell_{new}-\ell_{old}))$.
+A proposed move from log posterior $-12$ to $-13$ is accepted with probability
+$e^{-1}\approx0.37$, not automatically rejected. Allowing some downhill moves
+is necessary to explore a distribution rather than merely locate its maximum.
+
+The gradient is $X^\top(L-p)-\beta/\tau^2$: prediction errors pull the
+coefficients toward the data and the prior pulls them toward zero. HMC uses
+this slope to make informed joint moves; NUTS selects trajectory length.
+We compare efficiency for the **same** logistic posterior below. Better
+sampling does not create predictive information absent from financial returns,
+and the modest size of the estimated coefficients is a reminder of that.
 
 ## When the Gibbs sampler is not enough
 
@@ -29,15 +74,18 @@ autocorrelation, the effective sample size, $\hat R$ and the Monte Carlo standar
 along the way, and the lecture closes with a real applied case, the Challenger space shuttle disaster,
 where the consequence of trusting a model outside the range of its data was not academic.
 
-We import the usual libraries and fix a seed.
+We import the usual libraries, locate the data directory exactly as Lecture 1 did, and fix a seed.
 
 ```{python}
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 import matplotlib.pyplot as plt
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
 
 rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
@@ -45,6 +93,8 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 ```
 
 Every random quantity below comes from this one generator, so the printed numbers reproduce exactly.
+No data are simulated anywhere in this chapter: the two applications use market and macroeconomic
+series and the launch record of the Space Shuttle.
 
 ## Why an accept/reject correction is needed
 
@@ -88,18 +138,25 @@ the unknown constant cancels, and comparisons run on the log scale to avoid over
 
 ### Deriving the acceptance probability from detailed balance
 
-The formula above is not an arbitrary recipe; it is the unique thing to do once we decide the chain must
-satisfy **detailed balance** with respect to $\pi$. A Markov chain's transition kernel $p(\theta \to
-\theta')$ is in detailed balance with $\pi$ if
+The formula above is not an arbitrary recipe. It is the unique thing to do once we decide the chain must
+satisfy **detailed balance** with respect to $\pi$, which is the requirement that the probability
+flowing from $\theta$ to $\theta'$ in one step equals the probability flowing back. Detailed balance is
+sufficient, though not necessary, for $\pi$ to be a stationary distribution of the chain, and combined
+with irreducibility and aperiodicity it makes the long run of the chain a sample from $\pi$. The
+consequence worth carrying away is that any proposal density $q$ keeping the chain irreducible will do:
+the choice of $q$ affects only how quickly the chain explores $\pi$, never whether it eventually does.
+
+::: {.callout-note collapse="true"}
+## Derivation: from detailed balance to the acceptance ratio
+
+A Markov chain's transition kernel $p(\theta \to \theta')$ is in detailed balance with $\pi$ if
 $$
 \pi(\theta)\,p(\theta \to \theta') \;=\; \pi(\theta')\,p(\theta' \to \theta) \qquad \text{for all }
 \theta \neq \theta'.
 $$
-Detailed balance is sufficient (though not necessary) for $\pi$ to be a stationary distribution of the
-chain, because summing both sides over $\theta$ gives $\int \pi(\theta) p(\theta \to \theta')\, d\theta =
-\pi(\theta') \int p(\theta' \to \theta)\, d\theta = \pi(\theta')$, which says exactly that if the current
-draw is distributed as $\pi$, so is the next one. Combined with irreducibility and aperiodicity, the long
-run of the chain then samples from $\pi$.
+This is sufficient for stationarity, because summing both sides over $\theta$ gives
+$\int \pi(\theta) p(\theta \to \theta')\, d\theta = \pi(\theta') \int p(\theta' \to \theta)\, d\theta =
+\pi(\theta')$, which says exactly that if the current draw is distributed as $\pi$, so is the next one.
 
 For Metropolis-Hastings the kernel is the proposal followed by an accept/reject step,
 $p(\theta \to \theta') = q(\theta' \mid \theta)\,\alpha(\theta, \theta')$ for $\theta' \neq \theta$.
@@ -122,8 +179,8 @@ capping the probability at one for the case we did not assume, gives back
 $\alpha(\theta, \theta') = \min\{1, \pi(\theta')q(\theta\mid\theta') / [\pi(\theta)q(\theta'\mid\theta)]\}$.
 Substituting this $\alpha$ into the detailed balance equation and checking both orderings confirms that
 one of the two minima always collapses to one and the equation holds as an identity, so the construction
-is not merely plausible, it is exact. Any proposal density $q$ that keeps the chain irreducible will do;
-the choice of $q$ only affects how quickly the chain explores $\pi$, never whether it eventually does.
+is not merely plausible, it is exact.
+:::
 
 ### Symmetric proposals: why the proposal density cancels
 
@@ -183,12 +240,19 @@ correct joint posterior. The freedom to mix kernels this way is one of the two r
 scales to complex models better than a single global proposal; the other is the gradient-based proposal
 of Hamiltonian Monte Carlo developed later in this lecture.
 
-## A non-conjugate binomial model
+## A non-conjugate binomial model: the recent loss frequency
 
-Lecture 1 solved a coin-tossing problem with nine heads in twelve tosses using a $\text{Beta}(5, 5)$
-prior, chosen precisely because it is conjugate. Replace that prior with a **truncated normal** prior on
-$[0, 1]$, $\theta \sim \mathcal{N}(0.5, 1)$ truncated to the unit interval, a perfectly reasonable belief
-that the coin is close to fair, and conjugacy is gone: the posterior kernel is
+Before the multivariate problem, we need a scalar target small enough to check against a grid. The
+natural one here is the unconditional version of the question the chapter opened with. Over the most
+recent **twenty-four months** of the Kenneth French monthly file, how often was the market's excess
+return negative, and what does that say about the probability $\theta$ that next month is a losing one?
+Two years is the window a risk committee would actually look at, short enough to describe the current
+regime and short enough that the answer is genuinely uncertain.
+
+Lecture 1 answered a question of this shape with a conjugate $\text{Beta}$ prior. Replace that prior with
+a **truncated normal** prior on $[0, 1]$, $\theta \sim \mathcal{N}(0.5, 1)$ truncated to the unit
+interval, a weak statement that a coin-flip is the natural reference point, and conjugacy is gone: the
+posterior kernel is
 $$
 f(\theta \mid y) \;\propto\; \theta^{y}(1-\theta)^{n-y} \times
 \exp\!\left(-\frac{(\theta - 0.5)^2}{2}\right), \qquad 0 < \theta < 1,
@@ -199,12 +263,16 @@ single scalar and we can check every sampler against a numerically computed grou
 own normalising constant is a fixed number that does not depend on $\theta$, so it can be folded into the
 proportionality and ignored throughout; only the shape in $\theta$ matters for a Metropolis-Hastings ratio.
 
-The next chunk codes the log-posterior kernel, evaluates it on a fine grid exactly as in Lecture 1's grid
-method, and reports the posterior mean this produces, which serves as the reference every sampler below
-is checked against.
+The next chunk counts the losing months, codes the log-posterior kernel, evaluates it on a fine grid
+exactly as in Lecture 1's grid method, and reports the posterior mean this produces, which serves as the
+reference every sampler below is checked against.
 
 ```{python}
-n_bin, y_bin = 12, 9
+ff_m = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
+recent = ff_m["mkt_rf"].tail(24)
+
+n_bin = int(recent.size)
+y_bin = int((recent < 0).sum())
 mu_p, sigma_p = 0.5, 1.0
 
 def log_post_binom(theta):
@@ -219,14 +287,20 @@ theta_grid = np.linspace(1e-4, 1 - 1e-4, 4001)
 w_grid = np.exp(log_post_binom(theta_grid) - log_post_binom(theta_grid).max())
 dens_grid = w_grid / np.trapezoid(w_grid, theta_grid)
 true_mean = np.trapezoid(theta_grid * dens_grid, theta_grid)
+print(f"{recent.index[0]:%Y-%m} to {recent.index[-1]:%Y-%m}: "
+      f"{y_bin} losing months out of {n_bin}, frequency {y_bin/n_bin:.4f}")
 print(f"grid posterior mean under the truncated normal prior: {true_mean:.4f}")
 ```
 
-The grid mean sits above the $0.636$ we found for the conjugate Beta prior in Lecture 1, closer to the
-$0.75$ maximum likelihood estimate: with $\sigma = 1$ the truncated normal is nearly flat across the whole
-unit interval, a weaker prior than the $\text{Beta}(5,5)$, whose effective sample size of ten pseudo
-observations pulled harder towards one half. Having no closed form does not make the posterior any less
-real, only harder to summarise, which is exactly the gap Metropolis-Hastings fills.
+Eleven of the last twenty-four months were losing ones, a frequency of $0.4583$, and the grid posterior
+mean is $0.4619$, pulled a little towards the prior's half because twenty-four observations are not many.
+With $\sigma = 1$ the truncated normal is nearly flat across the whole unit interval, a weaker prior than
+Lecture 1's $\text{Beta}(5,5)$, whose effective sample size of ten pseudo-observations would have pulled
+harder. Having no closed form does not make the posterior any less real, only harder to summarise, which
+is exactly the gap Metropolis-Hastings fills. Note also how uninformative two years are: we shall see
+below that the posterior standard deviation is close to ten percentage points, so this sample cannot
+distinguish a market that loses forty percent of the time from one that loses fifty-five percent of
+the time.
 
 ### The independence sampler on the non-conjugate posterior
 
@@ -235,7 +309,8 @@ is. Because $q$ is uniform it evaluates to the same constant at every point, so 
 of importance weights derived above and the acceptance rule needs only the posterior kernel,
 $\alpha = \min\{1, \pi(\theta')/\pi(\theta)\}$. The proposal has heavier tails than the truncated normal
 posterior only in the loose sense that it reaches everywhere in $(0,1)$ with equal density, which is
-enough here because the target itself lives entirely on that interval.
+enough here because the target itself lives entirely on that interval and, with only two years of data,
+is not sharply concentrated within it.
 
 ```{python}
 def independence_sampler(log_post, theta0, n_iter, rng):
@@ -259,25 +334,45 @@ print(f"independence sampler: acceptance {ind_acc:.3f}, "
 
 The acceptance rate is moderate and the sampled mean lands close to the grid value, so a proposal that
 ignores the current state entirely is doing fine here, precisely because the uniform proposal is a
-reasonable match for a posterior that is not sharply peaked. In a higher-dimensional or more concentrated
-problem a fixed proposal would rarely land near the bulk of the posterior and the acceptance rate would
-collapse, which is why the independence sampler is used mostly for low-dimensional, well-behaved targets.
+reasonable match for a posterior that is not sharply peaked. Had we used the whole post-2000 sample of
+three hundred and nineteen months instead of the last twenty-four, the posterior would be roughly four
+times narrower and the same uniform proposal would waste most of its draws. In a higher-dimensional or
+more concentrated problem a fixed proposal would rarely land near the bulk of the posterior and the
+acceptance rate would collapse, which is why the independence sampler is used mostly for
+low-dimensional, well-behaved targets.
 
 ### A random walk on the logit scale, with its Jacobian
 
 A random walk directly on $\theta$ risks proposing values outside $(0,1)$. The standard fix is to walk on
 the unconstrained **logit** scale $\eta = \log[\theta/(1-\theta)]$ and map back,
 $\eta' \sim \mathcal{N}(\eta, s^2)$, $\theta' = 1/(1+e^{-\eta'})$. The proposal is symmetric in $\eta$, but
-we still evaluate the posterior in $\theta$, and a change of variables is not free: since
-$\theta = 1/(1+e^{-\eta})$ has $d\theta/d\eta = \theta(1-\theta)$, the induced density of $\eta$ is
-$\pi_\eta(\eta) = \pi_\theta(\theta(\eta))\,\theta(1-\theta)$. The symmetric random walk in $\eta$-space
-gives an acceptance ratio built from $\pi_\eta$, and substituting back yields
+we still evaluate the posterior in $\theta$, and a change of variables is not free: the acceptance ratio
+picks up an extra factor of $\theta'(1-\theta')/[\theta(1-\theta)]$, the Jacobian of the logit transform,
 $$
-\alpha = \min\left\{1,\; \frac{\pi_\theta(\theta')\,\theta'(1-\theta')}{\pi_\theta(\theta)\,\theta(1-\theta)}\right\},
+\alpha = \min\left\{1,\; \frac{\pi_\theta(\theta')\,\theta'(1-\theta')}{\pi_\theta(\theta)\,\theta(1-\theta)}\right\}.
 $$
-so the plain posterior ratio picks up an extra factor of $\theta'(1-\theta')/[\theta(1-\theta)]$, the
-Jacobian of the logit transform. Forgetting it is a common bug: the chain would still run, but it would
-target the wrong distribution.
+Forgetting it is a common bug: the chain would still run, but it would target the wrong distribution.
+
+::: {.callout-note collapse="true"}
+## Derivation: where the logit Jacobian comes from
+
+Since $\theta = 1/(1+e^{-\eta})$ has $d\theta/d\eta = \theta(1-\theta)$, the change-of-variable rule
+gives the induced density of $\eta$ as
+$$
+\pi_\eta(\eta) = \pi_\theta(\theta(\eta))\,\left|\frac{d\theta}{d\eta}\right|
+= \pi_\theta(\theta(\eta))\,\theta(1-\theta).
+$$
+A symmetric random walk in $\eta$-space has an acceptance ratio built from $\pi_\eta$ alone, because the
+Gaussian proposal densities cancel as shown above,
+$$
+\alpha = \min\left\{1, \frac{\pi_\eta(\eta')}{\pi_\eta(\eta)}\right\}
+= \min\left\{1, \frac{\pi_\theta(\theta')\,\theta'(1-\theta')}{\pi_\theta(\theta)\,\theta(1-\theta)}\right\},
+$$
+which is the displayed rule. The same argument applies to any smooth reparameterisation used to remove a
+constraint: a log transform for a positive scale parameter contributes a factor $\sigma'/\sigma$, and a
+Fisher transform for a correlation contributes $(1-\rho'^2)/(1-\rho^2)$. The Jacobian is not an
+optional correction, it is part of the density being targeted.
+:::
 
 ```{python}
 def rw_logit_sampler(log_post, theta0, step, n_iter, rng):
@@ -423,42 +518,96 @@ summary_b = pd.DataFrame({name: {"mean": ch.mean(), "sd": ch.std(ddof=1), "ESS":
 print(summary_b.round(4))
 
 fig, ax = plt.subplots()
-grid_kde = np.linspace(0.2, 1.0, 300)
+grid_kde = np.linspace(0.1, 0.85, 300)
 for name, ch in methods.items():
     ax.plot(grid_kde, stats.gaussian_kde(ch)(grid_kde), label=name)
 ax.plot(theta_grid, dens_grid, "k--", lw=1.5, label="grid posterior")
-ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.legend(fontsize=8)
+ax.set_xlabel(r"$\theta$, probability that a month loses"); ax.set_ylabel("density")
+ax.legend(fontsize=8)
 ax.set_title("Four samplers targeting the same non-conjugate posterior")
 plt.tight_layout(); plt.show()
 ```
 
-All four curves sit on top of the dashed grid posterior, and all four means round to the same $0.71$ to
-two decimals: the samplers disagree only in how efficiently they explore, visible in the effective sample
+All four curves sit on top of the dashed grid posterior and all four means agree with it to two decimals:
+the samplers disagree only in how efficiently they explore, visible in the effective sample
 size column, not in what they converge to. The slice sampler needs no step size and still
-lands among the more efficient methods here, which is the argument for reaching for it whenever a
-model's conditional update is one-dimensional or otherwise cheap to shrink.
+is in fact the most efficient of the four here, its ten thousand kept draws behaving as
+though they were independent, which is the argument for reaching for it whenever a
+model's conditional update is one-dimensional or otherwise cheap to shrink. The economic reading of the
+shared answer is worth stating plainly: two years of data leave the loss probability somewhere around
+$0.46$ with a posterior standard deviation of about $0.095$, so nothing in the recent record distinguishes the
+market from a fair coin. That is the unconditional benchmark against which the conditional model below
+has to prove itself.
 
-## A worked example: Bayesian logistic regression
+## A worked example: Bayesian logistic regression on macroeconomic predictors
 
 We now move from a single scalar to a genuinely multivariate target, applying the algorithm to a model
-with no conjugate structure at all. The probability of a binary outcome $y_i \in \{0, 1\}$ depends on
-covariates $x_i$ through $\Pr(y_i = 1 \mid \beta) = 1/(1 + e^{-x_i'\beta})$, and with an independent
+with no conjugate structure at all, and to the question the chapter opened with. The probability of a
+binary outcome $y_i \in \{0, 1\}$ depends on covariates $x_i$ through
+$\Pr(y_i = 1 \mid \beta) = 1/(1 + e^{-x_i'\beta})$, and with an independent
 $\mathcal{N}(0, \tau^2)$ prior on each coefficient the log-posterior is, up to a constant,
 $$
 \log \pi(\beta) \;=\; \sum_{i=1}^{n}\Big[y_i\,x_i'\beta - \log\big(1 + e^{x_i'\beta}\big)\Big]
 \;-\; \frac{1}{2\tau^2}\sum_j \beta_j^2.
 $$
-Evaluating this is trivial, which is all Metropolis-Hastings requires; the chunk below simulates data and
-codes the log-posterior with `np.logaddexp(0, eta)` for numerical stability, together with the
-random-walk sampler that we mix with Hamiltonian Monte Carlo later in the lecture.
+Evaluating this is trivial, which is all Metropolis-Hastings requires.
+
+The dependent variable is an indicator that the market's excess return in month $t+1$ was negative. The
+two predictors are macroeconomic and both are dated so that they were **public information before that
+return was realised**, which is the part of the exercise that requires care rather than cleverness. The
+**term spread**, the ten-year Treasury yield minus the federal funds rate, is built from month $t$: both
+series are daily market rates averaged within the month, so a value for month $t$ is known by the end of
+month $t$. The **change in the unemployment rate** is built from months $t-2$ to $t-1$ rather than from
+month $t$, because the unemployment rate for a given month is published by the Bureau of Labor Statistics
+in the first week of the *following* month; using the month-$t$ figure to predict a month-$t+1$ return
+would be a look-ahead of a few days, and lagging it one further month removes the problem entirely. This
+is a genuine out-of-sample-in-spirit alignment: every predictor value used to explain a return was
+available to an investor before that return began to accrue. It is not, however, an out-of-sample
+forecasting exercise, because the coefficients are estimated on the whole sample; that distinction
+matters and Lecture 9 takes it up properly.
+
+The economic hypotheses are worth writing down before the estimates arrive. A **steep yield curve** is
+the classic signal of an expansionary stance and an expected recovery, so we expect the term-spread
+coefficient to be negative: a wider spread should lower the probability of a losing month. A **rising
+unemployment rate** signals a deteriorating economy, so a naive reading expects a positive coefficient,
+though the efficient-markets counter-argument is that a published unemployment figure is in the price
+within minutes and should predict nothing at all at a one-month horizon.
+
+**Reading the computation.** The block merges the two monthly files on their common month-start index,
+builds the two predictors with the lags just described, shifts the market return forward by one month to
+form the outcome, and drops any month for which some ingredient is missing.
 
 ```{python}
-n = 300
-beta_true = np.array([-0.5, 1.5, -1.0])
-X = np.column_stack([np.ones(n), rng.normal(size=n), rng.normal(size=n)])
-y = rng.binomial(1, 1.0 / (1.0 + np.exp(-(X @ beta_true))))
-tau = 5.0                       # prior standard deviation on each coefficient
+fred = pd.read_parquet(DATA / "fred_macro_monthly.parquet").dropna()
 
+panel = pd.DataFrame({
+    "term_spread": fred["yield_10y"] - fred["fed_funds"],      # known within month t
+    "d_unemp": fred["unemployment"].diff().shift(1),           # published before month t ends
+})
+panel["next_ret"] = ff_m["mkt_rf"].shift(-1)                   # return in month t+1
+panel = panel.dropna()                                         # drops the unmatched last month
+
+X = np.column_stack([np.ones(len(panel)), panel["term_spread"], panel["d_unemp"]])
+y = (panel["next_ret"] < 0).astype(float).to_numpy()
+n = len(panel)
+tau = 5.0                       # prior standard deviation on each coefficient
+coef_names = ["intercept", "term_spread", "d_unemp"]
+
+print(f"{n} months of predictors, {panel.index[0]:%Y-%m} to {panel.index[-1]:%Y-%m}, "
+      f"predicting returns to {panel.index[-1] + pd.DateOffset(months=1):%Y-%m}")
+print(f"share of losing months: {y.mean():.4f}")
+print(panel[["term_spread", "d_unemp"]].describe().loc[["mean", "std", "min", "max"]].round(3))
+```
+
+The sample is $795$ months of predictors, from March 1960 to June 2026, explaining returns from April
+1960 to July 2026. A share $0.4013$ of those months were losing ones. The term spread averages
+$0.977$ percentage points with a standard deviation of $1.600$ and ranges from $-6.51$ to $3.85$, so the
+sample contains both the deeply inverted curve of January 1981 and the very steep curve of the 1992
+recovery. The monthly change in unemployment averages essentially zero with a standard deviation of
+$0.428$ percentage points and a maximum of $10.40$, that single extreme value being the jump of April
+2020, which enters as a predictor from May 2020 onwards.
+
+```{python}
 def log_posterior(beta):
     eta = X @ beta
     return np.sum(y * eta - np.logaddexp(0.0, eta)) - 0.5 * np.sum(beta**2) / tau**2
@@ -481,33 +630,51 @@ def rw_metropolis(log_post, init, step, n_iter, rng):
 
 This is the same symmetric random-walk kernel derived earlier, now applied coordinate-wise across a
 three-dimensional parameter, and the same acceptance rule applies unchanged: the proposal density cancels
-because it is Gaussian and centred on the current state in every coordinate simultaneously. The next
-chunk runs three chains from a zero start with a too-small, a good and a too-large step, discarding 1000
-burn-in draws and plotting the traces of $\beta_1$.
+because it is Gaussian and centred on the current state in every coordinate simultaneously. Because the
+three coefficients live on very different scales, the step is a **vector** rather than a scalar, set
+proportional to a rough estimate of each coefficient's posterior standard deviation. The next
+chunk runs three chains from a zero start with a too-small, a good and a too-large multiple of that
+vector, discarding 1000 burn-in draws and plotting the traces of the term-spread coefficient.
 
 ```{python}
+base_step = np.array([0.12, 0.06, 0.27])       # roughly 1.4 posterior sds
 n_iter, burn, init = 5000, 1000, np.zeros(3)
-runs = [(s,) + rw_metropolis(log_posterior, init, s, n_iter, rng) for s in (0.005, 0.15, 1.0)]
+runs = [(m,) + rw_metropolis(log_posterior, init, m * base_step, n_iter, rng)
+        for m in (0.02, 1.0, 8.0)]
 post = runs[1][1][burn:]
-print(f"share of ones: {y.mean():.2f}")
-print(pd.DataFrame({"true": beta_true, "post_mean": post.mean(axis=0),
-                    "post_sd": post.std(axis=0)}, index=["beta0", "beta1", "beta2"]).round(3))
+print(pd.DataFrame({"post_mean": post.mean(axis=0), "post_sd": post.std(axis=0),
+                    "P(coef < 0)": (post < 0).mean(axis=0)},
+                   index=coef_names).round(4))
 fig, ax = plt.subplots()
-for step, ch, acc in runs:
-    ax.plot(ch[:, 1], lw=0.6, label=f"step {step} (acceptance {acc:.2f})")
-ax.axhline(beta_true[1], color="black", ls=":", lw=1, label="true value")
-ax.set_xlabel("iteration"); ax.set_ylabel(r"$\beta_1$")
-ax.set_title("Traces of the second coefficient for three step sizes")
+for mult, ch, acc in runs:
+    ax.plot(ch[:, 1], lw=0.6, label=f"step x{mult} (acceptance {acc:.2f})")
+ax.axhline(0.0, color="black", ls=":", lw=1, label="no predictability")
+ax.set_xlabel("iteration"); ax.set_ylabel(r"term-spread coefficient $\beta_1$")
+ax.set_title("Traces of the term-spread coefficient for three step sizes")
 ax.legend(fontsize=9, loc="lower right")
 plt.tight_layout()
 plt.show()
 ```
 
-The outcome is close to balanced, so the likelihood is informative about all three coefficients, and the
-posterior means sit close to the true values without coinciding, as the sample is finite. The traces
-show the tiny step creeping upward from zero without reaching the posterior bulk despite accepting
-almost every proposal, the large step freezing for hundreds of iterations at a time, and only the middle
-step giving the stationary band we want.
+The traces show the tiny step creeping downward from zero without reaching the posterior bulk despite
+accepting almost every proposal, the large step freezing for hundreds of iterations at a time, and only
+the middle step giving the stationary band we want. Reading the numbers from that middle chain, the
+term-spread coefficient has posterior mean $-0.1116$ with standard deviation $0.0452$, and the posterior
+probability that it is negative is $0.9895$. The unemployment coefficient has posterior mean $-0.1439$
+with standard deviation $0.2312$, and the posterior probability that it is negative is $0.7202$, so its
+sign is barely better than a coin toss.
+
+The economic reading is the point of the exercise. A one percentage point widening of the term spread
+lowers the log-odds of a losing month by $0.1116$; at the sample's base rate of $0.4013$ that
+moves the probability of a loss to $0.375$, and evaluating the fitted model at the most inverted curve
+in the sample and then at the steepest, a swing of $10.36$ percentage points, moves it from $0.606$ to
+$0.327$. The sign is the one the expectations hypothesis and the leading-indicator
+literature both predict: an upward-sloping curve accompanies expected recovery, and equities do better
+during recoveries. The size is small, which is exactly what one should expect from a monthly equity
+return: a coefficient large enough to be traded profitably after costs would be a standing arbitrage.
+The unemployment change, by contrast, carries no information at this horizon, which is the
+efficient-markets prediction rather than a failure of the model: by the time the figure is published it
+is in the price.
 
 ## Diagnosing the output
 
@@ -530,32 +697,37 @@ $$
 \hat{R} \;=\; \sqrt{\frac{\frac{n-1}{n}W + \frac{1}{n}B}{W}}.
 $$
 Converged chains make the two variances agree, so $\hat R$ is near one. The chunk applies the three
-diagnostics to the good chain and to four chains launched from separated corners.
+diagnostics to the good chain and to four chains launched from separated corners of the coefficient
+space, all of them many posterior standard deviations from the mode.
 
 ```{python}
 def rhat(samples):                  # samples: (m chains, n draws), one parameter
-    m, n = samples.shape
+    m, n_dr = samples.shape
     W = samples.var(axis=1, ddof=1).mean()
-    B = n * samples.mean(axis=1).var(ddof=1)
-    return np.sqrt(((n - 1) / n * W + B / n) / W)
+    B = n_dr * samples.mean(axis=1).var(ddof=1)
+    return np.sqrt(((n_dr - 1) / n_dr * W + B / n_dr) / W)
 
-starts = np.array([[2.0, 2.0, 2.0], [-2.0, 2.0, -2.0], [2.0, -2.0, 2.0], [-2.0, -2.0, -2.0]])
-def run_chains(step):
-    return np.stack([rw_metropolis(log_posterior, s, step, 3000, rng)[0] for s in starts])[:, burn:]
+starts = np.array([[1.0, 1.0, 1.0], [-1.0, 1.0, -1.0],
+                   [1.0, -1.0, 1.0], [-1.0, -1.0, -1.0]])
+def run_chains(mult):
+    return np.stack([rw_metropolis(log_posterior, s, mult * base_step, 3000, rng)[0]
+                     for s in starts])[:, burn:]
 
-diag = pd.DataFrame({"ESS": [ess(post[:, j]) for j in range(3)]}, index=["beta0", "beta1", "beta2"])
+diag = pd.DataFrame({"ESS": [ess(post[:, j]) for j in range(3)]}, index=coef_names)
 diag["MCSE"] = post.std(axis=0, ddof=1) / np.sqrt(diag["ESS"])
-diag["Rhat_good"] = [rhat(run_chains(0.15)[:, :, j]) for j in range(3)]
-diag["Rhat_tiny"] = [rhat(run_chains(0.005)[:, :, j]) for j in range(3)]
+diag["post_sd"] = post.std(axis=0, ddof=1)
+diag["Rhat_good"] = [rhat(run_chains(1.0)[:, :, j]) for j in range(3)]
+diag["Rhat_tiny"] = [rhat(run_chains(0.02)[:, :, j]) for j in range(3)]
 print(diag.round(4))
 ```
 
-Four thousand retained draws are worth a few hundred independent ones, and Monte Carlo standard errors
-near one hundredth are fifteen times smaller than the posterior standard deviations, so two decimals are
-defensible and a third would be noise. With the good step $\hat R$ is essentially one for every
-coefficient, so the four chains agree and may be pooled; with the tiny step it is far above the warning
-threshold of 1.01, because the chains still sit near their own starting corners, which is an instruction
-not to use the output.
+Four thousand retained draws are worth between two hundred and fifty and three hundred independent
+ones, and the Monte Carlo standard errors are about seventeen times smaller than the corresponding
+posterior standard deviations, so two decimals on a coefficient are safe and a third is close to the
+limit of what the chain supports. With the good step $\hat R$ is at most $1.009$ for the three
+coefficients, inside the usual warning threshold, so the four chains agree and may be pooled; with
+the tiny step it is far above the warning threshold of 1.01, because the chains still sit near their own
+starting corners, which is an instruction not to use the output.
 
 ## Hamiltonian Monte Carlo
 
@@ -574,10 +746,23 @@ $d\rho/dt = -\partial H/\partial \theta = \nabla \log \pi(\theta)$. Because $H$ 
 exact solution, the endpoint has the same joint density as the start and would be accepted with
 certainty however far it travelled, so a proposal can cross the posterior without becoming improbable.
 For the logistic model the gradient is closed form, the logit score minus the prior shrinkage term,
-$\nabla \log \pi(\beta) = X^\top(y - (1 + e^{-X\beta})^{-1}) - \beta/\tau^2$.
+$\nabla \log \pi(\beta) = X^\top(y - (1 + e^{-X\beta})^{-1}) - \beta/\tau^2$, which for this application
+reads as the vector of prediction errors projected onto the term spread and the unemployment change.
 
-Hamilton's equations cannot be solved exactly, so we discretise them. The **leapfrog** integrator with
-step size $\epsilon$ interleaves half-steps in the momentum with full steps in the position,
+Hamilton's equations cannot be solved exactly, so we discretise them with the **leapfrog** integrator,
+which interleaves half-steps in the momentum with full steps in the position and applies the pair $L$
+times to give a trajectory of length $L\epsilon$. Two properties of that integrator do the work: it is
+volume preserving, so no Jacobian appears in the acceptance ratio, and it is reversible, so the proposal
+is symmetric. Because it is nonetheless approximate, $H$ is not exactly conserved, and the
+discretisation error is removed by an ordinary Metropolis correction on the augmented space, accepting
+the endpoint $(\theta^\ast, \rho^\ast)$ with probability
+$\min\{1, \exp(H(\theta, \rho) - H(\theta^\ast, \rho^\ast))\}$. The energy error, and with it the
+rejection rate, grows with $\epsilon$, so the step is chosen to keep acceptance near 0.65 to 0.9.
+
+::: {.callout-note collapse="true"}
+## Derivation: the leapfrog integrator and why no Jacobian appears
+
+The leapfrog integrator with step size $\epsilon$ takes one step as
 $$
 \rho_{t + \epsilon/2} = \rho_t + \tfrac{\epsilon}{2}\,\nabla \log \pi(\theta_t),
 \qquad
@@ -585,15 +770,22 @@ $$
 \qquad
 \rho_{t+\epsilon} = \rho_{t+\epsilon/2} + \tfrac{\epsilon}{2}\,\nabla \log \pi(\theta_{t+\epsilon}),
 $$
-and applying it $L$ times gives a trajectory of length $L\epsilon$. The map is **volume preserving**, so
-no Jacobian appears in the acceptance ratio, and reversible, since negating the final momentum and
-rerunning returns to the start, making the proposal symmetric; half-steps merge, so $L$ steps need only
-$L+1$ gradients. Because the integrator is approximate, $H$ is not exactly conserved, and the
-discretisation error is removed by an ordinary Metropolis correction on the augmented space, accepting
-the endpoint $(\theta^\ast, \rho^\ast)$ with probability
-$\min\{1, \exp(H(\theta, \rho) - H(\theta^\ast, \rho^\ast))\}$. The energy error, and with it the
-rejection rate, grows with $\epsilon$, so the step is chosen to keep acceptance near 0.65 to 0.9. The
-chunk codes the gradient and the sampler by hand, counting gradients so we can price it.
+and applying it $L$ times gives a trajectory of length $L\epsilon$. Each of the three sub-steps is a
+**shear**: it adds to one coordinate block a function of the other block only, so its Jacobian matrix is
+triangular with ones on the diagonal and determinant exactly one. The composition of volume-preserving
+maps is volume preserving, so the whole trajectory has unit Jacobian and no correction term enters the
+acceptance ratio.
+
+Reversibility follows from the symmetry of the same three sub-steps: negating the final momentum,
+rerunning the integrator for $L$ steps and negating again returns exactly to the starting point. Since
+the momentum distribution is symmetric about zero, the proposal density from $(\theta,\rho)$ to
+$(\theta^\ast,\rho^\ast)$ equals the density of the reverse move, so the proposal terms cancel from the
+Metropolis ratio exactly as they did for the symmetric random walk, and only the change in $H$ remains.
+A final implementation point: consecutive half-steps in the momentum merge into one full step, so $L$
+leapfrog steps need only $L+1$ gradient evaluations rather than $2L$.
+:::
+
+The chunk codes the gradient and the sampler by hand, counting gradients so we can price it.
 
 ```{python}
 def grad_log_posterior(beta):
@@ -625,12 +817,13 @@ print("gradient at the origin:", np.round(grad_log_posterior(init), 2))
 ```
 
 The gradient at the origin is large and points towards the posterior mode, so a trajectory from a poor
-start is pushed the right way at once. The tuning parameters pull against each other: $\epsilon$ sets
-the accuracy of the integrator, since too large a value makes the energy error explode and the
-trajectory diverge, while $L\epsilon$ sets how far a proposal travels, too short a trajectory
-degenerating into a random walk with expensive steps and too long a one curving back on itself so the
-extra gradients buy nothing. Since each iteration costs $L+1$ gradients, the best $L$ depends on the
-local geometry.
+start is pushed the right way at once; its first element is negative because fewer than half of the
+months are losing ones, so the intercept must fall from zero. The tuning parameters pull against each
+other: $\epsilon$ sets the accuracy of the integrator, since too large a value makes the energy error
+explode and the trajectory diverge, while $L\epsilon$ sets how far a proposal travels, too short a
+trajectory degenerating into a random walk with expensive steps and too long a one curving back on itself
+so the extra gradients buy nothing. Since each iteration costs $L+1$ gradients, the best $L$ depends on
+the local geometry.
 
 ## The no-U-turn sampler
 
@@ -645,13 +838,15 @@ idea used earlier in this lecture now applied to selecting a point along a traje
 real line, and doubling aborts early if the energy error grows too large. With dual averaging, which
 adapts $\epsilon$ during warm-up to a target acceptance rate, this leaves nothing to tune, which is why it
 is the default engine of modern probabilistic programming. We do not implement it; it automates the choice
-of $L$ without changing the dynamics.
+of $L$ without changing the dynamics. The relevance here is direct: the hand-tuned step size below is
+delicate, and a moderately larger value makes the energy error explode and the acceptance rate collapse,
+which is exactly the fragility dual averaging removes.
 
 ## Comparing the two samplers
 
 Efficiency must be measured per unit of cost, not per iteration, so the comparison times each run and
 counts posterior evaluations: one log density per random-walk iteration against $L+1$ gradients per
-Hamiltonian iteration, here with $\epsilon = 0.15$ and $L = 7$. It reports the smallest effective
+Hamiltonian iteration, here with $\epsilon = 0.05$ and $L = 7$. It reports the smallest effective
 sample size across coefficients per second and per evaluation, plus the two autocorrelations.
 
 ```{python}
@@ -662,47 +857,64 @@ def efficiency(name, run, per_iter):
     return kept, {"sampler": name, "acceptance": out[1], "min_ESS": e, "seconds": secs,
                   "ESS_per_sec": e / secs, "ESS_per_1000_eval": 1000 * e / (per_iter * n_iter)}
 
-mh_post, mh_row = efficiency("RW-MH", lambda: rw_metropolis(log_posterior, init, 0.15, n_iter, rng), 1)
+mh_post, mh_row = efficiency("RW-MH",
+                             lambda: rw_metropolis(log_posterior, init, base_step, n_iter, rng), 1)
 hmc_post, hmc_row = efficiency("HMC", lambda: hmc(log_posterior, grad_log_posterior, init,
-                                                  0.15, 7, n_iter, rng), 8)
+                                                  0.05, 7, n_iter, rng), 8)
 print(pd.DataFrame([mh_row, hmc_row]).set_index("sampler").round(2))
-print("posterior means:", np.round(mh_post.mean(axis=0), 3), np.round(hmc_post.mean(axis=0), 3))
+print("posterior means:", np.round(mh_post.mean(axis=0), 4), np.round(hmc_post.mean(axis=0), 4))
+print(f"P(term-spread coefficient < 0): RW-MH {(mh_post[:,1] < 0).mean():.4f}, "
+      f"HMC {(hmc_post[:,1] < 0).mean():.4f}")
 fig, ax = plt.subplots()
 for series, label in [(mh_post[:, 1], "RW-MH"), (hmc_post[:, 1], "HMC")]:
     ax.plot(np.arange(41), acf(series, 40), ".-", label=label)
 ax.axhline(0, color="black", lw=0.8)
 ax.set_xlabel("lag"); ax.set_ylabel("autocorrelation")
-ax.set_title(r"Autocorrelation of $\beta_1$ under the two samplers")
+ax.set_title(r"Autocorrelation of the term-spread coefficient under the two samplers")
 ax.legend()
 plt.tight_layout()
 plt.show()
 ```
 
-The two samplers agree on the posterior means to within a few hundredths for every coefficient, and the
-figure shows the random-walk autocorrelation persisting for a few dozen lags where the Hamiltonian one
-dies out within about ten. The table prices the trade-off: Hamiltonian Monte Carlo more than doubles the
-effective sample size per iteration at a far higher acceptance rate, but each iteration costs eight
-gradients rather than one cheap density evaluation, so per second, and even per thousand posterior
-evaluations, the random walk is comfortably ahead on this low-dimensional, nearly spherical posterior.
-Gradients are not free, and their overhead has not yet been repaid here. The Hamiltonian reputation comes
-from scaling: a spherical random-walk proposal is punished harder the more narrow directions a posterior
-has, whereas a gradient-guided trajectory follows the ridge and pays for dimensions roughly linearly, so
-the crossover in favour of Hamiltonian Monte Carlo shows up only once dimension or curvature grows, which
-is exactly what the exercises at the end of this lecture ask you to locate.
+The two samplers agree on the intercept and the term-spread coefficient to within about a thousandth,
+they agree on the poorly identified unemployment coefficient to within its own Monte Carlo error, and
+they agree on the headline probability that the term-spread coefficient is negative, $0.9902$ against
+$0.9922$, which is the first thing to check. The figure shows the random-walk autocorrelation persisting
+for a few dozen lags where the Hamiltonian one has all but disappeared after one or two. The table prices
+the trade-off, and on this posterior it comes out the other way from the textbook warning: Hamiltonian
+Monte Carlo turns four thousand kept draws into $2{,}756$ effectively independent ones against the random
+walk's $275$, at an acceptance rate of $0.87$ against $0.28$. Each Hamiltonian iteration costs eight
+gradient evaluations rather than one cheap density evaluation, but the gradient is a single matrix
+product over $795$ observations and costs little more in wall-clock time than the density itself. Per
+thousand posterior evaluations the Hamiltonian sampler is modestly ahead, $68.9$ against $55.1$; per
+second of wall-clock time, which is the column that will vary from machine to machine, it is ahead by
+more than a factor of two.
+
+What makes the difference here, and did not in a spherical toy problem, is the geometry of a real design
+matrix. The three coefficients have posterior standard deviations differing by a factor of about five,
+because the term spread and the unemployment change are measured on different scales and are not
+orthogonal, so a spherical random-walk proposal must be tuned to the narrowest direction and then
+crawls along the widest. A gradient-guided trajectory follows the ridge instead and pays for extra
+dimensions roughly linearly. The general lesson stands: the crossover in favour of Hamiltonian Monte
+Carlo appears as soon as dimension or curvature grows, and a realistic macro-finance posterior is
+already on the right side of it.
 
 The autocorrelation plot already showed the efficiency gap in one number per lag; the same
 gap is visible directly in how the two chains move through parameter space, which the next
 block draws for the same three hundred kept sweeps used above.
 
-**Reading the computation.** Both panels trace the same number of kept sweeps of the two logistic-regression coefficients. A path that revisits the same neighbourhood repeatedly covers less ground per sweep than one that keeps moving to new territory.
+**Reading the computation.** Both panels trace the same number of kept sweeps of the intercept and the
+term-spread coefficient. A path that revisits the same neighbourhood repeatedly covers less ground per
+sweep than one that keeps moving to new territory.
 
 ```{python}
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 axes[0].plot(mh_post[:300, 0], mh_post[:300, 1], lw=0.6, color="steelblue")
-axes[0].set_title("Random-walk MH"); axes[0].set_xlabel(r"$\beta_0$"); axes[0].set_ylabel(r"$\beta_1$")
+axes[0].set_title("Random-walk MH"); axes[0].set_xlabel(r"intercept $\beta_0$")
+axes[0].set_ylabel(r"term spread $\beta_1$")
 axes[1].plot(hmc_post[:300, 0], hmc_post[:300, 1], lw=0.6, color="darkorange")
-axes[1].set_title("Hamiltonian Monte Carlo"); axes[1].set_xlabel(r"$\beta_0$")
-fig.suptitle("300 kept sweeps in the (beta0, beta1) plane")
+axes[1].set_title("Hamiltonian Monte Carlo"); axes[1].set_xlabel(r"intercept $\beta_0$")
+fig.suptitle("300 kept sweeps in the (intercept, term-spread) plane")
 plt.tight_layout(); plt.show()
 ```
 
@@ -725,7 +937,9 @@ would have anchored a proper regression. We build the model those engineers shou
 logistic regression of failure on temperature, fit by the random-walk Metropolis-Hastings sampler
 developed above, and we push every posterior draw through to the quantity that mattered on the night, the
 predicted failure probability at 31 degrees. This is why the case is taught: it is a real forecasting
-failure with fatal consequences, not a textbook illustration invented after the fact.
+failure with fatal consequences, not a textbook illustration invented after the fact. It is also the same
+model as the macro-finance application above, on twenty-three observations instead of seven hundred and
+ninety-five, which is a useful reminder that the sampler does not care.
 
 We hard-code the 23 pre-Challenger launch observations, the temperature in Fahrenheit and whether at least
 one O-ring failed, exactly as recorded in the mission history, and fit
@@ -801,10 +1015,12 @@ at which the predicted failure probability crosses one half, found by setting $\
 solving, $x^\ast = -\alpha/\beta$; because $\beta$'s posterior has mass close to zero, the ratio
 $-\alpha/\beta$ has a heavy right and left tail, so the posterior **mean** of $x^\ast$ can be pulled far
 by rare draws with $\beta$ near zero even though the **median** is stable, and a credible interval is the
-honest way to communicate the spread. The second quantity is the posterior of the failure probability
-itself at the actual launch temperature of 31 degrees, $p_{31} = 1/(1 + e^{-(\alpha + 31\beta)})$, obtained
-by pushing every retained draw of $(\alpha, \beta)$ through the logistic function, exactly the posterior
-predictive logic of Lecture 1 applied to a regression instead of a single probability.
+honest way to communicate the spread. This is the same warning Lecture 2 issued about a ratio of
+regression coefficients, now with a temperature attached to it. The second quantity is the posterior of
+the failure probability itself at the actual launch temperature of 31 degrees,
+$p_{31} = 1/(1 + e^{-(\alpha + 31\beta)})$, obtained by pushing every retained draw of $(\alpha, \beta)$
+through the logistic function, exactly the posterior predictive logic of Lecture 1 applied to a
+regression instead of a single probability.
 
 ```{python}
 tipping = -alpha_draws / beta_draws
@@ -823,7 +1039,7 @@ print(f"failure probability at 31 F: median {p31_median:.3f}, "
 
 The mean and median of the tipping point differ, exactly as the heavy-tail warning predicted, and the
 median inside its credible interval is the number to quote. The failure probability at 31 degrees is
-concentrated near one and its credible interval sits almost entirely above one half: the model built from
+concentrated near one and its credible interval sits entirely above one half: the model built from
 data that were already on the shelf the night before launch says a failure was close to certain at that
 temperature, using nothing more exotic than logistic regression and the random-walk sampler introduced at
 the start of this lecture.
@@ -868,9 +1084,10 @@ the chain may never cross the low-density gap. A high acceptance rate then tells
 us about local step size, not global exploration. Starting several chains in the
 same mode can hide the problem even in between-chain diagnostics.
 
-For the logistic comparison, inspect coefficient traces, effective sample sizes
-per second and agreement across dispersed starts. The posterior under a proper
-Normal prior need not resemble this deliberately multimodal example; the lesson
+The logistic comparison above illustrates the constructive side of the same point: inspect coefficient
+traces, effective sample sizes per second and agreement across dispersed starts, and note that the
+tiny-step chain accepted almost every proposal while returning an $\hat R$ far above the threshold. The
+posterior under a proper Normal prior need not resemble a deliberately multimodal example; the lesson
 is that an acceptance statistic is not a convergence certificate. NUTS adapts
 trajectory length and step size but does not remove every difficult geometry.
 Explain which posterior feature makes your chosen diagnostic informative.
@@ -889,16 +1106,18 @@ can be mixed within a single chain without breaking convergence, which is what l
 a non-standard full conditional and what let one chain in this lecture alternate an independence step with
 a random walk and still recover the right posterior. No sampler may be trusted on its output alone: trace
 plots, the effective sample size, the Monte Carlo standard error and $\hat R$ are the minimum evidence
-before quoting a summary, whether the target is a single non-conjugate probability or a multivariate
+before quoting a summary, whether the target is a single non-conjugate loss probability or a multivariate
 logistic regression. Hamiltonian Monte Carlo replaces blind proposals by gradient-guided leapfrog
 trajectories with a Metropolis correction for the discretisation error, and the no-U-turn sampler picks
-the path length by doubling until the trajectory turns back, at one gradient per step, a gain growing with
-the dimension and curvature of the posterior. The Challenger case shows what all of this machinery is for:
+the path length by doubling until the trajectory turns back, at one gradient per step; on the anisotropic
+macro-finance posterior of this chapter that gain is already decisive, with roughly seven in ten
+Hamiltonian draws effectively independent against a few hundred in total from the random walk. The economic content survives the
+computation: a steeper yield curve genuinely lowers the odds of a losing month, with posterior
+probability $0.9895$ on a negative coefficient, while a published change in the unemployment rate
+predicts nothing. The Challenger case shows what all of this machinery is for:
 a logistic regression fit by the plainest possible sampler, and a heavy-tailed derived quantity summarised
 honestly by its median rather than its mean, would have said plainly that a launch at 31 degrees was
 almost certain to fail.
-
-
 
 ## Reading guide and sources
 

@@ -10,6 +10,41 @@ The [Week 11 exercise session](../exercise-sessions/11-variable-selection.qmd) c
 chapter's practice questions.
 :::
 
+## Start with a factor committee: which exposures add information?
+
+A fund's returns appear related to market, size, value, profitability and
+investment factors. **Which exposures are supported by the sample, and which
+are plausible-looking noise?** Including every candidate without regularisation
+can produce unstable estimates; choosing a single winning model hides uncertainty.
+
+For one loading $b$, introduce an indicator $\gamma$. A narrow Normal prior
+when $\gamma=0$ keeps the loading near zero; a wider Normal when $\gamma=1$
+allows an economically larger exposure. The indicator is a model variable,
+not a claim that the true loading is known to be exactly zero.
+
+Take illustrative spike and slab standard deviations 0.05 and 0.5, with prior
+inclusion probability 0.2. Conditional on a current loading draw, Bayes' rule gives
+
+$$\frac{P(\gamma=1\mid b)}{P(\gamma=0\mid b)}
+=\frac{0.2}{0.8}\frac{\phi(b;0,0.5^2)}{\phi(b;0,0.05^2)}.$$
+
+At $b=0$, the density ratio is 0.1 and inclusion probability is about 0.024.
+At $b=0.2$, the log density ratio is
+$\log(0.1)+\tfrac12(0.2)^2(1/0.05^2-1/0.5^2)\approx5.62$,
+giving conditional inclusion probability about 0.986. A loading far from zero
+is difficult to reconcile with the spike.
+
+This is not a selection decision based on one estimated coefficient. The Gibbs
+sampler also redraws the coefficients, so posterior inclusion probabilities
+average over uncertain loadings. Two correlated factors may substitute for
+each other across draws; modest individual inclusion probabilities need not
+mean their shared economic exposure is irrelevant.
+
+The finance exercise implements these steps for observed candidate factors.
+Plot inclusion probabilities together with posterior model size, then inspect
+the correlations among candidates. The committee should see which conclusions
+survive prior changes, rather than receive a list labelled “the true factors”.
+
 ## From macroeconomic shrinkage to the factor zoo
 
 Lectures 6 to 8 built a toolkit for high-dimensional macroeconometrics, where a zero-mean Normal prior turns out to

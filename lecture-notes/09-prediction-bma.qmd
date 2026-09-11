@@ -10,6 +10,41 @@ The [Week 9 exercise session](../exercise-sessions/09-prediction-bma.qmd) contai
 chapter's practice questions.
 :::
 
+## Start with an inflation forecast: what probability belongs on an overshoot?
+
+A central bank cares not only about the most likely inflation rate but also
+about the chance that inflation exceeds a threshold. **How much wider should
+its forecast be because the model parameters are estimated?**
+
+Begin with an illustrative one-step model in percentage points:
+$y_{T+1}=\mu+\varepsilon_{T+1}$, with future shock variance 0.36.
+Suppose the posterior for the unknown mean is $\mu\mid y\sim N(2,0.16)$,
+independent of that future shock. Conditional on one candidate mean, future
+inflation is Normal around that mean. Mixing over all candidate means gives
+
+$$y_{T+1}\mid y\sim N(2,\underbrace{0.36}_{\text{future news}}
++\underbrace{0.16}_{\text{uncertain mean}}).$$
+
+This follows from the laws of total expectation and variance:
+$E[y_{T+1}\mid y]=E[\mu\mid y]$ and
+$\operatorname{Var}(y_{T+1}\mid y)=E[\operatorname{Var}(y_{T+1}\mid\mu)]
++\operatorname{Var}(E[y_{T+1}\mid\mu])$.
+Plugging in $\mu=2$ drops the second term. For a threshold of 3%, it gives an
+overshoot probability about 4.8%, compared with about 8.3% under the predictive distribution.
+
+There may also be competing models. Suppose a stable-mean model has forecast
+density 0.1 at the next observed value, while a persistent-inflation model has
+density 0.3. Starting with equal model probabilities, Bayes' rule updates them to
+0.25 and 0.75. These numbers are densities evaluated at the same observation,
+not probabilities of observing an exact continuous value.
+
+The next forecast mixes the two predictive distributions using those updated
+weights. Never use an observation to update weights and then claim the resulting
+mixture was issued before that observation. The exercise's log-predictive scores
+and sequential BMA updates enforce this timing. Plot the actual inflation
+history first: calm periods and abrupt changes help explain why the models can
+earn different predictive weights.
+
 ## From parameters to forecasts
 
 Almost everything so far has been about the posterior of a parameter, yet little economic

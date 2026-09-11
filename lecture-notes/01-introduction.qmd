@@ -10,6 +10,46 @@ The [Week 1 exercise session](../exercise-sessions/01-introduction.qmd) contains
 chapter's practice questions.
 :::
 
+## Start with an investor's question: how likely is a losing month?
+
+An investment committee asks: **What probability should we assign to a negative
+market excess return next month?** Twelve observations do not reveal a fixed
+probability precisely. We need to distinguish the observed frequency from the
+unknown probability that generated it.
+
+For a first calculation, imagine four losing months out of twelve. These are
+illustrative counts, not an empirical estimate. Write $L_t=1$ for a loss and
+$L_t=0$ otherwise. If the probability is $\theta$, an observed loss contributes
+$\theta$ to the probability of the data; a non-loss contributes $1-\theta$.
+Assuming conditional independence and a stable probability within this example,
+multiplication over the twelve months gives
+
+$$p(L_1,\ldots,L_{12}\mid\theta)=\theta^4(1-\theta)^8.$$
+
+That is where the likelihood comes from. We have counted outcomes, not guessed a
+distribution because it is convenient. If we retained only the count rather than
+the sequence, a binomial coefficient would appear; it is constant in $\theta$.
+
+Suppose the prior is $\operatorname{Beta}(2,2)$, centred on one half but quite
+uncertain. Its density is proportional to $\theta(1-\theta)$. Multiply:
+
+$$p(\theta\mid L)\propto\theta^{4+1}(1-\theta)^{8+1}
+\quad\Longrightarrow\quad \theta\mid L\sim\operatorname{Beta}(6,10).$$
+
+The posterior mean is $6/16=0.375$. It lies between the prior mean $0.5$ and the
+sample frequency $4/12$. The probability of a loss next month is also 0.375:
+average each possible loss probability over its posterior. This is different
+from asking how uncertain we are about $\theta$, which requires the whole Beta density.
+
+**Explain it to the committee.** Four losses are evidence against a 50% loss
+probability, but twelve months are not enough to rule out nearby alternatives.
+Losses may cluster, so this constant-probability model is a starting point. We
+will later let predictors and latent states change probabilities over time.
+
+**Work through the chapter in this order:** count events; multiply likelihood
+and prior; normalise; predict. In the grid exercise, reproduce this reasoning by
+assigning probability mass to possible values of $\theta$ before using the general formulas.
+
 ## Where we are going
 
 Every empirical question in economics and finance is a question about a quantity we
@@ -34,12 +74,16 @@ answer is a weighted average of what we believed and what we saw, and end with
 prediction and with the observation that Bayesian updating never has to start over.
 
 ```{python}
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy import stats
 import matplotlib.pyplot as plt
 
 from scipy.special import betaln, gammaln
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
 
 rng = np.random.default_rng(2026)
 plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
@@ -647,6 +691,101 @@ The data can both revise the probability within a story and change which story
 is credible. Keeping the old mixture weights would ignore the second update.
 The grid exercise can approximate this posterior without any new integration
 formula. In Week 9, the same calculation becomes Bayesian model averaging.
+
+## The same model on a century of market data
+
+Everything so far has been done on a coin, which is honest about the algebra and silent about
+economics. The beta-binomial model becomes considerably more interesting the moment the binary
+outcome is one an investor actually faces: in a given month, does the market go up or down? The
+question opens this chapter, and we now have the machinery to answer it.
+
+The data are the monthly return on the US market portfolio from the Kenneth French data library,
+which starts in July 1926. That gives an unusually long record, and a long record allows the one
+thing a prior most needs, namely evidence from outside the sample being analysed. We split the
+history: everything up to the end of 1989 forms the prior, and the period from 1990 onwards is the
+data we update on. This is not a device for the classroom. It is what a Bayesian actually does
+when a long history exists but the recent regime is the object of interest.
+
+**Reading the computation.** The block loads the factor file, reconstructs the total market return
+by adding the risk-free rate back to the excess return, and counts up and down months in the two
+periods. Those counts are the prior parameters and the likelihood's sufficient statistics.
+
+```{python}
+ff_m = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
+market = ff_m["mkt_rf"] + ff_m["rf"]                 # total return on the market
+
+prior_sample, new_sample = market[:"1989-12"], market["1990-01":]
+a_pre, b_pre = int((prior_sample > 0).sum()), int((prior_sample <= 0).sum())
+y_new, n_new = int((new_sample > 0).sum()), len(new_sample)
+
+print(f"1926-1989: {a_pre} up, {b_pre} down months, share up {a_pre/(a_pre+b_pre):.4f}")
+print(f"1990-2026: {y_new} up, {n_new - y_new} down months, share up {y_new/n_new:.4f}")
+```
+
+The historical record gives $762$ months, of which $469$ were positive, and the modern period gives
+$439$ months with $285$ positive. Read as a prior, the pre-1990 evidence is a
+$\text{Beta}(469, 293)$ distribution, an extremely informative one: it is worth $762$ observations,
+almost twice the sample we are about to add. That is the honest position here. We are not inventing
+a belief, we are carrying forward what sixty-three years of data already showed.
+
+Updating is the arithmetic from the previous section, add the successes to the first parameter and
+the failures to the second, so the posterior is $\text{Beta}(469 + 285,\; 293 + 154)$.
+
+```{python}
+prior_m = stats.beta(a_pre, b_pre)
+post_m = stats.beta(a_pre + y_new, b_pre + n_new - y_new)
+w_m = (a_pre + b_pre) / (a_pre + b_pre + n_new)
+
+grid_m = np.linspace(0.55, 0.70, 400)
+fig, ax = plt.subplots()
+ax.plot(grid_m, prior_m.pdf(grid_m), ":", label="prior: 1926-1989")
+ax.plot(grid_m, post_m.pdf(grid_m), label="posterior: prior + 1990-2026")
+ax.axvline(y_new / n_new, color="grey", lw=1, label=f"1990-2026 frequency {y_new/n_new:.3f}")
+ax.set_xlabel(r"$\theta$, probability that a month is positive")
+ax.set_ylabel("density"); ax.legend(fontsize=9)
+ax.set_title("A century of market months, split into prior and data")
+plt.tight_layout(); plt.show()
+
+print(f"prior mean {prior_m.mean():.4f}   modern frequency {y_new/n_new:.4f}   "
+      f"posterior mean {post_m.mean():.4f}")
+print(f"weight on the prior w = {w_m:.4f}, so posterior mean = "
+      f"{w_m:.4f}*{prior_m.mean():.4f} + {1-w_m:.4f}*{y_new/n_new:.4f}")
+print(f"posterior 95% interval [{post_m.ppf(0.025):.4f}, {post_m.ppf(0.975):.4f}]")
+```
+
+The posterior sits at $0.6278$, between the historical $0.6155$ and the modern $0.6492$, and closer
+to the historical value because the prior carries $762$ observations against $439$. The weighted
+average formula reproduces it exactly, which is the same identity as for the coin, now with numbers
+an investor can argue about. The credible interval runs from $0.6003$ to $0.6549$: after a century
+of data we still cannot pin the monthly win rate down more tightly than about five percentage
+points, which is a useful corrective to anyone quoting such a figure to three decimals.
+
+Two things deserve comment before we move on, because both are easy to get wrong.
+
+The first is what the number does and does not say. A probability of $0.63$ that a month is
+positive sounds like a licence to be long, and it is not, because it says nothing about magnitude.
+Down months are on average larger than up months, which is precisely why the question of interest
+in finance is rarely a probability of direction alone. The Bernoulli model deliberately throws that
+information away, and knowing what a model discards is as important as knowing what it estimates.
+
+The second is that the split into prior and data assumes the two periods are informative about the
+same $\theta$. If the market's monthly win rate changed after 1990, then using the earlier period as
+a prior does not sharpen the estimate, it contaminates it. The assumption is testable in a crude
+way: if the modern frequency lands far in the tail of the prior, the two are hard to reconcile.
+
+```{python}
+z_pos = (y_new / n_new - prior_m.mean()) / prior_m.std()
+prior_pred_sd = np.sqrt(prior_m.mean() * (1 - prior_m.mean()) / n_new)
+print(f"modern frequency is {z_pos:.1f} prior standard deviations above the prior mean")
+print(f"but sampling noise alone in {n_new} months is about "
+      f"{prior_pred_sd:.4f}, i.e. {(y_new/n_new - prior_m.mean())/prior_pred_sd:.1f} "
+      f"standard errors")
+```
+
+The modern frequency is high relative to the prior, but relative to the sampling noise in $439$
+months it is well within the range one would expect if $\theta$ had not changed at all. The two
+periods are compatible, so pooling them is defensible here. In Lecture 8 we drop the assumption
+entirely and let the parameter drift.
 
 ## The posterior without algebra
 
