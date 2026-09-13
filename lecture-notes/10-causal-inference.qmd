@@ -147,6 +147,56 @@ Both predictions must come from the **same surface draw** so their dependence is
 preserved. The quantity is an average conditional mean effect at the empirical
 covariate distribution, not a recovered individual missing potential outcome.
 
+::: {.callout-note collapse="true"}
+## Derivation: the estimand as missing data, and where its posterior comes from
+
+Collect for each unit the pair $(Y_i(0), Y_i(1))$ and define the finite-sample average effect
+$$
+\tau_{fs} \;=\; \frac{1}{n}\sum_{i=1}^{n}\big[Y_i(1) - Y_i(0)\big].
+$$
+Split the sum according to which arm was realised. For a treated unit the observed outcome is $Y_i(1)$
+and the missing one is $Y_i(0)$; for a control unit it is the other way round. Writing $Y_i^{mis}$ for
+whichever arm was not realised,
+$$
+\tau_{fs} \;=\; \frac{1}{n}\sum_{i=1}^{n}(2D_i - 1)\big(Y_i - Y_i^{mis}\big).
+$$
+Check the two cases: with $D_i = 1$ the factor $(2D_i-1)$ is $+1$ and the bracket is
+$Y_i(1) - Y_i(0)$; with $D_i = 0$ the factor is $-1$ and the bracket is $Y_i(0) - Y_i(1)$, whose
+negative is again $Y_i(1)-Y_i(0)$. So the estimand is a known linear function of data we have and data
+we do not have, and nothing else. This is the sense in which causal inference is a missing-data
+problem: there is no unknown parameter in that display at all.
+
+A Bayesian therefore needs the posterior predictive distribution of the missing arm,
+$$
+p\big(Y^{mis} \mid Y^{obs}, D, X\big) \;=\; \int p\big(Y^{mis} \mid \theta, D, X\big)\,
+p\big(\theta \mid Y^{obs}, D, X\big)\, d\theta .
+$$
+The first factor is where the identifying assumptions enter. Consistency says the observed outcome is
+the potential outcome for the arm actually taken, so the model fitted on the treated units describes
+$Y(1)$ and the model fitted on the controls describes $Y(0)$. Unconfoundedness,
+$(Y(0), Y(1)) \perp D \mid X$, says that the arm a unit happened to take carries no further
+information about its potential outcomes once $X$ is held fixed, so
+$p(Y_i^{mis} \mid \theta, D_i, X_i) = p\big(Y_i(1 - D_i) \mid \theta, X_i\big)$: the missing arm of
+unit $i$ is predicted by the *opposite* arm's fitted conditional distribution evaluated at unit $i$'s
+own covariates. Overlap guarantees that there were units in that opposite arm near $X_i$ from which
+to learn it.
+
+The algorithm follows immediately. For each posterior draw $\theta^{(s)}$, impute
+$Y_i^{mis,(s)}$ from the opposite-arm predictive at $X_i$, then compute
+$\tau_{fs}^{(s)} = n^{-1}\sum_i (2D_i-1)(Y_i - Y_i^{mis,(s)})$. Repeating over draws gives a posterior
+for $\tau_{fs}$ directly, with no estimator and no standard-error formula anywhere.
+
+Two estimands are easy to confuse here. If we replace each imputed $Y_i^{mis,(s)}$ by its conditional
+mean $f^{(s)}(1-D_i, x_i)$ rather than drawing it, we obtain
+$\tau^{(s)} = n^{-1}\sum_i[f^{(s)}(1,x_i) - f^{(s)}(0,x_i)]$, the average conditional mean contrast
+used in the rest of this chapter. The difference between the two is exactly the averaged residual
+noise: the imputation adds an independent $-(2D_i-1)\varepsilon_i^{mis}/n$ to each term, contributing
+variance $\sigma^2/n$ to the posterior. In the simulation below, with $\sigma^2 = 1$ and $n = 600$,
+that is a standard deviation of $1/\sqrt{600} = 0.041$, so the finite-sample estimand carries a
+posterior noticeably wider than the conditional mean estimand even though both are called "the average
+treatment effect". Report which one you computed.
+:::
+
 ## A confounded policy experiment
 
 The chunk below simulates a confounder that drives selection through a non-linear propensity and
@@ -574,6 +624,687 @@ and a narrow extrapolation interval does not establish overlap.
 
 *Source connection:* SGPE Lecture 3, Part II, PDF pp. 4–19, supplies tree modelling;
 Hill (2011) and Imbens and Rubin (2015) supply the causal interpretation.
+
+## What these data can and cannot identify
+
+Everything above ran on simulated data, and that was deliberate: a simulation is the only place where
+the true effect is known and a method can be checked against it. The honest counterpart to that
+convenience is to say plainly what happens when we turn to the data actually shipped with this course.
+The repository holds macroeconomic series from FRED and portfolio returns from the Kenneth French
+library. Neither contains a randomised experiment. Nobody assigned the federal funds rate at random,
+nobody assigned an industry to the 2020 pandemic, and there is no lottery, no discontinuity and no
+credible instrument sitting in these files waiting to be used. A chapter that produced a number and
+called it a causal effect of monetary policy on equity prices would be teaching the wrong lesson.
+
+What these data do support is two exercises that are worth doing carefully, provided their status is
+stated. The first is an event study: pick a rule that says when a tightening cycle began, line the
+market's return up in event time and ask what the posterior says about the average path around those
+dates. The second is a synthetic-control style comparison: take one industry hit hard by a shock, build
+a weighted combination of the other industries that tracked it before the shock, and look at the gap
+afterwards. Both produce a posterior distribution over a well-defined quantity. In both cases that
+quantity is a descriptive gap, not a treatment effect, and the rest of this section is about seeing
+precisely how far that is from the causal quantity a policy maker would want.
+
+The setup below loads the three files we need and reports what is in them.
+
+**Reading the computation.** The funds rate and the market return are aligned on the same monthly index so that event time is unambiguous. The industry file is checked for the date from which all forty-nine portfolios are complete, because a synthetic control cannot use a donor that is missing.
+
+```{python}
+from pathlib import Path
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+rng_r = np.random.default_rng(2026)
+
+fred_r = pd.read_parquet(DATA / "fred_macro_monthly.parquet")
+ff_r = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
+ind_r = pd.read_parquet(DATA / "ff_industry49_monthly.parquet")
+
+mkt = ff_r["mkt_rf"].reindex(fred_r.index).dropna()
+print(f"funds rate: {fred_r.index[0]:%Y-%m} to {fred_r.index[-1]:%Y-%m}, "
+      f"{len(fred_r)} months")
+print(f"market excess return: {len(mkt)} matched months, mean {mkt.mean():.4f}, "
+      f"sd {mkt.std(ddof=1):.4f}")
+print(f"industry portfolios: {ind_r.shape[1]} series, complete from "
+      f"{ind_r.dropna().index[0]:%Y-%m}")
+```
+
+The funds rate covers $800$ months from January 1960 to August 2026 and the market excess return
+matches $799$ of them, averaging $0.0059$ per month with a standard deviation of $0.0445$. That ratio
+is the background fact against which everything below has to be read: a monthly mean of about six tenths
+of a percentage point sits inside a monthly standard deviation of four and a half percentage points, so
+a year of data contains roughly $0.0059 \times 12 = 0.071$ of signal against
+$0.0445\sqrt{12} = 0.154$ of noise. Any event-study effect we could hope to detect with a dozen episodes
+must be large indeed. The forty-nine industry portfolios are complete from July 1969 onwards, which
+fixes the earliest usable start for the second exercise.
+
+## A Bayesian event study around Federal Reserve tightening cycles
+
+### Writing the rule down in code
+
+There is no official list of tightening episodes in these files, so we have to manufacture one, and the
+manufacturing is the interesting part. A reasonable rule says that a tightening cycle has begun in month
+$t$ if the federal funds rate is at least $\theta$ percentage points higher than it was twelve months
+earlier, and if no episode has already been dated within the preceding $q$ months. The two numbers
+$\theta$ and $q$ are choices, not facts. A low $\theta$ catches mild adjustments alongside genuine
+cycles; a high $\theta$ keeps only the dramatic ones. A short $q$ splits a long tightening into several
+episodes; a long $q$ merges neighbouring ones and, because the rule keeps the first qualifying month, it
+also changes *which* month is called the start.
+
+**Reading the computation.** The function returns event dates, not a regression. Everything downstream conditions on this list, so the list is the first place to look when an event-study result seems fragile.
+
+```{python}
+def tightening_starts(rate, window=12, threshold=1.5, quiet=24):
+    """First month whose `window`-month rise in the policy rate reaches
+    `threshold`, ignoring any such month within `quiet` months of the last start."""
+    hot = rate.diff(window) >= threshold
+    starts, last = [], None
+    for date, is_hot in hot.items():
+        if not is_hot:
+            continue
+        if last is not None and (date - last).days < quiet * 30.5:
+            continue
+        starts.append(date)
+        last = date
+    return pd.DatetimeIndex(starts)
+
+starts_base = tightening_starts(fred_r["fed_funds"], 12, 1.5, 24)
+starts_loose = tightening_starts(fred_r["fed_funds"], 12, 1.0, 18)
+print(f"baseline rule (12-month rise >= 1.5pp, 24-month gap): {len(starts_base)} episodes")
+print("  " + ", ".join(f"{d:%Y-%m}" for d in starts_base))
+print(f"looser rule (>= 1.0pp, 18-month gap): {len(starts_loose)} episodes")
+print("  " + ", ".join(f"{d:%Y-%m}" for d in starts_loose))
+```
+
+The baseline rule returns twelve episodes, and the list is recognisable as monetary history, among them
+November 1966, January 1973, November 1977, December 1979 at the start of the Volcker disinflation,
+November 1988, September 1994, May 2000, March 2005 and July 2022. The looser rule returns nineteen. Of
+those, seven are episodes the baseline rule never dates at all, namely November 1969, July 1974,
+November 1980, September 1987, July 2006, October 2018 and January 2024, and most of the remaining
+twelve are shifted a few months earlier because the lower threshold is crossed sooner, so that the
+2005 episode becomes December 2004 and the 2022 episode becomes June 2022. Seven extra episodes and a
+dozen moved dates from changing two numbers that nobody can pin down from theory is the whole
+methodological problem of this literature in one table.
+
+**Reading the computation.** The vertical lines mark the dates the two rules produced. Where a solid and a dotted line nearly coincide the two rules agree; where a dotted line stands alone the looser rule has added an episode.
+
+```{python}
+fig, ax = plt.subplots()
+ax.plot(fred_r.index, fred_r["fed_funds"], color="0.35", lw=1.0,
+        label="federal funds rate")
+for d in starts_base:
+    ax.axvline(d, color="firebrick", lw=1.0, alpha=0.8)
+for d in starts_loose:
+    ax.axvline(d, color="steelblue", lw=0.8, ls=":", alpha=0.9)
+ax.plot([], [], color="firebrick", lw=1.0, label="baseline rule start")
+ax.plot([], [], color="steelblue", lw=0.8, ls=":", label="looser rule start")
+ax.set_xlabel("date"); ax.set_ylabel("per cent")
+ax.set_title("Tightening episodes identified by two mechanical rules")
+ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The plot makes the mechanics visible. Both rules fire densely through the volatile 1970s, when the
+funds rate moved by whole percentage points within a year routinely, and sparsely after 1995, when it
+moved more slowly and in pre-announced steps. That is itself a warning: an event study that pools these
+dates is averaging across two very different monetary regimes, and the pre-1985 episodes will dominate
+simply because there are more of them.
+
+### The event-time posterior
+
+Line each episode up at event month zero and collect the market's abnormal return, defined as the excess
+return minus its full-sample mean, for event months $-12$ to $+24$. Stacking the episodes gives a matrix
+with one row per episode and one column per event month, and the model is the simplest one that fits the
+question: in event month $h$ the abnormal return of episode $k$ is
+$$
+r_{k,h} \;=\; \mu_h + \varepsilon_{k,h}, \qquad \varepsilon_{k,h} \sim \mathcal{N}(0, \sigma^2),
+$$
+with the conjugate pair $\mu_h \mid \sigma^2 \sim \mathcal{N}(0, \sigma^2 B_0)$ independently across
+event months and $\sigma^2 \sim \mathcal{IG}(\alpha_0, \delta_0)$. This is a difference in means with
+the comparison group folded into the definition of the outcome, so the algebra of the next callout
+applies directly and there is nothing to sample: the posterior is available in closed form and we draw
+from it.
+
+::: {.callout-note collapse="true"}
+## Derivation: the posterior for a difference in means, and why the sharp null is a different object
+
+Take two arms, $n_1$ treated observations with mean $\bar y_1$ and $n_0$ controls with mean $\bar y_0$,
+and a Normal likelihood $y_i \mid D_i = d \sim \mathcal{N}(\mu_d, \sigma^2)$. Use the course's
+conjugate prior, $\mu_d \mid \sigma^2 \sim \mathcal{N}(0, \sigma^2 B_0)$ independently in each arm and
+$\sigma^2 \sim \mathcal{IG}(\alpha_0, \delta_0)$. Conditional on $\sigma^2$ the arms do not talk to each
+other, so work on one arm at a time. The exponent of the product of likelihood and prior is
+$$
+-\frac{1}{2\sigma^2}\left[\sum_{i: D_i = d}(y_i - \mu_d)^2 + \frac{\mu_d^2}{B_0}\right] .
+$$
+Expand the sum of squares as $n_d\mu_d^2 - 2\mu_d S_d + \sum y_i^2$, with $S_d = \sum_{i:D_i=d} y_i$,
+and collect the terms in $\mu_d$:
+$$
+-\frac{1}{2\sigma^2}\left[\Big(n_d + \tfrac{1}{B_0}\Big)\mu_d^2 - 2\mu_d S_d\right] + \text{const}
+= -\frac{n_d + 1/B_0}{2\sigma^2}\left[\mu_d - \frac{S_d}{n_d + 1/B_0}\right]^2 + \text{const} .
+$$
+Completing the square has done the whole job, so
+$$
+\mu_d \mid \sigma^2, y \sim \mathcal{N}\!\left(b_d, \; \sigma^2 V_d\right), \qquad
+V_d = \frac{1}{n_d + 1/B_0}, \qquad b_d = V_d S_d = \frac{n_d}{n_d + 1/B_0}\,\bar y_d .
+$$
+The posterior mean is the arm mean shrunk towards zero by a factor $n_d/(n_d + 1/B_0)$, which tends to
+one as $B_0$ grows or the arm fills up. Because the two arms are conditionally independent, the
+difference $\delta = \mu_1 - \mu_0$ has
+$$
+\delta \mid \sigma^2, y \sim \mathcal{N}\!\big(b_1 - b_0, \; \sigma^2 (V_1 + V_0)\big),
+$$
+and letting $B_0 \to \infty$ recovers the familiar $\bar y_1 - \bar y_0$ with variance
+$\sigma^2(1/n_1 + 1/n_0)$. Integrating $\sigma^2$ out against its inverse-Gamma posterior, whose
+parameters update to $\alpha_n = \alpha_0 + n/2$ and
+$\delta_n = \delta_0 + \tfrac12\big[\sum_d\sum_{i:D_i=d}(y_i - \bar y_d)^2 + \sum_d n_d \bar
+y_d^2/(n_d B_0 + 1)\big]$, turns the Normal into a Student $t$ with $2\alpha_n$ degrees of freedom. In
+code it is easier to draw $\sigma^{2(s)}$ first and then $\delta^{(s)}$ given it, which is what the
+chunk below does.
+
+Now the part that is easy to get wrong. The parameter $\delta$ is the difference between two population
+means. Fisher's sharp null is a different statement altogether: it says $Y_i(1) = Y_i(0)$ for every
+single unit $i$, so that treatment changed nothing for anybody. Three consequences follow. First, the
+sharp null is not a restriction on $\delta$; it implies $\delta = 0$, but $\delta = 0$ does not imply
+it, because individual effects of $+5$ and $-5$ average to zero. Second, under the sharp null every
+missing potential outcome is *known* exactly, since $Y_i^{mis} = Y_i$, so the randomisation
+distribution of any test statistic can be computed by permuting the treatment labels, with no
+likelihood, no prior and no parameter anywhere. Third, and as a result, the two objects answer to
+different evidence: a posterior interval for $\delta$ that excludes zero rejects "no average effect" and
+says nothing about whether some units were unaffected, while a randomisation test of the sharp null with
+a large $p$-value does not argue that the posterior for $\delta$ should be centred at zero. Quote
+whichever you computed, and do not translate one into the other.
+:::
+
+**Reading the computation.** The event matrix drops any episode too close to the start or end of the sample to supply a full window, so the number of usable episodes can be smaller than the number of dated ones. The posterior is drawn, not sampled by MCMC: the inverse-Gamma draw for the variance comes first and the event-month means are drawn conditional on it.
+
+```{python}
+H_LO, H_HI = -12, 24
+hs = np.arange(H_LO, H_HI + 1)
+
+def event_matrix(starts, series, h_lo=H_LO, h_hi=H_HI):
+    idx = series.index
+    rows = []
+    for d in starts:
+        if d not in idx:
+            continue
+        i = idx.get_loc(d)
+        if i + h_lo < 0 or i + h_hi >= len(idx):
+            continue
+        rows.append(series.iloc[i + h_lo: i + h_hi + 1].to_numpy())
+    return np.array(rows)
+
+abn = mkt - mkt.mean()                  # abnormal = excess return minus its own mean
+
+def event_posterior(E, B0=1.0, alpha_0=3.0, delta_0=3.0 * 0.0018, n_draw=8000, rng=None):
+    K, Hn = E.shape
+    ybar = E.mean(axis=0)
+    B_n = 1.0 / (K + 1.0 / B0)
+    m_n = B_n * E.sum(axis=0)
+    SSE = ((E - ybar) ** 2).sum() + (K * ybar ** 2 / (K * B0 + 1.0)).sum()
+    alpha_n, delta_n = alpha_0 + E.size / 2.0, delta_0 + 0.5 * SSE
+    s2 = stats.invgamma(a=alpha_n, scale=delta_n).rvs(n_draw, random_state=rng)
+    mu = m_n[None, :] + np.sqrt(s2[:, None] * B_n) * rng.standard_normal((n_draw, Hn))
+    return mu, s2
+
+E_base = event_matrix(starts_base, abn)
+mu_base, s2_base = event_posterior(E_base, rng=rng_r)
+car_base = mu_base[:, hs >= 0].cumsum(axis=1)
+print(f"{E_base.shape[0]} usable episodes, {E_base.shape[1]} event months each")
+print(f"posterior sd of a monthly abnormal return: {np.sqrt(s2_base.mean()):.4f}")
+for h in (0, 5, 11, 23):
+    lo, hi = np.quantile(car_base[:, h], [0.05, 0.95])
+    print(f"cumulative abnormal return through month {h:>2}: "
+          f"mean {car_base[:, h].mean():+.4f} "
+          f"90% [{lo:+.4f}, {hi:+.4f}]  P(<0) = {(car_base[:, h] < 0).mean():.3f}")
+```
+
+All twelve baseline episodes supply a full window, so the posterior is built on twelve observations per
+event month. The posterior standard deviation of a single monthly abnormal return is $0.0409$, close to
+the unconditional $0.0445$ of the raw series, which tells us straight away that lining returns up in
+event time has removed very little of their variance. The cumulative abnormal return in the announcement
+month itself is $-0.0062$ with a 90 per cent interval of $[-0.0249, +0.0125]$: about six tenths of a
+percentage point of underperformance, and an interval four times as wide as the point. By month eleven
+the cumulative figure is $-0.0082$ with interval $[-0.0726, +0.0565]$, and the posterior probability
+that it is negative is $0.591$, which is barely distinguishable from a coin toss. Only by month
+twenty-three does something emerge: $-0.0751$ with interval $[-0.1678, +0.0186]$ and a posterior
+probability of $0.908$ that the two-year cumulative abnormal return is negative. Even that is not a
+confident finding, and it is the horizon at which one should worry most about other things having
+happened in the meantime.
+
+**Reading the computation.** The left panel is the posterior for the mean abnormal return at each event month separately; the right panel accumulates the months from zero onward within each posterior draw, which is why its band widens with the horizon.
+
+```{python}
+mu_mean = mu_base.mean(axis=0)
+mu_lo, mu_hi = np.quantile(mu_base, [0.05, 0.95], axis=0)
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
+axes[0].fill_between(hs, mu_lo, mu_hi, color="steelblue", alpha=0.3)
+axes[0].plot(hs, mu_mean, color="steelblue", lw=1.5)
+axes[0].axhline(0.0, color="black", lw=0.8, ls=":")
+axes[0].axvline(0, color="firebrick", lw=1.0, ls="--")
+axes[0].set(xlabel="months from episode start", ylabel="abnormal monthly return",
+            title="Posterior mean abnormal return by event month")
+ch = np.arange(0, H_HI + 1)
+c_lo, c_hi = np.quantile(car_base, [0.05, 0.95], axis=0)
+axes[1].fill_between(ch, c_lo, c_hi, color="darkorange", alpha=0.3)
+axes[1].plot(ch, car_base.mean(axis=0), color="darkorange", lw=1.5)
+axes[1].axhline(0.0, color="black", lw=0.8, ls=":")
+axes[1].set(xlabel="months from episode start", ylabel="cumulative abnormal return",
+            title="Cumulative abnormal return with 90% band")
+plt.tight_layout(); plt.show()
+```
+
+The left panel is a reminder of what twelve observations per cell buy. The posterior means jump around
+between roughly $-0.03$ and $+0.03$ from one event month to the next, with bands that almost always
+straddle zero, and the months before the event look no calmer than the months after it. That last
+observation deserves emphasis: if the event genuinely marked a break, we would expect the pre-event
+months to be quiet and the post-event months to move, and they are not. The right panel accumulates
+those means and shows the slow drift downwards after month twelve, with a band that widens roughly as
+the square root of the horizon and never leaves zero behind.
+
+### Nine defensible rules, nine answers
+
+The rule had two free numbers. The next chunk runs the entire exercise over a grid of three thresholds
+and three minimum gaps, reporting the posterior for the twelve-month cumulative abnormal return in
+each case.
+
+**Reading the computation.** Nothing changes between rows except the two arguments of the dating rule. The model, the prior, the horizon and the data are identical throughout, so every difference across rows is attributable to the definition of the event.
+
+```{python}
+rule_rows = []
+for thr in (1.0, 1.5, 2.0):
+    for quiet in (18, 24, 36):
+        st = tightening_starts(fred_r["fed_funds"], 12, thr, quiet)
+        Ee = event_matrix(st, abn)
+        mu_e, _ = event_posterior(Ee, rng=rng_r)
+        car12 = mu_e[:, hs >= 0].cumsum(axis=1)[:, 11]
+        lo, hi = np.quantile(car12, [0.05, 0.95])
+        rule_rows.append({"threshold": thr, "quiet": quiet, "episodes": Ee.shape[0],
+                          "CAR12_mean": car12.mean(), "lo": lo, "hi": hi,
+                          "P(<0)": (car12 < 0).mean()})
+rules = pd.DataFrame(rule_rows)
+print(rules.round(4).to_string(index=False))
+print(f"\nspread of posterior means across the nine rules: "
+      f"{rules['CAR12_mean'].min():+.4f} to {rules['CAR12_mean'].max():+.4f}")
+```
+
+The posterior mean twelve-month cumulative abnormal return runs from $-0.1185$ under the loosest
+threshold with the longest gap to $+0.0064$ under the strictest threshold with a twenty-four month gap.
+That is a swing of twelve and a half percentage points, and it includes a change of sign. Three of the
+nine rules, all of them at the $1.0$ percentage point threshold, produce 90 per cent intervals that
+exclude zero, with posterior probabilities of a negative effect of $0.9736$, $0.9695$ and $0.9986$. The
+other six do not, and one of them, the $2.0$ point threshold with a twenty-four month gap, puts the
+posterior probability of a negative effect at $0.4398$, which is to say slightly below even.
+
+**Reading the computation.** Each row is a complete posterior summary for the same economic question under a different definition of the event. The dotted line is zero.
+
+```{python}
+fig, ax = plt.subplots()
+lab = [f"{r.threshold:.1f}pp / {int(r.quiet)}m" for r in rules.itertuples()]
+ypos = np.arange(len(rules))
+ax.errorbar(rules["CAR12_mean"], ypos,
+            xerr=[rules["CAR12_mean"] - rules["lo"], rules["hi"] - rules["CAR12_mean"]],
+            fmt="o", color="steelblue", capsize=3)
+ax.axvline(0.0, color="black", lw=1.0, ls=":")
+ax.set_yticks(ypos); ax.set_yticklabels(lab, fontsize=8)
+ax.set_xlabel("12-month cumulative abnormal return")
+ax.set_ylabel("threshold / minimum gap")
+ax.set_title("Nine defensible rules, nine different answers")
+plt.tight_layout(); plt.show()
+```
+
+The figure is the argument. A researcher who reported only the bottom three rows would write that
+monetary tightening costs equity investors between six and twelve percentage points over the following
+year with high posterior probability. A researcher who reported only the top three would write that the
+effect is small and indistinguishable from zero. Both would have used the same data, the same model and
+the same prior, and both would have been able to defend their dating rule in a seminar. The posterior
+intervals in each row are correct conditional on the rule, and none of them contains any allowance for
+the fact that the rule was chosen. This is the reason event studies in macroeconomics are usually
+reported over a grid of specifications rather than as a single number, and the reason a Bayesian
+treatment of the parameters does not by itself buy any protection: the uncertainty that matters here
+lives in a choice the model never sees.
+
+## A synthetic control for restaurants and hotels in 2020
+
+### Estimating the donor weights on the pre-event window
+
+The second exercise has a sharper event. In March 2020 the pandemic closed restaurants and hotels in a
+way it did not close software firms or utilities, and the French industry file contains a portfolio,
+labelled `meals`, holding exactly those businesses. The synthetic control idea is to build a portfolio
+of the other forty-eight industries that tracked `meals` closely before the shock, and then to read the
+post-shock difference between the two as the gap left by the event.
+
+Concretely, regress the treated industry's monthly return on the returns of the forty-eight donors over
+a pre-event window running from January 2010 to January 2020, with no intercept so that the synthetic
+control is a portfolio rather than a portfolio plus a constant. Use the course's conjugate prior,
+$w \mid \sigma^2 \sim \mathcal{N}(0, \sigma^2 g I_{48})$ and
+$\sigma^2 \sim \mathcal{IG}(\alpha_0, \delta_0)$, and note straight away that the classical synthetic
+control's restriction to non-negative weights summing to one has been replaced by a Normal prior
+centred at zero. That is a substantive change and we shall pay for it in the sensitivity analysis
+below. With $121$ pre-event months and $48$ donors the posterior is proper but the design is
+uncomfortably close to saturated, which is precisely the situation the derivation after this block is
+about.
+
+**Reading the computation.** The posterior is the standard conjugate Normal-inverse-Gamma update with $b_0 = 0$ and $B_0 = gI$. Draws of the weights are taken jointly with the variance so that the gap below inherits the full posterior dependence rather than being evaluated at a point estimate.
+
+```{python}
+TREATED = "meals"
+pre = ind_r.loc["2010-01":"2020-01"]
+post = ind_r.loc["2020-02":"2020-12"]
+y_pre, y_post = pre[TREATED].to_numpy(), post[TREATED].to_numpy()
+X_pre = pre.drop(columns=[TREATED]).to_numpy()
+X_post = post.drop(columns=[TREATED]).to_numpy()
+donors = list(pre.drop(columns=[TREATED]).columns)
+
+def donor_posterior(X, y, B0_scale, alpha_0=3.0, delta_0=0.02):
+    p_d = X.shape[1]
+    B_1 = np.linalg.inv(np.eye(p_d) / B0_scale + X.T @ X)
+    b_1 = B_1 @ (X.T @ y)
+    alpha_1 = alpha_0 + X.shape[0] / 2.0
+    delta_1 = delta_0 + 0.5 * (y @ y - b_1 @ np.linalg.solve(B_1, b_1))
+    return b_1, B_1, alpha_1, delta_1
+
+def donor_draws(b_1, B_1, alpha_1, delta_1, n_draw, rng):
+    s2 = stats.invgamma(a=alpha_1, scale=delta_1).rvs(n_draw, random_state=rng)
+    L = np.linalg.cholesky(B_1)
+    return (b_1[None, :] + np.sqrt(s2)[:, None]
+            * (rng.standard_normal((n_draw, len(b_1))) @ L.T)), s2
+
+G0 = 4.0
+b_1, B_1, a_1, d_1 = donor_posterior(X_pre, y_pre, G0)
+w_draws, s2_w = donor_draws(b_1, B_1, a_1, d_1, 8000, rng_r)
+fit_pre = X_pre @ b_1
+print(f"pre-event window {pre.index[0]:%Y-%m} to {pre.index[-1]:%Y-%m}, "
+      f"{X_pre.shape[0]} months, {X_pre.shape[1]} donor industries")
+print(f"pre-event fit: R^2 {1 - np.var(y_pre - fit_pre) / np.var(y_pre):.3f}, "
+      f"RMSE {np.sqrt(np.mean((y_pre - fit_pre) ** 2)):.4f}, "
+      f"residual sd {np.sqrt(s2_w.mean()):.4f}")
+print(f"posterior mean weights: sum {b_1.sum():.3f}, "
+      f"sum of absolute values {np.abs(b_1).sum():.3f}")
+top = np.argsort(-np.abs(b_1))[:8]
+print("largest weights: " + ", ".join(f"{donors[j]} {b_1[j]:+.3f}" for j in top))
+ev = np.linalg.eigvalsh(X_pre.T @ X_pre)
+print(f"donor cross-product matrix: smallest eigenvalue {ev.min():.5f}, "
+      f"largest {ev.max():.3f}, condition number {ev.max() / ev.min():.0f}")
+print(f"prior share of posterior precision at g = {G0}: "
+      f"{1 / (1 + G0 * ev.min()):.3f} in the flattest direction, "
+      f"{1 / (1 + G0 * ev.max()):.4f} in the stiffest")
+
+synth_post = w_draws @ X_post.T
+gap = y_post[None, :] - synth_post
+cum_gap = gap.cumsum(axis=1)
+for k in range(3):
+    print(f"{post.index[k]:%Y-%m}: treated {y_post[k]:+.4f}, "
+          f"synthetic control mean {synth_post[:, k].mean():+.4f}")
+for k, lbl in [(1, "March 2020"), (2, "February to April 2020"),
+               (gap.shape[1] - 1, "February to December 2020")]:
+    obj = gap[:, k] if lbl == "March 2020" else cum_gap[:, k]
+    lo, hi = np.quantile(obj, [0.05, 0.95])
+    print(f"{lbl:<26}: mean {obj.mean():+.4f}  90% [{lo:+.4f}, {hi:+.4f}]  "
+          f"P(<0) = {(obj < 0).mean():.3f}")
+```
+
+The pre-event fit is decent without being suspiciously good: an $R^2$ of $0.648$ and a root mean squared
+error of $0.0207$ per month, against a residual standard deviation of $0.0284$ from the posterior. The
+posterior mean weights sum to $0.715$ and their absolute values sum to $1.047$, so the synthetic control
+is close to a fully invested long portfolio with a little short exposure, which is what one hopes for
+even though nothing in the prior imposed it. The eight largest weights are on soft drinks, rubber and
+plastics, clothing, retail, entertainment, transport, beer and toys, a list of consumer-facing and
+discretionary industries that is economically sensible for a restaurant and hotel portfolio; the prior
+did not know that, and the fact that the data produced it is mild reassurance that the exercise is not
+pure numerology.
+
+Now the numbers that matter. In March 2020 the treated industry returned $-0.2212$ while its synthetic
+control was expected to return about $-0.094$, leaving a gap with posterior mean $-0.1264$ and a 90 per
+cent interval of $[-0.1678, -0.0843]$. The posterior probability that the March gap is negative is
+$1.000$ to three decimals, which for a single month of returns is a striking result. Cumulated over
+February to April the gap is $-0.0514$ with interval $[-0.1050, +0.0019]$, so already by April most of
+the March shortfall had been recovered. Cumulated over the whole eleven months to December 2020 the gap
+is $-0.0131$ with interval $[-0.1219, +0.0967]$ and a posterior probability of only $0.578$ that it is
+negative. The economics of that sequence is worth stating: restaurants and hotels were hit far harder
+than comparable consumer industries in the month the closures began, and then recovered essentially all
+of the relative loss over the rest of the year, which is what one would expect of a market pricing a
+temporary shock in an industry whose long-run cash flows were largely intact.
+
+**Reading the computation.** The left panel shows monthly returns for the two years around the event so that the March collapse is visible rather than buried in a cumulative level. The right panel is the cumulative gap, and its band comes from the same posterior weight draws.
+
+```{python}
+win_idx = pre.index[-13:].append(post.index)
+X_win = np.vstack([X_pre[-13:], X_post])
+y_win = np.concatenate([y_pre[-13:], y_post])
+synth_win = w_draws @ X_win.T
+lo_s, hi_s = np.quantile(synth_win, [0.05, 0.95], axis=0)
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
+axes[0].plot(win_idx, y_win, color="firebrick", lw=1.5, label="restaurants and hotels")
+axes[0].plot(win_idx, synth_win.mean(axis=0), color="steelblue", lw=1.5,
+             label="synthetic control")
+axes[0].fill_between(win_idx, lo_s, hi_s, color="steelblue", alpha=0.25)
+axes[0].axvline(pd.Timestamp("2020-02-01"), color="black", lw=1.0, ls="--")
+axes[0].axhline(0.0, color="black", lw=0.6, ls=":")
+axes[0].set(xlabel="date", ylabel="monthly return",
+            title="Treated industry and its synthetic control")
+axes[0].tick_params(axis="x", labelrotation=30, labelsize=8)
+axes[0].legend(fontsize=8)
+g_lo, g_hi = np.quantile(cum_gap, [0.05, 0.95], axis=0)
+axes[1].fill_between(post.index, g_lo, g_hi, color="0.5", alpha=0.35)
+axes[1].plot(post.index, cum_gap.mean(axis=0), color="black", lw=1.5)
+axes[1].axhline(0.0, color="black", lw=0.8, ls=":")
+axes[1].set(xlabel="date", ylabel="cumulative gap",
+            title="Cumulative gap with 90% band")
+axes[1].tick_params(axis="x", labelrotation=30, labelsize=8)
+plt.tight_layout(); plt.show()
+```
+
+In the left panel the two lines are almost indistinguishable through 2019, which is what the pre-event
+$R^2$ of $0.648$ looks like when the common factor is as strong as it is among equity industries. In
+February and March 2020 they separate sharply, the treated line falling to $-0.22$ while the synthetic
+control falls to about $-0.09$, and then in April the treated line overshoots upward to $+0.19$ against
+a synthetic control near $+0.08$. The right panel turns that sequence into the cumulative gap: a sharp
+dive to about $-0.16$ by March, a fast partial recovery through April, a second soft patch in the summer
+and a return to roughly zero by December, with a band that starts narrow and fans out to about twenty
+percentage points wide.
+
+### Why the donor weights are partly a prior statement
+
+The pre-event window has $121$ months and the donor pool has $48$ industries, all of them driven by the
+same aggregate equity factor. That combination produces a likelihood that is sharply informative about
+a few combinations of the weights and almost silent about many others. The printed diagnostics say how
+extreme this is: the donor cross-product matrix has a largest eigenvalue of about $11.5$ and a smallest
+of about $0.0089$, a condition number of $1293$. Along the flattest direction the prior supplies $0.966$
+of the posterior precision at $g = 4$, and along the stiffest it supplies $0.0213$. The posterior for
+the weights is therefore roughly nine hundred and sixty-six parts prior and thirty-four parts data in
+one direction, and almost the reverse in another. The derivation below works out the limiting case
+exactly, because the limiting case is the clearest way to see what is happening in the approximate one.
+
+::: {.callout-note collapse="true"}
+## Derivation: an identification problem as a flat likelihood, and what the prior does there
+
+Take the linear model $y = X\beta + \varepsilon$, $\varepsilon \sim \mathcal{N}(0, \sigma^2 I_n)$, and
+suppose two columns are identical, $x_1 = x_2 = x$. Then
+$$
+X\beta \;=\; \beta_1 x_1 + \beta_2 x_2 + (\text{other terms}) \;=\; (\beta_1 + \beta_2)\,x +
+(\text{other terms}),
+$$
+so the fitted values, and therefore the likelihood, depend on $(\beta_1, \beta_2)$ only through the sum.
+Change coordinates to $s = \beta_1 + \beta_2$ and $d = \beta_1 - \beta_2$. The log likelihood is
+$$
+\log L \;=\; -\frac{1}{2\sigma^2}\big\|y - s\,x - \cdots\big\|^2 + \text{const},
+$$
+which contains no $d$ at all, so $\partial \log L / \partial d = 0$ everywhere. The likelihood is not
+merely weakly informative about $d$; it is exactly constant in that direction, and no amount of data
+changes that, because every extra observation adds the same flat term.
+
+Now put the course's prior on it, $\beta \mid \sigma^2 \sim \mathcal{N}(0, \sigma^2 g I_2)$ for the two
+columns in question. The change of coordinates is linear, $(s,d)^\top = A\beta$ with
+$A = \begin{pmatrix} 1 & 1 \\ 1 & -1\end{pmatrix}$, and $AA^\top = 2I_2$, so the induced prior is
+$(s, d)^\top \sim \mathcal{N}(0, 2 g \sigma^2 I_2)$: independent, with $s$ and $d$ each having prior
+variance $2g\sigma^2$. Because the prior factorises and the likelihood does not involve $d$, the joint
+posterior factorises too,
+$$
+p(s, d \mid y, \sigma^2) \;\propto\; L(s)\, p(s)\, p(d) \quad \Longrightarrow \quad
+p(d \mid y, \sigma^2) \;=\; p(d \mid \sigma^2) \;=\; \mathcal{N}(0, 2g\sigma^2).
+$$
+The posterior for $d$ is the prior for $d$, exactly and for every sample size. Any credible interval
+reported for $\beta_1$ or $\beta_2$ separately is then half a data statement and half a prior statement,
+even though the interval for $\beta_1 + \beta_2$ is entirely a data statement. Notice what has and has
+not been rescued: the posterior is proper, the sampler converges, the diagnostics are clean, and the
+output is still uninformative about the thing that was not identified. A proper prior guarantees a
+proper posterior; it guarantees nothing about identification.
+
+The near-collinear case is the same statement with the zero replaced by a small number. Suppose the two
+columns are standardised with sample correlation $\rho < 1$, so the two eigenvalues of their
+cross-product block are $n(1+\rho)$ and $n(1-\rho)$, the second belonging to the difference direction.
+The posterior precision in that direction is $n(1-\rho)/\sigma^2 + 1/(g\sigma^2)$, of which the prior
+contributes a share
+$$
+\frac{1/g}{n(1-\rho) + 1/g} \;=\; \frac{1}{1 + g\,n(1-\rho)} .
+$$
+With $\rho = 1$ this is one, the exactly flat case. With $n = 121$, $g = 4$ and $\rho = 0.99$ it is
+$1/(1 + 4 \times 121 \times 0.01) = 0.171$, so seventeen per cent of what the posterior claims to know
+about the difference comes from the prior. Replacing $n(1-\rho)$ by the smallest eigenvalue of the full
+$X^\top X$ gives the general version used on the donor pool above, $1/(1 + g\lambda_{\min})$, which the
+chunk printed as $0.966$. The practical rule follows: whenever the design has directions the data barely
+see, report how the answer moves as $g$ moves, because in those directions moving $g$ is the same thing
+as moving the answer.
+:::
+
+### Prior sensitivity: how much of the gap is the prior?
+
+The derivation says the prior is doing most of the work in the poorly identified directions of the donor
+design. The next chunk makes that concrete by re-running the whole exercise across a grid of prior
+scales from $g = 0.01$, which forces the weights almost to zero, up to $g = 20$, which is close to
+letting least squares have its way.
+
+**Reading the computation.** Only the prior scale changes across rows. The event, the donors, the window and the treated series are fixed, so any movement in the last three columns is movement caused by the prior alone.
+
+```{python}
+g_grid = np.geomspace(0.01, 20.0, 12)
+sens = []
+for g in g_grid:
+    bg, Bg, ag, dg = donor_posterior(X_pre, y_pre, g)
+    wd, _ = donor_draws(bg, Bg, ag, dg, 4000, rng_r)
+    gp = y_post[None, :] - wd @ X_post.T
+    cg = gp.cumsum(axis=1)
+    sens.append({"g": g, "sum_abs_w": np.abs(bg).sum(),
+                 "pre_RMSE": np.sqrt(np.mean((y_pre - X_pre @ bg) ** 2)),
+                 "mar_mean": gp[:, 1].mean(),
+                 "mar_lo": np.quantile(gp[:, 1], 0.05),
+                 "mar_hi": np.quantile(gp[:, 1], 0.95),
+                 "cum_mean": cg[:, -1].mean(),
+                 "cum_lo": np.quantile(cg[:, -1], 0.05),
+                 "cum_hi": np.quantile(cg[:, -1], 0.95)})
+sens = pd.DataFrame(sens)
+print(sens.round(4).to_string(index=False))
+```
+
+Read the table from the top. At $g = 0.01$ the absolute weights sum to $0.0592$: the synthetic control
+is essentially the zero portfolio, so the "gap" is just the treated industry's own return, and the March
+figure is $-0.2104$ with a 90 per cent interval only $0.0169$ wide. That interval is narrow for the
+worst possible reason, namely that the prior has fixed the comparison rather than the data. At the other
+end, $g = 20$ gives absolute weights summing to $1.8912$, a pre-event root mean squared error of
+$0.0189$, and a March gap of $-0.1390$ with an interval $0.1167$ wide, nearly seven times the width at the tight
+end. The one-month gap is
+reassuringly stable in the middle of the range, moving only between $-0.1259$ and $-0.1407$ for $g$
+between $0.3166$ and $20$, so the headline March result is not a prior artefact.
+
+The eleven-month cumulative gap behaves quite differently. It is $+0.1589$ at $g = 0.01$, falls through
+$+0.0710$ at $g \approx 0.16$ and $+0.0100$ at $g \approx 1.26$, and turns negative at about
+$g \approx 2.5$, reaching $-0.0361$ at $g = 20$. The sign of the answer is a function of the prior. That
+is not a bug to be fixed by choosing a prior; it is the correct report, and it says that these data
+cannot tell us whether the treated industry ended 2020 above or below its synthetic control.
+
+**Reading the computation.** Both panels plot the same posterior summaries against the prior scale on a log axis, with the dashed vertical line marking the value used for the headline numbers above.
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
+axes[0].fill_between(sens["g"], sens["mar_lo"], sens["mar_hi"],
+                     color="firebrick", alpha=0.25)
+axes[0].plot(sens["g"], sens["mar_mean"], color="firebrick", lw=1.5)
+axes[0].axhline(0.0, color="black", lw=0.8, ls=":")
+axes[0].axvline(G0, color="0.4", lw=1.0, ls="--")
+axes[0].set_xscale("log")
+axes[0].set(xlabel=r"prior scale $g$ on the donor weights", ylabel="March 2020 gap",
+            title="One-month gap against the prior")
+axes[1].fill_between(sens["g"], sens["cum_lo"], sens["cum_hi"],
+                     color="steelblue", alpha=0.25)
+axes[1].plot(sens["g"], sens["cum_mean"], color="steelblue", lw=1.5)
+axes[1].axhline(0.0, color="black", lw=0.8, ls=":")
+axes[1].axvline(G0, color="0.4", lw=1.0, ls="--")
+axes[1].set_xscale("log")
+axes[1].set(xlabel=r"prior scale $g$ on the donor weights",
+            ylabel="eleven-month cumulative gap",
+            title="Cumulative gap against the prior")
+plt.tight_layout(); plt.show()
+```
+
+The two panels are the honest summary of this exercise. On the left the March gap curve is flat over
+the entire upper half of the prior range and its band never comes close to zero, so the statement
+"restaurants and hotels fell about twelve and a half percentage points more than comparable industries
+in March 2020" survives everything we can do to it. On the right the cumulative curve slopes steadily downward
+through zero, and its band contains zero over the whole right half of the range, so the statement "the
+industry ended the year below its synthetic control" survives nothing. A single reported number from
+this exercise would have hidden that difference completely, which is the argument for drawing this
+figure every time a shrinkage prior sits on a near-singular design.
+
+## What it would take to call either number causal
+
+Both exercises produced a posterior for a well-defined quantity, and in both cases that quantity is a
+gap between an observed path and a constructed comparison. Turning a gap into a causal effect requires
+assumptions that the data cannot supply, and it is worth naming them against the numbers we have.
+
+Parallel trends is the first. For the synthetic control the assumption needed is that, absent the
+pandemic, the treated industry's return would have continued to equal the synthetic control's return up
+to mean-zero noise. The pre-event fit gives some evidence about this, and an $R^2$ of $0.648$ with a
+monthly residual standard deviation of $0.0284$ is the relevant number: the comparison was good to about
+two point eight percentage points a month before the event, which is already more than a fifth of the
+March gap of $0.1264$ in a single month, and it is more than the entire eleven-month cumulative gap of $0.0131$.
+So the March number survives a parallel-trends worry comfortably and the annual number does not survive
+it at all. For the event study the corresponding assumption is that the abnormal return would have been
+zero in the absence of tightening, and the left panel of the event-time figure argued against exactly
+that, because the pre-event months are as noisy as the post-event ones.
+
+No anticipation is the second, and it is where the event study is weakest. The federal funds rate is set
+by a committee whose intentions are discussed publicly for months in advance, and the rule we used dates
+the episode from the moment a twelve-month change crossed a threshold, which is by construction long
+after the first move. If markets priced the cycle before our date, the effect has already happened
+before event month zero and the posterior we computed is looking in the wrong place. The synthetic
+control does better here, since the closures of March 2020 were not anticipated a year in advance,
+though the market clearly began repricing in late February, which is why we started the post window at
+February rather than March.
+
+No interference, or the stable unit treatment value assumption, is the third and in both exercises it is
+the most obviously violated. The synthetic control's donors are other equity portfolios in the same
+economy during the same pandemic: airlines, clothing retailers and entertainment firms were all hit by
+the closures, so the control group is treated too. The direction of that bias is towards zero, meaning
+that a true effect of the pandemic on restaurants and hotels relative to a genuinely untreated
+comparison would be larger than the $-0.1264$ we report. In the event study, interference is worse
+still, since the whole market is a single unit and a tightening cycle affects the comparison implicit
+in the sample mean we subtracted.
+
+Add to all of this the fact that neither the treatment nor the event date was assigned by anyone, and
+the conclusion is the one this section began with. What we have computed are posteriors for descriptive
+gaps that are correctly propagated through the model and the prior. They are not estimates of causal
+effects, and the way to make them into estimates of causal effects is not a better sampler or a wider
+prior but a research design these files do not contain.
+
+## Takeaways
+
+A causal question is a missing-data question, and writing the finite-sample estimand as
+$n^{-1}\sum_i(2D_i-1)(Y_i - Y_i^{mis})$ makes that explicit: the Bayesian answer imputes the missing arm
+from the fitted opposite-arm predictive, so consistency, unconfoundedness and overlap are the things
+doing the identifying and the posterior is doing the accounting. The difference-in-means posterior
+follows from completing one square and shrinks each arm mean by $n_d/(n_d + 1/B_0)$, but it is a
+statement about $\delta = \mu_1 - \mu_0$ and not about Fisher's sharp null, which is a claim about every
+unit and is tested by permutation rather than by a prior. When the design has a direction the likelihood
+cannot see, the posterior in that direction is the prior, exactly, however clean the diagnostics look,
+and the near-collinear version of that statement puts the prior's share of the posterior precision at
+$1/(1 + g\lambda_{\min})$, which on the donor design of this chapter is $0.966$. The two real-data
+exercises then show what that costs in practice: a mechanical dating rule for Federal Reserve tightening
+moves the twelve-month cumulative abnormal return from $-0.1185$ to $+0.0064$ across nine equally
+defensible specifications, and a synthetic control for restaurants and hotels gives a March 2020 gap of
+$-0.1264$ that is stable across the upper half of the prior range alongside an eleven-month
+cumulative gap of $-0.0131$ whose very sign is chosen by the prior. Report the specification grid and
+the prior sweep, and call the result a descriptive gap until parallel trends, no anticipation and no
+interference have been argued rather than assumed.
+
 
 ## Reading guide and sources
 

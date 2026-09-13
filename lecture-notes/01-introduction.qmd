@@ -12,66 +12,56 @@ chapter's practice questions.
 
 ## Start with an investor's question: how likely is a losing month?
 
-An investment committee asks: **What probability should we assign to a negative
-market excess return next month?** Twelve observations do not reveal a fixed
-probability precisely. We need to distinguish the observed frequency from the
-unknown probability that generated it.
+An investment committee asks what probability it should attach to a negative
+excess return on the US market portfolio next month. That single question is the
+running example of this chapter. Every piece of machinery introduced below is
+introduced because the question needs it, and every piece is applied back to it
+before the chapter moves on.
 
-For a first calculation, imagine four losing months out of twelve. These are
-illustrative counts, not an empirical estimate. Write $L_t=1$ for a loss and
-$L_t=0$ otherwise. If the probability is $\theta$, an observed loss contributes
-$\theta$ to the probability of the data; a non-loss contributes $1-\theta$.
-Assuming conditional independence and a stable probability within this example,
-multiplication over the twelve months gives
+Write $L_t = 1$ if month $t$ is positive and $L_t = 0$ if it is not, and let
+$\theta$ be the probability of a positive month, so that the committee's number
+is $1 - \theta$. The twelve months of 2024 are a convenient first sample: nine of
+them were positive for the market portfolio and three, April, October and
+December, were not. If the probability of a positive month is $\theta$ and months
+are conditionally independent given $\theta$, then a positive month contributes a
+factor $\theta$ to the probability of the observed sequence and a negative month
+a factor $1 - \theta$, so
 
-$$p(L_1,\ldots,L_{12}\mid\theta)=\theta^4(1-\theta)^8.$$
+$$p(L_1,\ldots,L_{12}\mid\theta)=\theta^{9}(1-\theta)^{3}.$$
 
-That is where the likelihood comes from. We have counted outcomes, not guessed a
-distribution because it is convenient. If we retained only the count rather than
-the sequence, a binomial coefficient would appear; it is constant in $\theta$.
+That is where a likelihood comes from. We counted outcomes; we did not pick a
+distribution because it was convenient. If we recorded only the count nine rather
+than the order in which the months arrived, a binomial coefficient would multiply
+the expression, and since it does not involve $\theta$ it will make no difference
+to anything below.
 
-Suppose the prior is $\operatorname{Beta}(2,2)$, centred on one half but quite
-uncertain. Its density is proportional to $\theta(1-\theta)$. Multiply:
-
-$$p(\theta\mid L)\propto\theta^{4+1}(1-\theta)^{8+1}
-\quad\Longrightarrow\quad \theta\mid L\sim\operatorname{Beta}(6,10).$$
-
-The posterior mean is $6/16=0.375$. It lies between the prior mean $0.5$ and the
-sample frequency $4/12$. The probability of a loss next month is also 0.375:
-average each possible loss probability over its posterior. This is different
-from asking how uncertain we are about $\theta$, which requires the whole Beta density.
-
-**Explain it to the committee.** Four losses are evidence against a 50% loss
-probability, but twelve months are not enough to rule out nearby alternatives.
-Losses may cluster, so this constant-probability model is a starting point. We
-will later let predictors and latent states change probabilities over time.
-
-**Work through the chapter in this order:** count events; multiply likelihood
-and prior; normalise; predict. In the grid exercise, reproduce this reasoning by
-assigning probability mass to possible values of $\theta$ before using the general formulas.
+The sample frequency is $9/12 = 0.75$, which would put the probability of a
+losing month at one quarter. Nobody believes that number. Twelve months are too
+few to separate the frequency we happened to observe from the probability that
+generated it, and a committee told that the market rises three quarters of the
+time will act on it. The Bayesian answer to that situation is to combine the
+twelve months with what we knew before them, and to return a distribution over
+$\theta$ rather than a single value. By the end of the chapter we will have done
+exactly that, first on the twelve months, then on the full century of monthly
+returns from 1926 onwards, and we will also have asked whether the data prefer a
+model in which $\theta$ is free to a model that fixes it at one half.
 
 ## Where we are going
 
 Every empirical question in economics and finance is a question about a quantity we
-cannot see. What is the probability that this borrower defaults? By how much does a
-policy rate change move output? What is the expected return on this portfolio? We
-never observe those quantities. We observe data that were generated with them, and the
-data are limited, noisy, and usually far too few relative to the number of things we
-would like to know.
+cannot see. What is the probability that this borrower defaults? By how much does a policy
+rate change move output? We observe only data that were generated with those quantities,
+and the data are limited, noisy, and far too few relative to the number of things we would
+like to know.
 
-The Bayesian answer to that situation is a single rule. Write down what you believe
-before seeing the data, write down how probable the data are for each possible value of
-the unknown, and combine the two by the laws of probability. What comes out is not a
-number but a distribution: the full set of values the unknown could take, weighted by
-how plausible they are once the evidence is in. Everything else in this course, the
-Gibbs sampler, Metropolis-Hastings, Bayesian VARs, stochastic volatility, is machinery
-for computing that distribution when the algebra stops working.
-
-This first lecture builds the rule from the ground up. We start with probability for
-events, where the whole idea can be checked by counting, and only then move to
-parameters. We derive our first posterior distribution by hand, see that the Bayesian
-answer is a weighted average of what we believed and what we saw, and end with
-prediction and with the observation that Bayesian updating never has to start over.
+The Bayesian answer is a single rule. Write down what you believe before seeing the data,
+write down how probable the data are for each possible value of the unknown, and combine
+the two by the laws of probability. What comes out is not a number but a distribution:
+the values the unknown could take, weighted by how plausible they are once the evidence is
+in. Everything else in this course, the Gibbs sampler, Metropolis-Hastings, Bayesian VARs,
+stochastic volatility, is machinery for computing that distribution when the algebra stops
+working. This lecture builds the rule from the ground up, states it in general notation,
+and carries the losing-month question through it.
 
 ```{python}
 from pathlib import Path
@@ -95,7 +85,7 @@ plt.rcParams.update({"figure.figsize": (7, 4.2), "axes.grid": True,
 Bayes' theorem is not a separate principle. It follows in two lines from rules that are
 uncontroversial, so it is worth assembling them once.
 
-Events $B_1, \dots, B_k$ form a **partition** of the sample space if they are mutually
+Events $B_1, \dots, B_k$ form a partition of the sample space if they are mutually
 exclusive and together exhaust every possibility. Exactly one of them happens. For any
 event $A$ we can then split $A$ according to which $B_i$ occurred,
 
@@ -103,7 +93,7 @@ $$
 P(A) = P(A \cap B_1) + P(A \cap B_2) + \dots + P(A \cap B_k).
 $$
 
-The **conditional probability** of $A$ given $B$ is the share of $B$ in which $A$ also
+The conditional probability of $A$ given $B$ is the share of $B$ in which $A$ also
 happens,
 
 $$
@@ -111,7 +101,7 @@ P(A \mid B) = \frac{P(A \cap B)}{P(B)},
 $$
 
 which rearranged is the multiplication law $P(A \cap B) = P(A \mid B) P(B)$. Substituting
-that into the partition identity gives the **law of total probability**,
+that into the partition identity gives the law of total probability,
 
 $$
 P(A) = \sum_{j=1}^{k} P(A \mid B_j) P(B_j),
@@ -122,7 +112,7 @@ in this course as the marginal likelihood and as the predictive distribution.
 
 Now put the multiplication law together with total probability. Writing the intersection
 $A \cap B_i$ in the two possible orders, $P(A \mid B_i) P(B_i) = P(B_i \mid A) P(A)$, and
-replacing $P(A)$ by the sum above yields **Bayes' theorem** for events,
+replacing $P(A)$ by the sum above yields Bayes' theorem for events,
 
 $$
 P(B_i \mid A) = \frac{P(A \mid B_i)\, P(B_i)}{\sum_{j=1}^{k} P(A \mid B_j)\, P(B_j)}.
@@ -134,262 +124,180 @@ evidence actually seen. The denominator is a normalising constant that makes the
 add to one. Nothing more happens in Bayesian statistics than this, applied to
 increasingly awkward objects.
 
-### A puzzle that punishes intuition
-
-The classic test of whether one has understood the formula is the Monty Hall problem.
-There are three doors, a prize behind one of them, and goats behind the other two. You
-pick door 1. The host, who knows where the prize is, opens a different door that has a
-goat behind it, say door 2, and offers you the chance to switch to door 3. Should you?
-
-Most people say it cannot matter, because two doors remain. Bayes' theorem says
-otherwise. Let $A$, $B$, $C$ be the events that the prize is behind door 1, 2, 3, each
-with prior probability $1/3$. The evidence is that the host opened door 2. The
-likelihoods of that evidence differ across the three explanations, and this is the entire
-trick:
-
-$$
-P(\text{opens } 2 \mid A) = \tfrac{1}{2}, \qquad
-P(\text{opens } 2 \mid B) = 0, \qquad
-P(\text{opens } 2 \mid C) = 1 .
-$$
-
-If the prize is behind your door, the host may open either remaining door and picks door
-2 half the time. If it is behind door 2 he cannot open it. If it is behind door 3 he has
-no choice but to open door 2. Total probability gives
-$P(\text{opens } 2) = \tfrac{1}{2}\cdot\tfrac{1}{3} + 0 \cdot \tfrac{1}{3} + 1 \cdot
-\tfrac{1}{3} = \tfrac{1}{2}$, and therefore
-
-$$
-P(A \mid \text{opens } 2) = \frac{\tfrac{1}{2} \cdot \tfrac{1}{3}}{\tfrac{1}{2}}
-= \frac{1}{3}, \qquad P(C \mid \text{opens } 2) = \frac{2}{3}.
-$$
-
-Switching doubles the chance of winning. The host's action was informative not because it
-eliminated a door but because he was constrained by knowing the answer.
-
-Since a derivation one does not believe is worth simulating, the next block plays the
-game many times and counts. Each round draws the prize location and the player's choice,
-lets the host open a goat door he is allowed to open, and records whether staying or
-switching would have won.
-
-**Reading the computation.** The simulated host obeys the same information rule used in the calculation. Count wins under staying and switching; this checks the model of the host, not a general claim that switching always helps.
-
-```{python}
-n_games = 200_000
-prize = rng.integers(0, 3, n_games)          # door hiding the prize
-choice = rng.integers(0, 3, n_games)         # player's first pick
-
-# the host opens a door that is neither the player's pick nor the prize
-doors = np.array([0, 1, 2])
-allowed = (doors[None, :] != choice[:, None]) & (doors[None, :] != prize[:, None])
-opened = (allowed * rng.random((n_games, 3))).argmax(axis=1)
-
-switch_to = 3 - choice - opened              # the remaining door
-print(f"win by staying:   {(choice == prize).mean():.4f}")
-print(f"win by switching: {(switch_to == prize).mean():.4f}")
-```
-
-Staying wins about a third of the time and switching about two thirds, which is what the
-posterior said. The point of the exercise is not the puzzle but the habit: we will write
-down a posterior, then check it against a simulation that makes no use of the algebra.
-
-### The economic content of a probability
-
-The Monty Hall experiment works because the host's behaviour is part of the
-likelihood. The same issue appears when a lender interprets a credit warning:
-how often does the warning appear among firms that default, and among firms
-that survive? A statement about the signal conditional on default is not a
-statement about default conditional on the signal.
-
-For illustration, let default probability be 2%, sensitivity 80%, and the
-false-positive rate 10%. Among 10,000 firms, 160 defaulting firms and 980
-surviving firms would be flagged on average. Therefore
-
-$$
-\Pr(\text{default}\mid\text{flag})
-=\frac{0.8(0.02)}{0.8(0.02)+0.1(0.98)}\approx0.140.
-$$
-
-The warning increases risk substantially, but rare defaults remain a small
-part of all flagged cases. Before calculating any posterior, name the population,
-the observation mechanism, and the quantity being conditioned on. This is why
-the course begins with probability rather than a sampler.
-
-An uncertain parameter need not change randomly in the world. A firm's default
-probability can be fixed while our information about it changes. The posterior
-describes that uncertainty conditional on the specified model.
+The direction of the conditioning is the part that intuition gets wrong. A statement about
+how often a warning appears among firms that default is not a statement about how often a
+flagged firm defaults; the two differ by the base rate, which the denominator above
+supplies. Before computing any posterior, name the population, the observation mechanism,
+and the quantity being conditioned on. An unknown also need not be random in the world for
+the rule to apply: a firm's default probability can be fixed while our information about
+it changes, and the posterior describes that information.
 
 ## What changes when the unknown is a parameter?
 
-Suppose a lender wants to learn a default probability. There are two kinds of uncertainty.
-Even if the probability were known, the next borrower could default or repay. In addition,
-the probability itself is unknown. We use a conditional data model for the first uncertainty
-and a prior over the probability for the second.
+In the losing-month problem there are two kinds of uncertainty. Even if $\theta$ were
+known, next month could go either way. On top of that, $\theta$ itself is unknown. We use
+a conditional data model for the first and a prior distribution over $\theta$ for the
+second.
 
-For one borrower, record $x=1$ for default and $x=0$ for repayment. Write the unknown
-default probability as $\theta$. The statements $P(x=1\mid\theta)=\theta$ and
-$P(x=0\mid\theta)=1-\theta$ can be written together as
+For a single month, $P(L_t = 1 \mid \theta) = \theta$ and $P(L_t = 0 \mid \theta) =
+1-\theta$ can be written together as $p(L_t \mid \theta) = \theta^{L_t}(1-\theta)^{1-L_t}$,
+since substituting $L_t = 1$ leaves $\theta$ and substituting $L_t = 0$ leaves $1-\theta$.
+The exponents are a switch, not an extra assumption. Assuming conditional independence
+across months with a common $\theta$, the probability of the observed sequence is the
+product, and collecting powers gives $\theta^{y}(1-\theta)^{n-y}$ for $y$ positive months
+out of $n$. Recording only the count multiplies this by $\binom{n}{y}$ and changes no
+conclusion about $\theta$.
 
-$$p(x\mid\theta)=\theta^x(1-\theta)^{1-x}.$$
+Conditional independence and a constant $\theta$ came from our model of the market, not
+from Bayes' theorem. Shared exposure to a recession, or a genuine change of regime, would
+make them inappropriate, and Lecture 8 drops them. Bayes' theorem tells us how to update
+after a model has been specified, not whether the model is right.
 
-Check the two cases: substituting $x=1$ leaves $\theta$; substituting $x=0$ leaves
-$1-\theta$. The exponents are a convenient switch, not a new probability assumption.
+### Result: Bayes' theorem for a parameter
 
-Now **assume conditional independence** across borrowers with the same $\theta$.
-The probability of their observed sequence is a product. If $y=\sum_i x_i$ of $n$
-borrowers default, collecting powers gives $\theta^y(1-\theta)^{n-y}$.
-If we record only the count, there are $\binom ny$ sequences with that count, so
-the binomial probability also includes that factor. Both observations give the same
-posterior for $\theta$ because the factor does not depend on $\theta$.
-
-The independence and common-probability assumptions came from our model of borrowers,
-not from Bayes' theorem. Shared exposure to a recession might make them inappropriate.
-Bayes' theorem tells us how to update **after** specifying that model. We next apply the
-event calculation to candidate values of $\theta$, which is how a posterior density arises.
-
-## From events to parameters
-
-So far the unknown was which of three doors hid a prize. In econometrics the unknown is
-a continuous parameter and the same rule applies with densities in place of
-probabilities. Let $\theta$ be the parameter and ${\bf x}$ the data. The **likelihood**
-$l(\theta \mid {\bf x}) = f({\bf x} \mid \theta)$ says how probable the observed data are
-for each candidate value of $\theta$; the **prior** $f(\theta)$ says what we believed
-about $\theta$ beforehand. Bayes' theorem gives the **posterior**
+Let $\theta$ be an unknown parameter, of any dimension, and let ${\bf x}$ denote the
+observed data. The likelihood $l(\theta \mid {\bf x}) = f({\bf x} \mid \theta)$ says how
+probable the observed data are for each candidate value of $\theta$, and the prior
+$f(\theta)$ says what was believed about $\theta$ beforehand. Then
 
 $$
-f(\theta \mid {\bf x}) = \frac{f({\bf x} \mid \theta) f(\theta)}{f({\bf x})}
+f(\theta \mid {\bf x}) = \frac{f({\bf x} \mid \theta)\, f(\theta)}{f({\bf x})}
 \;\propto\; l(\theta \mid {\bf x})\, f(\theta),
+\qquad
+f({\bf x}) = \int f({\bf x} \mid \theta) f(\theta)\, d\theta .
 $$
 
-where the denominator $f({\bf x}) = \int f({\bf x} \mid \theta) f(\theta) d\theta$ does
-not involve $\theta$ and only rescales the result. The proportionality is how one works
-in practice, and it is worth committing to memory in words: the posterior is the
-likelihood times the prior, renormalised.
+The denominator $f({\bf x})$ is the marginal likelihood. It does not involve $\theta$, so
+it only rescales the result, and in practice one works with the proportionality and
+recovers the constant at the end. In words: the posterior is the likelihood times the
+prior, renormalised.
+
+The derivation is the event version with a density in place of a probability and an
+integral in place of the sum. Write the joint density two ways, $f({\bf x}, \theta) =
+f({\bf x} \mid \theta) f(\theta) = f(\theta \mid {\bf x}) f({\bf x})$, divide by
+$f({\bf x})$, and obtain $f(\theta \mid {\bf x})$ directly; the law of total probability
+supplies $f({\bf x}) = \int f({\bf x} \mid \theta) f(\theta) d\theta$.
 
 This is a genuinely different object from the classical one. In classical inference
 $\theta$ is a fixed unknown constant, probability refers to the long-run frequency of
 data we did not observe, and uncertainty is expressed through the sampling variability of
 an estimator. In Bayesian inference $\theta$ is treated as a random variable, probability
-expresses a state of belief, and uncertainty is the posterior itself. The practical
+expresses a state of information, and uncertainty is the posterior itself. The practical
 difference shows up in what we are allowed to say: a Bayesian may state the probability
 that a parameter lies in an interval, a frequentist may not.
 
 ### The same data, two answers
 
-Take a concrete case small enough to follow by hand. A coin has $P(\text{head}) =
-\theta$. We toss it twelve times and see nine heads. The classical analysis reports the
-maximum likelihood estimate $\hat\theta = 9/12 = 0.75$, an approximate confidence
-interval, and a $p$-value for $H_0: \theta = 0.5$ against $\theta > 0.5$,
+The difference is sharpest when the same data are collected under two designs. Our twelve
+months of 2024 contain nine positive months, and the classical analysis reports
+$\hat\theta = 9/12 = 0.75$ together with a $p$-value for $H_0: \theta = 0.5$ against
+$\theta > 0.5$, namely $\sum_{k=9}^{12}\binom{12}{k}0.5^{12}$.
 
-$$
-p = \sum_{k=9}^{12} \binom{12}{k} 0.5^{12} .
-$$
+Now suppose the analyst had instead decided in advance to watch the market until the
+third negative month and then stop. The third negative month of 2024 was December, so
+this analyst records exactly the same twelve months and exactly the same nine positive
+ones. The data are identical, but the sample space is not: the number of months is now
+random and the number of negative months is fixed. The $p$-value changes with it, because
+it sums probabilities over data that were never observed.
 
-There is a subtlety here that motivates much of the Bayesian position, and it is easy to
-miss. Suppose the experiment had instead been "toss until the third tail appears", and
-the third tail appeared on the twelfth toss. The data are identical, nine heads and three
-tails in twelve tosses, but the sample space is not: the number of tosses is now random
-and the count of tails is fixed. The $p$-value changes with it, because it sums
-probabilities over data we never saw. The block below computes both.
-
-**Reading the computation.** Both calculations use the same observed heads, but count different sets of hypothetical outcomes under their sampling plans. Compare the likelihoods for the observed data separately from the tail probabilities.
+*Reading the computation.* Both calculations use the same nine positive months but count
+different sets of hypothetical outcomes under their sampling plans. Compare the
+likelihoods for the observed data separately from the tail probabilities.
 
 ```{python}
-n, y = 12, 9                       # tosses and heads
+n, y = 12, 9                       # months observed and positive months
 
-k = np.arange(y, n + 1)            # binomial design: 9 or more heads in 12 tosses
+k = np.arange(y, n + 1)            # binomial design: 9 or more positive months in 12
 p_binom = stats.binom.pmf(k, n, 0.5).sum()
 
-# negative binomial design: the 3rd tail occurs on toss 12, i.e. 9 or more heads first
+# negative binomial design: the 3rd negative month occurs in month 12,
+# that is, 9 or more positive months arrive before it
 j = np.arange(y, 60)
 p_negbin = stats.nbinom.pmf(j, 3, 0.5).sum()
 
-print(f"p-value, fixed number of tosses:  {p_binom:.4f}")
-print(f"p-value, fixed number of tails:   {p_negbin:.4f}")
+print(f"p-value, fixed number of months:         {p_binom:.4f}")
+print(f"p-value, fixed number of negative months:{p_negbin:.4f}")
 ```
 
 At the conventional five percent threshold the first design does not reject and the
-second does, on exactly the same observed sequence. The likelihood function is identical
-in both cases, so a procedure that depends only on the likelihood and the prior, as the
-Bayesian one does, gives the same answer either way. Whether one regards that as a
+second does, on exactly the same twelve months. The likelihood function is identical in
+both cases, so a procedure that depends only on the likelihood and the prior, as the
+Bayesian one does, returns the same answer either way. Whether one regards that as a
 decisive argument is a matter of taste, but it is a real difference and not a
 technicality.
 
-## Deriving the first posterior
+## The first posterior
 
-Now we do the Bayesian calculation for the coin, in full, because this derivation is the
-template for every conjugate model in the course.
+We now do the Bayesian calculation for the twelve months, in full, because this
+derivation is the template for every conjugate model in the course.
 
-The likelihood for $y$ heads in $n$ tosses is binomial,
+For a prior we want a density on the unit interval that can be centred anywhere and made
+more or less concentrated. The beta distribution does this: $\theta \sim \text{Beta}(a,b)$
+has density $f(\theta) = \theta^{a-1}(1-\theta)^{b-1}/B(a,b)$ on $(0,1)$, with mean
+$a/(a+b)$, so $a = b$ centres it at one half and larger $a+b$ makes it tighter.
 
-$$
-l(\theta \mid y) = \binom{n}{y} \theta^{y} (1 - \theta)^{n-y}.
-$$
+### Result: the Beta-Binomial posterior
 
-For the prior we want a density on the unit interval that can be centred at one half and
-can be made more or less concentrated. The **beta distribution** does this: $\theta \sim
-\text{Beta}(a, b)$ has density
-
-$$
-f(\theta) = \frac{1}{B(a,b)} \theta^{a-1} (1-\theta)^{b-1}, \qquad 0 < \theta < 1,
-$$
-
-with mean $a/(a+b)$, so $a = b$ centres it at one half and larger $a + b$ makes it
-tighter. Multiply the two and drop every factor that does not contain $\theta$:
+For $y$ successes in $n$ conditionally independent Bernoulli trials with success
+probability $\theta$ and prior $\theta \sim \text{Beta}(a,b)$,
 
 $$
-f(\theta \mid y) \;\propto\; \underbrace{\theta^{y}(1-\theta)^{n-y}}_{\text{likelihood}}
+\theta \mid y \sim \text{Beta}\!\left(a + y,\; b + n - y\right),
+\qquad
+\mathbb{E}[\theta \mid y] = \frac{a+y}{a+b+n},
+$$
+
+for any $n \ge 0$, any $0 \le y \le n$ and any $a, b > 0$.
+
+The derivation is three lines and needs no integration. Multiply likelihood by prior and
+drop every factor free of $\theta$,
+
+$$
+f(\theta \mid y) \;\propto\;
+\underbrace{\theta^{y}(1-\theta)^{n-y}}_{\text{likelihood}}
 \times \underbrace{\theta^{a-1}(1-\theta)^{b-1}}_{\text{prior}}
-= \theta^{(a + y) - 1} (1-\theta)^{(b + n - y) - 1}.
+= \theta^{(a+y)-1}(1-\theta)^{(b+n-y)-1}.
 $$
 
-The last expression is the kernel of a beta density with parameters $a + y$ and
-$b + n - y$. Since a density is determined by its kernel, no integration is needed to
-identify the normalising constant: we recognise the shape and read off
+The right-hand side is the kernel of a beta density with parameters $a+y$ and $b+n-y$.
+A density is determined by its kernel, so the normalising constant can be read off rather
+than computed, and it must be $1/B(a+y, b+n-y)$.
+
+That is what conjugacy means: prior and posterior belong to the same family, so updating
+is arithmetic on the parameters. Add the successes to $a$ and the failures to $b$. It
+also fixes the interpretation of $a$ and $b$, since they enter exactly as $y$ and $n-y$
+do. The prior acts like a previous sample with $a$ imagined successes and $b$ imagined
+failures, and $a+b$ is its size. With a $\text{Beta}(5,5)$ prior, worth ten
+pseudo-observations and centred at one half, and the nine positive months of 2024, the
+posterior is $\text{Beta}(14,8)$.
+
+### Result: the posterior mean is a weighted average
+
+Write $n_0 = a+b$ for the prior sample size and $\theta_0 = a/n_0$ for the prior mean, and
+let $\hat\theta = y/n$. Then
 
 $$
-\theta \mid y \sim \text{Beta}(a + y,\; b + n - y).
+\mathbb{E}[\theta \mid y] = \frac{a+y}{a+b+n}
+= \frac{n_0}{n_0+n}\cdot\frac{a}{n_0} + \frac{n}{n_0+n}\cdot\frac{y}{n}
+= w\,\theta_0 + (1-w)\,\hat\theta,
+\qquad w = \frac{n_0}{n_0+n} .
 $$
 
-This is what **conjugacy** means. The prior and the posterior belong to the same family,
-so updating is arithmetic on the parameters: add the successes to $a$ and the failures to
-$b$. With a $\text{Beta}(5,5)$ prior and our nine heads in twelve tosses the posterior is
-$\text{Beta}(14, 8)$.
+The derivation is the one line above: split the numerator as $a + y$ and divide each part
+by the common denominator $n_0 + n$. The Bayesian point estimate is a weighted average of
+the prior mean and the maximum likelihood estimate, with weights given by the relative
+amount of information in each. For our numbers $w = 10/22$, so the posterior mean is
+$\tfrac{10}{22}\cdot 0.5 + \tfrac{12}{22}\cdot 0.75 = 14/22 \approx 0.636$.
 
-The interpretation of $a$ and $b$ follows from the same arithmetic. They enter exactly as
-$y$ and $n - y$ do, so the prior acts like a previous experiment with $a$ imagined
-successes and $b$ imagined failures. A $\text{Beta}(5,5)$ prior is worth ten
-pseudo-observations; against twelve real ones it will carry real weight.
+Two limits recur throughout the course. As $n \to \infty$ the weight $w \to 0$ and the
+posterior mean converges to the classical estimate, so with enough data the prior stops
+mattering. As $n_0 \to 0$ the prior becomes flat and the posterior mean is the classical
+estimate immediately. The Bayesian machinery earns its keep in between, which in
+economics and finance is nearly always where we are.
 
-### The posterior mean is a weighted average
-
-The mechanism becomes clearest in the posterior mean. Writing $n_0 = a + b$ for the prior
-sample size and $\theta_0 = a / n_0$ for the prior mean,
-
-$$
-E[\theta \mid y] = \frac{a + y}{a + b + n}
-= \frac{n_0}{n_0 + n} \cdot \frac{a}{n_0} + \frac{n}{n_0 + n} \cdot \frac{y}{n}
-= w\, \theta_0 + (1 - w)\, \hat\theta,
-\qquad w = \frac{n_0}{n_0 + n}.
-$$
-
-The Bayesian estimate is a weighted average of the prior mean and the maximum likelihood
-estimate, with weights given by the relative amount of information in each. For our
-numbers $w = 10/22$, so the posterior mean is $\tfrac{10}{22} \cdot 0.5 + \tfrac{12}{22}
-\cdot 0.75 = 14/22 \approx 0.636$, sitting between the prior's $0.5$ and the data's
-$0.75$ and closer to the data because twelve beats ten.
-
-Two limits are worth naming because they recur throughout the course. As $n \to \infty$
-the weight $w \to 0$ and the posterior mean converges to the classical estimate: with
-enough data the prior stops mattering. As $n_0 \to 0$ the prior becomes flat and the
-posterior mean is the classical estimate immediately. The Bayesian machinery earns its
-keep in between, which in economics and finance is nearly always where we are.
-
-The next block draws the three ingredients on one set of axes and prints the summaries
-the derivation predicts, so the algebra and the picture can be checked against each
-other.
-
-**Reading the computation.** The Beta object changes its two shape parameters after observing successes and failures. The density plot shows how probability mass moves; its height at a point is not the probability of that exact parameter value.
+*Reading the computation.* The Beta object changes its two shape parameters after
+observing successes and failures. The density plot shows how probability mass moves; its
+height at a point is not the probability of that exact parameter value.
 
 ```{python}
 a, b = 5, 5                                    # Beta(a, b) prior
@@ -404,28 +312,31 @@ ax.plot(grid, stats.beta(a, b).pdf(grid), ":", label="prior  Beta(5,5)")
 ax.plot(grid, stats.binom.pmf(y, n, grid) / np.trapezoid(stats.binom.pmf(y, n, grid), grid),
         "--", label="scaled likelihood")
 ax.plot(grid, post.pdf(grid), label="posterior  Beta(14,8)")
-ax.axvline(mle, color="grey", lw=1, label=f"MLE = {mle:.2f}")
-ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.legend(fontsize=9)
+ax.axvline(mle, color="grey", lw=1, label=f"sample frequency = {mle:.2f}")
+ax.set_xlabel(r"$\theta$, probability of a positive month")
+ax.set_ylabel("density"); ax.legend(fontsize=9)
 ax.set_title("The posterior sits between the prior and the likelihood")
 plt.tight_layout(); plt.show()
 
-print(f"prior mean {a/(a+b):.3f}, MLE {mle:.3f}, weight on prior w = {w:.3f}")
+print(f"prior mean {a/(a+b):.3f}, sample frequency {mle:.3f}, weight on prior w = {w:.3f}")
 print(f"posterior mean {post.mean():.3f}  (= w*0.5 + (1-w)*0.75 = {w*0.5 + (1-w)*mle:.3f})")
 print(f"P(theta > 0.5 | data) = {1 - post.cdf(0.5):.3f}")
 ```
 
-The solid posterior curve lies between the dotted prior and the dashed likelihood, the
-printed weighted average reproduces the posterior mean exactly, and the probability that
-the coin favours heads is about $0.905$. That last number is a sentence the Bayesian
-framework licenses literally, and no confidence interval can deliver it.
+The solid posterior curve lies between the dotted prior and the dashed likelihood, and
+the printed weighted average reproduces the posterior mean exactly. The probability that
+a month is more likely to be positive than negative is $0.905$, a sentence the Bayesian
+framework licenses literally and no confidence interval can deliver. Read back to the
+committee, the posterior says the probability of a losing month is about $1 - 0.636 =
+0.364$, with considerable uncertainty attached.
 
 ## A closer look at the prior
 
 A prior is a probability distribution over the parameter before the current data are seen.
-It carries information from theory, from previous studies, from economic constraints, or a
-statement that we know very little. There is no such thing as no prior: choosing a
-likelihood and a parameterisation already encodes assumptions, and refusing to write one
-down means defaulting to a flat prior, itself a strong choice. State it, then check it.
+It carries information from theory, from previous studies, or a statement that we know very
+little. There is no such thing as no prior: choosing a likelihood and a parameterisation
+already encodes assumptions, and refusing to write one down means defaulting to a flat
+prior, itself a strong choice. State it, then check it.
 
 A small taxonomy helps. The labels overlap, but they capture different intentions.
 
@@ -437,130 +348,40 @@ A small taxonomy helps. The labels overlap, but they capture different intention
 | Noninformative / Jeffreys | let the data dominate, invariance | $p(\theta) \propto \sqrt{I(\theta)}$ |
 
 Conjugacy is a convenience, not a virtue: it makes the algebra close but only matches real
-beliefs if its shape happens to. The $\text{Beta}(5, 5)$ used above is both conjugate and
-weakly informative, which is why it was a defensible default for a coin. A weakly
-informative prior is usually the better starting point in applied work, because it
+beliefs if its shape happens to. The $\text{Beta}(5,5)$ used above is both conjugate and
+weakly informative, which is usually the better starting point in applied work, because it
 stabilises estimates without pretending to knowledge we do not have.
 
-### What conjugacy buys, and how to elicit a prior
+### Eliciting a prior, and checking what it predicts
 
-The arithmetic of the beta-binomial update has a consequence worth stating separately,
-because it is what makes conjugate priors usable in front of a non-statistician. Since
-$a$ and $b$ enter the posterior exactly as the observed successes and failures do, the
-prior is *equivalent to a previous experiment* with $a$ heads and $b$ tails. That gives a
-scale for prior strength that anyone can reason about, and it turns prior elicitation into
-questions about observable things rather than about density parameters.
+Because $a$ and $b$ enter the posterior exactly as observed successes and failures do, the
+prior is equivalent to a previous sample of size $a+b$. That gives a scale for prior
+strength that anyone can reason about, and it turns elicitation into questions about
+observable things rather than about density parameters.
 
-One cannot ask an expert for $a$ and $b$. One can ask two questions whose answers pin them
-down. In a hundred tosses of this coin, how many heads would you expect? That fixes the
-prior mean $a/(a+b)$. How many tosses is your experience with coins worth? That fixes the
-prior sample size $a + b$. An expert who answers fifty and five hundred has specified a
-$\text{Beta}(250, 250)$ prior without ever hearing the word beta.
+One cannot ask a portfolio manager for $a$ and $b$. One can ask two questions whose
+answers pin them down. In the next hundred months, how many do you expect to be positive?
+That fixes the prior mean $a/(a+b)$. How many months of experience is your view worth?
+That fixes the prior sample size $a+b$. A manager who answers fifty and five hundred has
+specified a $\text{Beta}(250,250)$ prior without ever hearing the word beta.
 
-The elicitation is not finished at that point. The honest final step is to feed the
-implications back and check that the expert believes them, because a prior that sounds
-reasonable in the parameter space can be absurd in the data space.
-
-**Reading the computation.** Translate an elicited prior into future observations before accepting it. The predictive spread asks whether the implied range of outcomes is compatible with the expert’s judgement, rather than only whether the prior mean sounds reasonable.
-
-```{python}
-a_e, b_e = 250, 250                # elicited prior
-m_e = 100                          # hypothetical future tosses
-k_e = np.arange(m_e + 1)
-
-log_c = gammaln(m_e + 1) - gammaln(k_e + 1) - gammaln(m_e - k_e + 1)
-pp = np.exp(log_c + betaln(a_e + k_e, b_e + m_e - k_e) - betaln(a_e, b_e))
-cdf = pp.cumsum()
-lo_e, hi_e = k_e[np.searchsorted(cdf, 0.05)], k_e[np.searchsorted(cdf, 0.95)]
-print(f"Beta(250,250) implies a 90% range of {lo_e} to {hi_e} heads in 100 tosses")
-```
-
-An expert who accepts that range has a coherent prior; one who says "no, anything between
-thirty and seventy is quite possible" has just told us the prior sample size is far too
-large, and we revise it. Note also that if a single beta cannot represent the belief, a
-**mixture** of betas can, and mixtures of conjugate priors are still conjugate, so the
-convenience survives.
-
-### Improper priors and the Jeffreys prior
-
-A noninformative prior such as $p(\theta) \propto 1$ on the real line, or
-$p(\sigma) \propto 1/\sigma$ on the positive line, does not integrate to one. These are
-**improper priors**. They are often harmless, because the likelihood makes the posterior
-proper and they read as the limit of a very diffuse proper prior, but for some models the
-posterior is improper too and then nothing downstream means anything: check propriety
-rather than assume it.
-
-In conjugate problems the objective prior often has a natural form. For the binomial,
-**Haldane's prior** is
+The honest final step is to feed the implications back, because a prior that sounds
+reasonable in the parameter space can be absurd in the data space. The tool for that is
+the prior predictive distribution, obtained by integrating the likelihood against the
+prior,
 
 $$
-f(\theta) \propto \frac{1}{\theta(1-\theta)},
+p(y) \;=\; \int p(y \mid \theta)\, p(\theta)\, d\theta ,
 $$
 
-which is the $a, b \to 0$ limit of the beta family. Multiplying by the binomial likelihood
-gives $f(\theta \mid {\bf x}) \propto \theta^{y-1}(1-\theta)^{n-y-1}$, a proper
-$\text{Beta}(y, n-y)$ distribution, so the impropriety of the prior does no harm as long
-as $0 < y < n$. It does harm at the boundary. If we observe all heads or all tails, one of
-the beta parameters is zero and the posterior does not integrate: the improper prior has
-produced an improper posterior, and every number computed downstream is meaningless. The
-check is one line.
-
-**Reading the computation.** Boundary observations can expose an improper posterior. Follow the exponents when all trials succeed, and distinguish a formal expression from a density that actually integrates to one.
-
-```{python}
-for y_obs in (9, 12):              # 9 heads (interior) and 12 heads (boundary)
-    a_h, b_h = y_obs, n - y_obs
-    ok = (a_h > 0) and (b_h > 0)
-    print(f"y = {y_obs:2d}: Haldane posterior Beta({a_h}, {b_h})  "
-          f"{'proper' if ok else 'IMPROPER, integrates to infinity'}")
-```
-
-This is the practical reason to be suspicious of default priors rather than merely aware
-of them. With a simulation-based method the sampler would have returned numbers in the
-boundary case too, and nothing in the output would have announced that the target was not
-a distribution.
-
-The **Jeffreys prior** is the standard recipe for a default noninformative prior with a
-defensible justification, defined as $p(\theta) \propto \sqrt{I(\theta)}$ with
-$I(\theta)$ the Fisher information. Its appeal is invariance: it transforms correctly under
-reparameterisation, so the analysis does not depend on whether we parameterise by a
-probability or its log-odds. For a binomial probability it works out to
-$\text{Beta}(1/2, 1/2)$, plotted below against the flat $\text{Beta}(1, 1)$.
-
-**Reading the computation.** These priors have different shapes near zero and one. Reading only the centre hides that difference; inspect the boundary behaviour and ask what it says about near-certain outcomes.
-
-```{python}
-theta_open = np.linspace(0.001, 0.999, 400)
-
-fig, ax = plt.subplots()
-ax.plot(theta_open, stats.beta(1, 1).pdf(theta_open), "--", label="flat  Beta(1,1)")
-ax.plot(theta_open, stats.beta(0.5, 0.5).pdf(theta_open), label="Jeffreys  Beta(0.5,0.5)")
-ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.set_ylim(0, 4)
-ax.legend(); ax.set_title("Two noninformative priors for a probability")
-plt.tight_layout(); plt.show()
-```
-
-The flat prior is uniform; the Jeffreys prior piles mass near zero and one. Neither is
-truly free of assumptions, which is exactly the point: "noninformative" is a relative term,
-and the flatness of a prior is not preserved under reparameterisation.
-
-### The prior predictive distribution
-
-A prior is hard to judge in the abstract because $\theta$ is not directly observable. A
-more useful check is to ask what data the prior expects, by integrating the likelihood
-against the prior,
-
-$$
-p(y) \;=\; \int p(y \mid \theta)\, p(\theta)\, d\theta .
-$$
-
-This is the **prior predictive distribution**, the same normalising constant as in Bayes'
-theorem, now read as a forecast of the data implied by the prior alone. If it puts most of
-its mass on data we would consider impossible, the prior is telling us something is wrong
-before we have fitted anything. Sampling from it is immediate: draw $\theta$ from the
+which is the same normalising constant as in Bayes' theorem, now read as the forecast of
+the data implied by the prior alone. Sampling from it is immediate: draw $\theta$ from the
 prior, then $y$ from the likelihood.
 
-**Reading the computation.** Each simulation first draws a probability from the prior and then a count from the sampling model. This two-stage construction produces the prior predictive distribution, before using the observed count.
+*Reading the computation.* Each simulation first draws a probability from the prior and
+then a count from the sampling model, which is the two-stage construction of the prior
+predictive. The printed range translates the elicited $\text{Beta}(250,250)$ into the
+observable scale on which the manager can be challenged.
 
 ```{python}
 n_trials, n_sim = 20, 20_000
@@ -575,76 +396,85 @@ ax.hist(prior_predictive_counts(5, 5), bins=bins, density=True, alpha=0.6,
         label="prior Beta(5,5)")
 ax.hist(prior_predictive_counts(8, 2), bins=bins, density=True, alpha=0.6,
         label="prior Beta(8,2)")
-ax.set_xlabel("heads out of 20"); ax.set_ylabel("prior predictive probability")
+ax.set_xlabel("positive months out of 20"); ax.set_ylabel("prior predictive probability")
 ax.legend(); ax.set_title("Different priors expect different data")
 plt.tight_layout(); plt.show()
+
+a_e, b_e, m_e = 250, 250, 100            # the elicited prior, and 100 future months
+k_e = np.arange(m_e + 1)
+log_c = gammaln(m_e + 1) - gammaln(k_e + 1) - gammaln(m_e - k_e + 1)
+pp = np.exp(log_c + betaln(a_e + k_e, b_e + m_e - k_e) - betaln(a_e, b_e))
+cdf_e = pp.cumsum()
+lo_e, hi_e = k_e[np.searchsorted(cdf_e, 0.05)], k_e[np.searchsorted(cdf_e, 0.95)]
+print(f"Beta(250,250) implies a 90% range of {lo_e} to {hi_e} positive months in 100")
 ```
 
-The weakly informative prior spreads the predicted count around ten, while the biased
-prior concentrates it in the upper half. If a domain expert told us that more than twelve
-heads is practically unheard of, the second prior would already be suspect. This is the
-cheapest and most underused form of prior checking.
+The weakly informative prior spreads the predicted count around ten out of twenty, while
+the $\text{Beta}(8,2)$ prior concentrates it in the upper half and would already be
+suspect if a manager told us that more than twelve positive months out of twenty is
+unusual. The elicited $\text{Beta}(250,250)$ implies that between 41 and 59 of the next
+hundred months will be positive. A manager who accepts that range has a coherent prior;
+one who says that anything between thirty and seventy is quite possible has just told us
+the prior sample size is far too large, and we revise it. If a single beta cannot
+represent the belief, a mixture of betas can, and mixtures of conjugate priors are still
+conjugate, so the convenience survives.
 
-### A second conjugate model: rare events
+### Improper priors and the Jeffreys prior
 
-The coin is a convenient first example but a misleading one, because economics and finance
-care at least as much about counts of rare events: defaults in a loan book, operational
-loss events, jumps in a price series. The natural model is a Poisson process, and the
-conjugate machinery works the same way, which is the point of doing it twice.
+A noninformative prior such as $p(\theta) \propto 1$ on the real line, or
+$p(\sigma) \propto 1/\sigma$ on the positive line, does not integrate to one. These are
+improper priors. They are often harmless, because the likelihood makes the posterior
+proper and they read as the limit of a very diffuse proper prior, but for some models the
+posterior is improper too and then nothing downstream means anything. Check propriety
+rather than assume it.
 
-Suppose $n$ events are observed over an exposure of length $x$, so the likelihood for the
-intensity $\theta$ is proportional to
+For the binomial, Haldane's prior is $f(\theta) \propto [\theta(1-\theta)]^{-1}$, the
+$a, b \to 0$ limit of the beta family. Multiplying by the binomial likelihood gives
+$f(\theta \mid y) \propto \theta^{y-1}(1-\theta)^{n-y-1}$, a proper $\text{Beta}(y, n-y)$
+distribution, so the impropriety does no harm as long as $0 < y < n$. It does harm at the
+boundary. In a year with twelve positive months one of the two beta parameters is zero,
+the posterior does not integrate, and every number computed downstream is meaningless.
 
-$$
-l(\theta \mid {\bf x}) \propto \theta^{n} e^{-x\theta}.
-$$
+The Jeffreys prior is the standard recipe for a default noninformative prior with a
+defensible justification, $p(\theta) \propto \sqrt{I(\theta)}$ with $I(\theta)$ the Fisher
+information. Its appeal is invariance: it transforms correctly under reparameterisation,
+so the analysis does not depend on whether we parameterise by a probability or its
+log-odds. For a binomial probability the Fisher information is $I(\theta) =
+n/[\theta(1-\theta)]$, so the prior is proportional to $\theta^{-1/2}(1-\theta)^{-1/2}$,
+which is $\text{Beta}(1/2,1/2)$.
 
-A **gamma prior** $\theta \sim \text{Gamma}(a, b)$ has density proportional to
-$\theta^{a-1} e^{-b\theta}$. Multiplying and collecting exponents,
-
-$$
-f(\theta \mid {\bf x}) \propto \theta^{n} e^{-x\theta} \cdot
-\theta^{a-1} e^{-b\theta} = \theta^{(a+n)-1} e^{-(b+x)\theta},
-$$
-
-which is the kernel of a $\text{Gamma}(a + n, b + x)$ density. Again we recognised the
-shape instead of integrating. The update rule reads as plainly as the beta one: add the
-event count to the shape and the exposure to the rate, so $a$ is a prior number of events
-and $b$ a prior exposure. Letting $a, b \to 0$ gives the improper objective prior
-$f(\theta) \propto 1/\theta$.
-
-**Reading the computation.** The Poisson model combines event counts with exposure. Gamma rate increases with firm-years, not just with the number of rows; inspect both posterior mean and units.
+*Reading the computation.* The two priors differ mainly near zero and one, so reading only
+the centre hides the difference. The loop then checks whether the Haldane posterior is a
+distribution at all, at an interior count and at the boundary.
 
 ```{python}
-a_g, b_g = 2.0, 500.0              # prior: 2 events in 500 firm-years
-n_ev, exposure = 7, 800            # observed: 7 defaults in 800 firm-years
-
-post_g = stats.gamma(a_g + n_ev, scale=1 / (b_g + exposure))
-theta_g = np.linspace(0, 0.03, 400)
+theta_open = np.linspace(0.001, 0.999, 400)
 
 fig, ax = plt.subplots()
-ax.plot(theta_g, stats.gamma(a_g, scale=1 / b_g).pdf(theta_g), ":", label="prior")
-ax.plot(theta_g, post_g.pdf(theta_g), label="posterior")
-ax.axvline(n_ev / exposure, color="grey", lw=1, label="MLE = 7/800")
-ax.set_xlabel(r"default intensity $\theta$"); ax.set_ylabel("density")
-ax.legend(); ax.set_title("Poisson-gamma updating for a rare event")
+ax.plot(theta_open, stats.beta(1, 1).pdf(theta_open), "--", label="flat  Beta(1,1)")
+ax.plot(theta_open, stats.beta(0.5, 0.5).pdf(theta_open), label="Jeffreys  Beta(0.5,0.5)")
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density"); ax.set_ylim(0, 4)
+ax.legend(); ax.set_title("Two noninformative priors for a probability")
 plt.tight_layout(); plt.show()
 
-print(f"prior mean {a_g/b_g:.5f}   MLE {n_ev/exposure:.5f}   "
-      f"posterior mean {post_g.mean():.5f}")
-print(f"95% credible interval [{post_g.ppf(0.025):.5f}, {post_g.ppf(0.975):.5f}]")
+for y_obs in (9, 12):              # 9 positive months (interior) and 12 (boundary)
+    a_h, b_h = y_obs, n - y_obs
+    ok = (a_h > 0) and (b_h > 0)
+    print(f"y = {y_obs:2d}: Haldane posterior Beta({a_h}, {b_h})  "
+          f"{'proper' if ok else 'IMPROPER, integrates to infinity'}")
 ```
 
-The posterior mean again lands between the prior mean and the maximum likelihood estimate,
-and it is again a weighted average, now with weights $b/(b+x)$ and $x/(b+x)$ set by prior
-exposure against observed exposure. The same three lines of algebra will reappear for the
-normal model in Lecture 2 and for every conditional distribution inside the samplers of
-Lectures 4 and 5.
+The flat prior is uniform; the Jeffreys prior piles mass near zero and one. Neither is
+truly free of assumptions, which is exactly the point, since flatness is not preserved
+under reparameterisation. The boundary case is the practical warning: a simulation-based
+method would have returned numbers there too, and nothing in the output would have
+announced that the target was not a distribution.
 
-### When conjugacy is unavailable
+### Where else conjugacy works, and where it stops
 
 Conjugate priors exist for the exponential family, which covers the normal, binomial,
-Poisson and multinomial models, and this is where the tidy examples come from.
+Poisson and multinomial models, and the algebra is always the one we just did: multiply,
+collect exponents, recognise the kernel.
 
 | Likelihood | Conjugate prior | Posterior |
 |---|---|---|
@@ -654,61 +484,44 @@ Poisson and multinomial models, and this is where the tidy examples come from.
 | Normal, precision $\tau$, known mean | Gamma | Gamma |
 | Normal regression, $(\beta, \sigma^2)$ | Normal-inverse-gamma | Normal-inverse-gamma |
 
-Outside the exponential family the tidiness disappears. Take a sample from a Cauchy
-distribution, $f(x \mid \theta) = \left[\pi(1 + (x-\theta)^2)\right]^{-1}$, whose
-likelihood is
+The Poisson row is worth deriving because Lecture 4 uses it and because it shows that the
+recipe does not depend on the beta integral. If $n$ events are observed over an exposure
+of length $x$, the likelihood for the intensity $\theta$ is proportional to $\theta^{n}
+e^{-x\theta}$, and a $\text{Gamma}(a,b)$ prior is proportional to $\theta^{a-1}e^{-b\theta}$.
+Multiplying and collecting,
 
 $$
-l(\theta \mid {\bf x}) \propto \prod_{i=1}^{n} \frac{1}{1 + (x_i - \theta)^2}.
+f(\theta \mid {\bf x}) \propto \theta^{n}e^{-x\theta}\cdot\theta^{a-1}e^{-b\theta}
+= \theta^{(a+n)-1}e^{-(b+x)\theta},
 $$
 
-No standard prior multiplies into this to give a recognisable family, and the product has
-several local maxima for small samples. There is no conjugate prior to be found, and the
-problem is not the multiplication but the normalisation: to report anything we need
+the kernel of a $\text{Gamma}(a+n, b+x)$ density. Add the event count to the shape and the
+exposure to the rate, so $a$ is a prior number of events and $b$ a prior exposure, and the
+posterior mean is again a weighted average, now with weights $b/(b+x)$ and $x/(b+x)$.
+Letting $a, b \to 0$ gives the improper objective prior $f(\theta) \propto 1/\theta$.
 
-$$
-f({\bf x}) = \int f({\bf x} \mid \theta) f(\theta) \, d\theta,
-$$
+Outside the exponential family the tidiness disappears. For a sample from a Cauchy
+distribution, $f(x \mid \theta) = [\pi(1 + (x-\theta)^2)]^{-1}$, the likelihood
+$\prod_i [1 + (x_i-\theta)^2]^{-1}$ multiplies into no standard prior to give a
+recognisable family, and for small samples it has several local maxima. The obstacle is
+not the multiplication but the normalisation: to report anything we need $f({\bf x}) =
+\int f({\bf x}\mid\theta) f(\theta) d\theta$, an integral with no closed form. Everything
+from Lecture 3 onwards is a strategy for that integral, either approximating it or
+sampling in a way that never requires it.
 
-an integral with no closed form. Everything from Lecture 3 onwards is a strategy for
-handling that integral, either by approximating it or by sampling in a way that never
-requires it.
+## A century of market months
 
-### Two plausible prior stories
+Twelve months were never going to settle the committee's question. The market portfolio
+of the Kenneth French data library begins in July 1926, which gives an unusually long
+record, and a long record supplies what a prior most needs, namely evidence from outside
+the sample being analysed. We split the history: everything up to the end of 1989 forms
+the prior, and the period from 1990 onwards is the data we update on. This is what a
+Bayesian does when a long history exists but the recent regime is the object of interest.
 
-UPM also considers mixtures of conjugate priors. Suppose an analyst regards
-two economic regimes as plausible, with prior
-$p(\theta)=w\operatorname{Beta}(a_1,b_1)+(1-w)\operatorname{Beta}(a_2,b_2)$.
-Each component updates by the usual Beta–Binomial rule. The component weights
-also update:
-
-$$
-w_j^*=\frac{w_j Z_j}{\sum_\ell w_\ell Z_\ell},\qquad
-Z_j=\binom ny\frac{B(a_j+y,b_j+n-y)}{B(a_j,b_j)}.
-$$
-
-The data can both revise the probability within a story and change which story
-is credible. Keeping the old mixture weights would ignore the second update.
-The grid exercise can approximate this posterior without any new integration
-formula. In Week 9, the same calculation becomes Bayesian model averaging.
-
-## The same model on a century of market data
-
-Everything so far has been done on a coin, which is honest about the algebra and silent about
-economics. The beta-binomial model becomes considerably more interesting the moment the binary
-outcome is one an investor actually faces: in a given month, does the market go up or down? The
-question opens this chapter, and we now have the machinery to answer it.
-
-The data are the monthly return on the US market portfolio from the Kenneth French data library,
-which starts in July 1926. That gives an unusually long record, and a long record allows the one
-thing a prior most needs, namely evidence from outside the sample being analysed. We split the
-history: everything up to the end of 1989 forms the prior, and the period from 1990 onwards is the
-data we update on. This is not a device for the classroom. It is what a Bayesian actually does
-when a long history exists but the recent regime is the object of interest.
-
-**Reading the computation.** The block loads the factor file, reconstructs the total market return
-by adding the risk-free rate back to the excess return, and counts up and down months in the two
-periods. Those counts are the prior parameters and the likelihood's sufficient statistics.
+*Reading the computation.* The block reconstructs the total market return by adding the
+risk-free rate back to the excess return, counts positive and negative months in the two
+periods, and turns the pre-1990 counts into the prior parameters of the Beta-Binomial
+result above.
 
 ```{python}
 ff_m = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
@@ -718,27 +531,13 @@ prior_sample, new_sample = market[:"1989-12"], market["1990-01":]
 a_pre, b_pre = int((prior_sample > 0).sum()), int((prior_sample <= 0).sum())
 y_new, n_new = int((new_sample > 0).sum()), len(new_sample)
 
-print(f"1926-1989: {a_pre} up, {b_pre} down months, share up {a_pre/(a_pre+b_pre):.4f}")
-print(f"1990-2026: {y_new} up, {n_new - y_new} down months, share up {y_new/n_new:.4f}")
-```
-
-The historical record gives $762$ months, of which $469$ were positive, and the modern period gives
-$439$ months with $285$ positive. Read as a prior, the pre-1990 evidence is a
-$\text{Beta}(469, 293)$ distribution, an extremely informative one: it is worth $762$ observations,
-almost twice the sample we are about to add. That is the honest position here. We are not inventing
-a belief, we are carrying forward what sixty-three years of data already showed.
-
-Updating is the arithmetic from the previous section, add the successes to the first parameter and
-the failures to the second, so the posterior is $\text{Beta}(469 + 285,\; 293 + 154)$.
-
-```{python}
 prior_m = stats.beta(a_pre, b_pre)
 post_m = stats.beta(a_pre + y_new, b_pre + n_new - y_new)
 w_m = (a_pre + b_pre) / (a_pre + b_pre + n_new)
 
 grid_m = np.linspace(0.55, 0.70, 400)
 fig, ax = plt.subplots()
-ax.plot(grid_m, prior_m.pdf(grid_m), ":", label="prior: 1926-1989")
+ax.plot(grid_m, prior_m.pdf(grid_m), ":", label=f"prior: 1926-1989, Beta({a_pre}, {b_pre})")
 ax.plot(grid_m, post_m.pdf(grid_m), label="posterior: prior + 1990-2026")
 ax.axvline(y_new / n_new, color="grey", lw=1, label=f"1990-2026 frequency {y_new/n_new:.3f}")
 ax.set_xlabel(r"$\theta$, probability that a month is positive")
@@ -746,60 +545,170 @@ ax.set_ylabel("density"); ax.legend(fontsize=9)
 ax.set_title("A century of market months, split into prior and data")
 plt.tight_layout(); plt.show()
 
-print(f"prior mean {prior_m.mean():.4f}   modern frequency {y_new/n_new:.4f}   "
-      f"posterior mean {post_m.mean():.4f}")
-print(f"weight on the prior w = {w_m:.4f}, so posterior mean = "
-      f"{w_m:.4f}*{prior_m.mean():.4f} + {1-w_m:.4f}*{y_new/n_new:.4f}")
+print(f"1926-1989: {a_pre} up, {b_pre} down months, share up {a_pre/(a_pre+b_pre):.4f}")
+print(f"1990-2026: {y_new} up, {n_new - y_new} down months, share up {y_new/n_new:.4f}")
+print(f"weight on the prior w = {w_m:.4f}, posterior mean {post_m.mean():.4f}")
 print(f"posterior 95% interval [{post_m.ppf(0.025):.4f}, {post_m.ppf(0.975):.4f}]")
 ```
 
-The posterior sits at $0.6278$, between the historical $0.6155$ and the modern $0.6492$, and closer
-to the historical value because the prior carries $762$ observations against $439$. The weighted
-average formula reproduces it exactly, which is the same identity as for the coin, now with numbers
-an investor can argue about. The credible interval runs from $0.6003$ to $0.6549$: after a century
-of data we still cannot pin the monthly win rate down more tightly than about five percentage
-points, which is a useful corrective to anyone quoting such a figure to three decimals.
+The pre-1990 record supplies $762$ months of which $469$ were positive, a
+$\text{Beta}(469,293)$ prior worth almost twice the $439$ months that follow it, and the
+posterior mean of $0.6278$ sits between the historical $0.6155$ and the modern $0.6492$,
+closer to the first because it carries more months. The credible interval runs from
+$0.6003$ to $0.6549$, so after a century of data the monthly win rate is still uncertain
+by about five percentage points, which is a useful corrective to anyone quoting such a
+figure to three decimals. The number also says nothing about magnitude: down months are
+on average larger than up months, and the Bernoulli model deliberately discards that,
+which is why the committee's question is only the first one worth asking.
 
-Two things deserve comment before we move on, because both are easy to get wrong.
+## Model comparison in general notation
 
-The first is what the number does and does not say. A probability of $0.63$ that a month is
-positive sounds like a licence to be long, and it is not, because it says nothing about magnitude.
-Down months are on average larger than up months, which is precisely why the question of interest
-in finance is rarely a probability of direction alone. The Bernoulli model deliberately throws that
-information away, and knowing what a model discards is as important as knowing what it estimates.
+So far the model was fixed and only $\theta$ was uncertain. Applied work is rarely in that
+position. Here the committee might reasonably ask whether the data support any departure
+from an even chance at all, which is a comparison of two models rather than a statement
+about one parameter. The Bayesian answer uses the same theorem, applied to models instead
+of parameter values, and it is worth stating once in general notation because Lectures 9
+and 11 use it constantly.
 
-The second is that the split into prior and data assumes the two periods are informative about the
-same $\theta$. If the market's monthly win rate changed after 1990, then using the earlier period as
-a prior does not sharpen the estimate, it contaminates it. The assumption is testable in a crude
-way: if the modern frequency lands far in the tail of the prior, the two are hard to reconcile.
+### Result: marginal likelihood, posterior odds and Bayes factors
+
+Let $M_1, \dots, M_J$ be competing models, model $M_j$ having parameter vector $\theta_j$,
+prior $p(\theta_j \mid M_j)$ and prior model probability $p(M_j)$ with $\sum_j p(M_j) = 1$.
+The marginal likelihood of model $M_j$ is
+
+$$
+p(y \mid M_j) = \int p(y \mid \theta_j, M_j)\, p(\theta_j \mid M_j)\, d\theta_j ,
+$$
+
+the posterior model probabilities are
+
+$$
+p(M_j \mid y) = \frac{p(y \mid M_j)\, p(M_j)}{\sum_{\ell=1}^{J} p(y \mid M_\ell)\, p(M_\ell)} ,
+$$
+
+and for any pair of models the posterior odds factor into prior odds times the Bayes
+factor,
+
+$$
+\underbrace{\frac{p(M_i \mid y)}{p(M_j \mid y)}}_{\text{posterior odds}}
+= \underbrace{\frac{p(M_i)}{p(M_j)}}_{\text{prior odds}}
+\times \underbrace{\frac{p(y \mid M_i)}{p(y \mid M_j)}}_{\text{Bayes factor } BF_{ij}} .
+$$
+
+The derivation is Bayes' theorem for events with $B_i = M_i$ and $A = y$. The models
+partition the space of explanations, so $p(M_j \mid y) = p(y \mid M_j)p(M_j) / p(y)$ with
+$p(y) = \sum_\ell p(y \mid M_\ell) p(M_\ell)$ by the law of total probability, which is the
+middle display. Taking the ratio for two models cancels the common denominator $p(y)$ and
+leaves the third display. The marginal likelihood itself is the law of total probability
+once more, now over the continuous parameter rather than over models, which is why it is
+the same integral as the normalising constant in Bayes' theorem and the same integral as
+the prior predictive density evaluated at the observed data.
+
+Three consequences are worth naming. The Bayes factor is the entire evidential content of
+the data about the pair: everything else in the posterior odds is prior opinion. The
+marginal likelihood integrates over the prior rather than maximising over the parameter,
+so a model that spreads its prior over regions the data reject is penalised automatically,
+which is the Bayesian version of a complexity penalty and requires no separate correction.
+And because the integral is over the prior, an improper prior leaves $p(y \mid M_j)$
+defined only up to an arbitrary constant, so Bayes factors and improper priors do not mix.
+
+For the Beta-Binomial the integral is available in closed form. With $\theta \sim
+\text{Beta}(a,b)$,
+
+$$
+p(y) = \int_0^1 \binom{n}{y}\theta^{y}(1-\theta)^{n-y}
+\frac{\theta^{a-1}(1-\theta)^{b-1}}{B(a,b)}\, d\theta
+= \binom{n}{y}\frac{B(a+y,\; b+n-y)}{B(a,b)},
+$$
+
+because the integrand is a beta kernel with parameters $a+y$ and $b+n-y$, which integrates
+to $B(a+y, b+n-y)$ by definition of the beta function. A model that fixes $\theta =
+\theta^\star$ has no integral to do: $p(y \mid \theta^\star) = \binom{n}{y}
+(\theta^\star)^{y}(1-\theta^\star)^{n-y}$. The binomial coefficient is common to both and
+cancels in every Bayes factor between them.
+
+The same quantity also updates a mixture prior. If $p(\theta) = \sum_j w_j
+\text{Beta}(a_j, b_j)$ represents several competing economic stories, each component
+updates by the Beta-Binomial result and the weights update by the posterior model
+probability formula,
+
+$$
+w_j^\star = \frac{w_j Z_j}{\sum_\ell w_\ell Z_\ell},
+\qquad Z_j = \binom{n}{y}\frac{B(a_j+y,\; b_j+n-y)}{B(a_j,b_j)},
+$$
+
+so $Z_j$ is exactly the marginal likelihood of component $j$. The data revise the
+probability within a story and revise which story is credible, and keeping the old weights
+would ignore the second update. In Lecture 9 the same calculation is Bayesian model
+averaging.
+
+*Reading the computation.* The two models are compared on the $439$ months from 1990
+onwards: $M_1$ fixes $\theta$ at one half, $M_2$ gives it the $\text{Beta}(469,293)$ prior
+from the pre-1990 record. The figure recomputes the log Bayes factor after each month, so
+the horizontal axis is the amount of evidence rather than a parameter value.
 
 ```{python}
-z_pos = (y_new / n_new - prior_m.mean()) / prior_m.std()
-prior_pred_sd = np.sqrt(prior_m.mean() * (1 - prior_m.mean()) / n_new)
-print(f"modern frequency is {z_pos:.1f} prior standard deviations above the prior mean")
-print(f"but sampling noise alone in {n_new} months is about "
-      f"{prior_pred_sd:.4f}, i.e. {(y_new/n_new - prior_m.mean())/prior_pred_sd:.1f} "
-      f"standard errors")
+def log_ml_beta(y_, n_, a_, b_):        # log marginal likelihood, binomial coefficient dropped
+    return betaln(a_ + y_, b_ + n_ - y_) - betaln(a_, b_)
+
+def log_ml_point(y_, n_, theta_):       # log likelihood at a fixed theta, same convention
+    return y_ * np.log(theta_) + (n_ - y_) * np.log(1 - theta_)
+
+log_bf = log_ml_beta(y_new, n_new, a_pre, b_pre) - log_ml_point(y_new, n_new, 0.5)
+log_bf_flat = log_ml_beta(y_new, n_new, 1, 1) - log_ml_point(y_new, n_new, 0.5)
+
+up = (new_sample > 0).to_numpy().astype(int)
+cum, months = np.cumsum(up), np.arange(1, n_new + 1)
+path = log_ml_beta(cum, months, a_pre, b_pre) - log_ml_point(cum, months, 0.5)
+path_flat = log_ml_beta(cum, months, 1, 1) - log_ml_point(cum, months, 0.5)
+
+fig, ax = plt.subplots()
+ax.plot(new_sample.index, path, label="prior Beta(469, 293) from 1926-1989")
+ax.plot(new_sample.index, path_flat, "--", label="flat prior Beta(1, 1)")
+ax.axhline(0.0, color="black", lw=1)
+ax.set_xlabel("months of evidence, 1990 onwards")
+ax.set_ylabel(r"$\log BF_{21}$ against $\theta = 1/2$")
+ax.legend(fontsize=9); ax.set_title("Evidence against an even chance accumulates month by month")
+plt.tight_layout(); plt.show()
+
+print(f"log BF (informative prior) {log_bf:.2f},  BF {np.exp(log_bf):.3e}")
+print(f"log BF (flat prior)        {log_bf_flat:.2f},  BF {np.exp(log_bf_flat):.3e}")
+print(f"posterior probability of M2 at equal prior odds: {1/(1+np.exp(-log_bf)):.8f}")
+for nm, pth in (("informative", path), ("flat", path_flat)):
+    last = int(np.where(pth < 0)[0].max())
+    print(f"{nm:>11} prior: last month with log BF < 0 is "
+          f"{new_sample.index[last]:%Y-%m}, log BF after 10 years {pth[119]:.2f}")
 ```
 
-The modern frequency is high relative to the prior, but relative to the sampling noise in $439$
-months it is well within the range one would expect if $\theta$ had not changed at all. The two
-periods are compatible, so pooling them is defensible here. In Lecture 8 we drop the assumption
-entirely and let the parameter drift.
+The log Bayes factor ends at $18.95$ under the historical prior, a Bayes factor of about
+$1.7 \times 10^{8}$ in favour of letting $\theta$ be free, and at equal prior odds the
+posterior probability of $M_2$ is $0.99999999$. The flat prior gives $16.98$, a smaller
+figure by about two log units, and the gap is the complexity penalty at work: a
+$\text{Beta}(1,1)$ prior spreads its mass over values of $\theta$ that these data reject,
+and pays for the space it wasted. The path is the more instructive part of the picture. Both curves dip below zero in the
+early years, when a few dozen months are genuinely compatible with a fair coin: the
+informative prior is last negative in March 1992 and the flat one as late as March 1994,
+and even after ten years of data the log Bayes factors are only $7.15$ and $6.01$. Evidence
+about a probability accumulates slowly, which is why a decade of monthly returns settles so
+little in finance.
 
 ## The posterior without algebra
 
-Conjugacy gave us the answer in closed form, which is a luxury. It is worth seeing once
-that the closed form is a convenience rather than a necessity, because from Lecture 3
-onwards we will not have it.
+Conjugacy gave the answer in closed form, which is a luxury. It is worth seeing once that
+the closed form is a convenience rather than a necessity, because from Lecture 3 onwards
+we will not have it.
 
-Bayes' theorem says the posterior is proportional to likelihood times prior. If we simply
-evaluate that product on a fine grid of $\theta$ values and divide by its sum, we have the
-posterior, with the integral in the denominator replaced by a sum. This is the exercise
-for this week's session, and it is the crudest member of the family of methods that
-occupies the middle third of the course.
+Bayes' theorem says the posterior is proportional to likelihood times prior. Evaluate that
+product on a fine grid of $\theta$ values and divide by its sum, and the integral in the
+denominator has been replaced by a sum. The same logic runs in the other direction once we
+can draw from the posterior: given $\theta^{(1)},\dots,\theta^{(S)}$ we estimate any
+posterior quantity by averaging, for instance the mean by $S^{-1}\sum_s \theta^{(s)}$.
+Formula, grid and sample describe the same posterior and differ only in how they cope with
+the normalising constant.
 
-**Reading the computation.** The product of likelihood and prior is evaluated at each grid point, then normalised. The grid approximates integration; compare its resolution with the width of the posterior peak.
+*Reading the computation.* The first half evaluates likelihood times prior at each grid
+point and normalises numerically; the second half draws from the known Beta posterior
+instead. Both are compared with the analytic answer for the twelve months of 2024.
 
 ```{python}
 theta_grid = np.linspace(0, 1, 501)
@@ -808,75 +717,70 @@ dens = unnorm / np.trapezoid(unnorm, theta_grid)      # normalise numerically
 
 grid_mean = np.trapezoid(theta_grid * dens, theta_grid)
 grid_prob = np.trapezoid(dens[theta_grid >= 0.5], theta_grid[theta_grid >= 0.5])
+samples = post.rvs(size=20_000, random_state=rng)
+
 print(f"grid posterior mean        {grid_mean:.4f}   exact {post.mean():.4f}")
 print(f"grid P(theta > 0.5 | data) {grid_prob:.4f}   exact {1 - post.cdf(0.5):.4f}")
-print(f"largest absolute error in the density: {np.abs(dens - post.pdf(theta_grid)).max():.2e}")
+print(f"largest absolute error in the grid density: "
+      f"{np.abs(dens - post.pdf(theta_grid)).max():.2e}")
+print(f"Monte Carlo posterior mean {samples.mean():.4f}   exact {post.mean():.4f}")
 ```
 
-The grid reproduces the analytic posterior to four decimal places. That is reassuring but
-also misleading: the method works here because $\theta$ is one-dimensional and bounded. A
-grid with 500 points per dimension needs $500^{10}$ evaluations for ten parameters, which
-is why the course moves from grids to sampling rather than to finer grids.
+The grid reproduces the analytic posterior to four decimal places and the Monte Carlo mean
+agrees with it to within $0.001$. That is reassuring but also misleading, because the grid works here only
+since $\theta$ is one-dimensional and bounded. A grid with 500 points per dimension needs
+$500^{10}$ evaluations for ten parameters, which is why the course moves from grids to
+sampling rather than to finer grids.
 
 ## Summarising and predicting
 
-A posterior is the complete answer, but readers want a number and a range. For a point
-estimate we can report the posterior mean, median or mode, and Lecture 2 shows that each
-of these is optimal under a particular loss function. For a range we report a **credible
-interval**, an interval $[\underline\theta, \overline\theta]$ with
+A posterior is the complete answer, but a committee wants a number and a range. For a
+point estimate we can report the posterior mean, median or mode, and Lecture 2 shows that
+each is optimal under a particular loss function. For a range we report a credible
+interval, an interval $[\underline\theta, \overline\theta]$ with
 $P(\underline\theta < \theta < \overline\theta \mid {\bf x}) = 0.95$; the shortest such
-interval is the **highest posterior density** interval.
+interval is the highest posterior density interval.
 
 The interpretation is the part to be careful about. The Bayesian interval is a statement
-about $\theta$ given the data we have: there is a ninety-five percent probability that
-$\theta$ lies inside it. The classical interval is a statement about the procedure: in
-repeated samples, ninety-five percent of the intervals it constructs would contain the
-fixed true value. The second statement says nothing about the particular interval in
-front of you, which is why it is so often misquoted as the first.
+about $\theta$ given the data in hand: there is a ninety-five percent probability that
+$\theta$ lies inside it. The classical interval is a statement about the procedure, namely
+that in repeated samples ninety-five percent of the intervals it constructs would contain
+the fixed true value. The second says nothing about the particular interval in front of
+you, which is why it is so often misquoted as the first.
 
-The interval itself is one line once the posterior is a named distribution, and the
-probability statement that goes with it is the one a confidence interval cannot make.
+Prediction follows the same integration logic as the marginal likelihood. For a future
+observation $Y$ that is conditionally independent of the past given $\theta$,
 
-**Reading the computation.** Quantiles allocate equal probability to the two excluded tails. They describe the parameter conditional on this prior and likelihood, not a repeated-sample coverage claim.
+$$
+f(y \mid {\bf x}) = \int f(y \mid \theta)\, f(\theta \mid {\bf x})\, d\theta ,
+$$
+
+so we average the sampling distribution over the posterior rather than plugging in an
+estimate. For $m$ further months this integral has a closed form. Writing $a^\star = a+y$
+and $b^\star = b+n-y$ for the posterior parameters,
+
+$$
+P(Y = k \mid {\bf x}) = \int_0^1 \binom{m}{k}\theta^{k}(1-\theta)^{m-k}
+\frac{\theta^{a^\star-1}(1-\theta)^{b^\star-1}}{B(a^\star,b^\star)}\, d\theta
+= \binom{m}{k}\frac{B(a^\star+k,\; b^\star+m-k)}{B(a^\star,b^\star)},
+$$
+
+the same beta integral as in the marginal likelihood: the integrand is a beta kernel with
+parameters $a^\star+k$ and $b^\star+m-k$. This is the beta-binomial distribution. The
+classical alternative, $\text{Binomial}(m,\hat\theta)$, conditions on one value of
+$\theta$ as if it were known.
+
+*Reading the computation.* The first two lines summarise the posterior for the twelve
+months of 2024; the rest integrates the uncertain probability out of a ten-month forecast
+and compares the result with fixing the probability at its posterior mean.
 
 ```{python}
 lo, hi = post.ppf([0.025, 0.975])
 print(f"95% equal-tailed credible interval: [{lo:.3f}, {hi:.3f}]")
 print(f"posterior mean {post.mean():.3f}, median {post.median():.3f}, "
       f"mode {(a + y - 1) / (a + b + n - 2):.3f}")
-```
 
-Mean, median and mode differ because the posterior is mildly skewed, by enough to matter
-for a borderline decision. Which one to report is a question about the cost of being
-wrong, and Lecture 2 answers it with a loss function rather than a convention.
-
-Prediction follows the same integration logic as the marginal likelihood. For a future
-observation $Y$ that is conditionally independent of the past given $\theta$,
-
-$$
-f(y \mid {\bf x}) = \int f(y \mid \theta)\, f(\theta \mid {\bf x})\, d\theta,
-$$
-
-so we average the sampling distribution over the posterior rather than plugging in an
-estimate. For the coin with $m$ further tosses this integral has a closed form. Writing
-$a^* = a + y$ and $b^* = b + n - y$ for the posterior parameters,
-
-$$
-P(Y = k \mid {\bf x}) = \int_0^1 \binom{m}{k} \theta^{k}(1-\theta)^{m-k}
-\frac{\theta^{a^*-1}(1-\theta)^{b^*-1}}{B(a^*, b^*)} d\theta
-= \binom{m}{k} \frac{B(a^* + k,\; b^* + m - k)}{B(a^*, b^*)},
-$$
-
-where the middle step is nothing but the beta integral again: the integrand is a beta
-kernel with parameters $a^* + k$ and $b^* + m - k$, so it integrates to
-$B(a^* + k, b^* + m - k)$. This is the **beta-binomial** distribution. The classical
-alternative, $\text{Binomial}(m, \hat\theta)$, conditions on one value of $\theta$ as if
-it were known.
-
-**Reading the computation.** Integrating the uncertain probability gives a Beta–Binomial future count. Compare this with fixing the probability at its posterior mean; multiple future trials share the same uncertain parameter.
-
-```{python}
-m = 10                                   # further tosses
+m = 10                                   # further months
 k = np.arange(m + 1)
 a_s, b_s = a + y, b + n - y              # posterior parameters
 
@@ -886,8 +790,8 @@ plug_in = stats.binom(m, post.mean()).pmf(k)
 
 fig, ax = plt.subplots()
 ax.bar(k - 0.18, pred, width=0.36, label="Bayesian predictive")
-ax.bar(k + 0.18, plug_in, width=0.36, label="plug-in Binomial(10, 0.636)")
-ax.set_xlabel("heads in 10 further tosses"); ax.set_ylabel("probability")
+ax.bar(k + 0.18, plug_in, width=0.36, label=f"plug-in Binomial(10, {post.mean():.3f})")
+ax.set_xlabel("positive months out of 10 further months"); ax.set_ylabel("probability")
 ax.legend(); ax.set_title("Parameter uncertainty widens the forecast")
 plt.tight_layout(); plt.show()
 
@@ -895,35 +799,35 @@ print(f"predictive sd {np.sqrt((pred*(k-(pred*k).sum())**2).sum()):.3f}  "
       f"plug-in sd {np.sqrt((plug_in*(k-(plug_in*k).sum())**2).sum()):.3f}")
 ```
 
-Both distributions are centred in the same place, but the predictive one is visibly wider.
-The extra spread is our remaining uncertainty about $\theta$, carried through into the
-forecast instead of being discarded. Ignoring it is the standard route to prediction
-intervals that are too narrow, and it is a mistake with a price attached in risk
-management.
+Mean, median and mode differ because the posterior is mildly skewed, by enough to matter
+for a borderline decision, and which one to report is a question about the cost of being
+wrong that Lecture 2 answers with a loss function rather than a convention. The two
+forecast distributions are centred in the same place, but the predictive one is visibly
+wider: the extra spread is our remaining uncertainty about $\theta$, carried into the
+forecast instead of discarded. Ignoring it is the standard route to prediction intervals
+that are too narrow, and it is a mistake with a price attached in risk management.
 
 ## Updating never starts over
 
 One last property falls straight out of the algebra and matters more in practice than it
-first appears. Suppose we now observe six heads in those ten further tosses. Treating the
-current posterior $\text{Beta}(14, 8)$ as the prior and multiplying by the new binomial
-likelihood,
+first appears. Suppose six of those ten further months are positive. Treating the current
+posterior $\text{Beta}(14,8)$ as the prior and multiplying by the new binomial likelihood,
 
 $$
-f(\theta \mid {\bf x}, {\bf y}) \;\propto\; \theta^{6}(1-\theta)^{4} \times
+f(\theta \mid {\bf x}, {\bf y}) \;\propto\; \theta^{6}(1-\theta)^{4}\times
 \theta^{14-1}(1-\theta)^{8-1} = \theta^{20-1}(1-\theta)^{12-1},
 $$
 
-so $\theta \mid {\bf x}, {\bf y} \sim \text{Beta}(20, 12)$. Pooling all twenty-two tosses
-against the original $\text{Beta}(5,5)$ prior gives $\text{Beta}(5 + 15, 5 + 7) =
-\text{Beta}(20, 12)$, the same thing. Yesterday's posterior is today's prior, and the
-order in which the data arrive is irrelevant. In a large-data setting this is what makes
-sequential and parallel processing coherent rather than an approximation.
+so $\theta \mid {\bf x},{\bf y} \sim \text{Beta}(20,12)$. Pooling all twenty-two months
+against the original $\text{Beta}(5,5)$ prior gives $\text{Beta}(5+15,\,5+7) =
+\text{Beta}(20,12)$, the same thing. Yesterday's posterior is today's prior, and the order
+in which the data arrive is irrelevant. In a large-data setting this is what makes
+sequential and parallel processing coherent rather than approximate.
 
-The same property is easier to believe as a picture. The block below streams two hundred
-Bernoulli outcomes from a coin with $\theta = 0.7$ and redraws the posterior after the
-first $k$ of them.
-
-**Reading the computation.** The cumulative number of successes is sufficient for this exchangeable Bernoulli model. Updating one observation at a time must agree with processing the entire sample at once.
+*Reading the computation.* The cumulative number of positive months is sufficient for this
+model, so updating one observation at a time must agree with processing the whole sample
+at once. The block streams two hundred months from a process with $\theta = 0.7$ and
+redraws the posterior after the first $k$ of them.
 
 ```{python}
 true_theta = 0.7
@@ -944,110 +848,32 @@ the prior's influence fades, which is the Bernstein-von Mises idea in miniature:
 enough data the Bayesian and classical answers converge. The machinery earns its keep when
 data are scarce or the model is large, which is where the rest of the course lives.
 
-## Why we will need more than this
-
-Conjugate models are the exception, not the rule. As soon as the prior and the likelihood
-do not pair neatly, the posterior has no closed form and the normalising integral is
-intractable. The response is not to abandon the Bayesian answer but to approximate it by
-drawing samples from the posterior: given $\theta^{(1)}, \dots, \theta^{(S)}$ we estimate
-any posterior quantity by averaging, for instance the mean as
-$\frac{1}{S}\sum_s \theta^{(s)}$. Building the algorithms that produce such samples,
-Monte Carlo, Gibbs sampling, Metropolis-Hastings, occupies the next several lectures. The
-logic can be previewed here, where we happen to know the posterior and can draw from it
-directly.
-
-**Reading the computation.** Drawing from a known Beta distribution lets us check an estimated expectation against an analytic one. More draws change simulation error, not the posterior distribution being sampled.
-
-```{python}
-samples = post.rvs(size=20_000, random_state=rng)
-print(f"analytic posterior mean {post.mean():.4f}   Monte Carlo {samples.mean():.4f}")
-print(f"analytic 95% interval   [{post.ppf(0.025):.3f}, {post.ppf(0.975):.3f}]")
-print(f"Monte Carlo 95%         [{np.quantile(samples, 0.025):.3f}, "
-      f"{np.quantile(samples, 0.975):.3f}]")
-```
-
-The sample-based answers match the analytic ones, which is the check every sampler must
-pass before we trust it on a harder model. Formula, grid and sample all describe the same
-posterior. They differ only in how they cope with the normalising constant, and therefore
-in how far they scale.
-
-## Two signals: when may we update twice?
-
-Suppose a lender assigns probability $p(D)=0.03$ to default. A warning is more
-common among defaulting firms than among other firms: $p(W_1\mid D)=0.9$ and
-$p(W_1\mid D^c)=0.2$. These are assumptions about the **data-generating process**,
-not posterior probabilities. Out of 1,000 comparable firms we would expect 27
-defaulting firms and 194 non-defaulting firms to trigger the warning. Therefore
-
-$$
-p(D\mid W_1)=\frac{0.9(0.03)}{0.9(0.03)+0.2(0.97)}\approx0.122.
-$$
-
-The denominator counts all warnings; the numerator counts those associated with
-default. This counting argument is the source of Bayes' formula here.
-For another warning, the correct next likelihood is $p(W_2\mid D,W_1)$.
-Only **conditional independence given default status** lets us replace it by
-$p(W_2\mid D)$. Under that assumption, with sensitivity 0.8 and false-positive
-probability 0.1, posterior odds become
-
-$$
-\underbrace{\frac{p(D\mid W_1,W_2)}{p(D^c\mid W_1,W_2)}}_{\text{new odds}}
-=\underbrace{\frac{0.03}{0.97}}_{\text{prior odds}}
-\underbrace{\frac{0.9}{0.2}}_{\text{first likelihood ratio}}
-\underbrace{\frac{0.8}{0.1}}_{\text{second likelihood ratio}}.
-$$
-
-If the second report merely copies the first, it adds no information: conditional
-on the first warning it occurs with probability one under either state.
-The following plot contrasts these two information structures, using exactly
-the odds updates above.
-
-```{python}
-#| label: fig-sequential-signal-information
-#| fig-cap: "Two independent measurements can strengthen evidence; a copied report cannot. Independence here is conditional on default status."
-import numpy as np
-import matplotlib.pyplot as plt
-
-signal_odds = np.array([0.03 / 0.97, 0.03 / 0.97 * 4.5,
-                        0.03 / 0.97 * 4.5 * 8])
-signal_prob = signal_odds / (1 + signal_odds)
-fig, ax = plt.subplots()
-ax.plot(range(3), signal_prob, 'o-', color='#527a99')
-ax.plot(range(3), [signal_prob[0], signal_prob[1], signal_prob[1]],
-        'o--', color='#aa8066')
-ax.text(2.03, signal_prob[2], 'Independent signal', va='center')
-ax.text(2.03, signal_prob[1], 'Copied report', va='center')
-ax.set(xticks=[0, 1, 2], xticklabels=['Prior', 'First warning', 'Second report'],
-       ylabel='Probability of default', ylim=(0, 0.65), xlim=(-0.1, 3.1))
-ax.grid(axis='y', alpha=0.3)
-ax.spines[['top', 'right']].set_visible(False)
-plt.show()
-```
-
-The large difference comes from the likelihood assumption, not from a different
-Bayes rule. In the week's beta-binomial grid exercise, the analogous assumption
-is that trials are independent **conditional on the common success probability**.
-Sequential updating and a single batch update should then give the same grid posterior.
-
-*Source connection:* Lopes, *Overview of Bayesian econometrics*, PDF pp. 3–7 and
-12–16; SGPE Lecture 1, pp. 16–26. The credit example is an adaptation.
+Conjugate models are the exception, not the rule, as the Cauchy likelihood above already
+showed. The response is not to abandon the Bayesian answer but to approximate it by
+drawing samples from the posterior. Building the algorithms that produce such samples,
+Monte Carlo integration, importance sampling, Gibbs sampling and Metropolis-Hastings,
+occupies Lectures 3 to 5, where they are all assessed on one common posterior so that they
+can be compared with each other rather than each on its own convenient model.
 
 ## Takeaways
 
-Bayes' theorem is a consequence of conditional probability and the law of total
-probability, and it applies unchanged whether the unknown is a door or a parameter. The
+Bayes' theorem follows from conditional probability and the law of total probability, and
+it applies unchanged whether the unknown is an event, a parameter or a whole model. The
 posterior is the likelihood times the prior, renormalised, and in conjugate models the
 renormalisation is free because we recognise the kernel. The Bayesian point estimate is a
 weighted average of prior and data, with weights set by how much information each carries,
-which is why the prior fades as the sample grows. Prediction integrates over the posterior
-instead of conditioning on an estimate, and updating is sequential. From Lecture 3 the
-closed forms disappear and we will compute these same objects by simulation.
-
-
+which is why the prior fades as the sample grows. Model comparison uses the same theorem
+one level up, with the marginal likelihood in place of the likelihood, and the Bayes factor
+carries the entire evidential content of the data. Prediction integrates over the
+posterior, and updating is sequential. From Lecture 3 the closed forms disappear and we
+compute these same objects by simulation.
 
 ## Reading guide and sources
 
-UPM Classes 1–2: probability rules, conjugacy, prior elicitation, mixtures, and sequential updating. Greenberg (2008), Chapters 2–4, provides the probability-to-inference bridge.
+UPM Classes 1 and 2: probability rules, conjugacy, prior elicitation, mixtures, and
+sequential updating. SGPE Lecture 1 states Bayes' theorem, estimation, prediction, the
+marginal likelihood, posterior odds and Bayes factors in general notation before any
+example. Greenberg (2008), Chapters 2 to 4, provides the probability-to-inference bridge.
 
 The explanations and exercises are adapted to this course's notation and weekly
 structure; consult the cited originals for the full treatments.

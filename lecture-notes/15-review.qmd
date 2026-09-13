@@ -438,6 +438,584 @@ data. Values close to 0 or 1 would flag a misfit worth investigating. This compl
 the full arc one more time: prior and likelihood, posterior by Gibbs, summaries, and a
 predictive check.
 
+## The whole course on one dataset: forecasting core inflation
+
+Everything in this chapter so far has been a recap of pieces. This section runs the pieces
+in order, on one real dataset, so that the through-line stops being an assertion and
+becomes something you can watch happen. The same question is asked five times, each time
+with one more idea from the course added, and after each step we record what changed about
+the answer.
+
+The question is the one a central bank research department asks every month. Given what is
+observable today, what will core PCE inflation be over the next twelve months? The outcome
+is $100\,[\log P_{t+12} - \log P_t]$ with $P$ the core PCE price index, and the six
+predictors are all in the FRED monthly file and all observable at date $t$: inflation over
+the past twelve months, the unemployment rate, the term spread, the change in the federal
+funds rate over the past twelve months, industrial production growth over the past twelve
+months, and the level of the ten-year yield. Inflation persistence and the Phillips curve
+are the first two, the monetary stance is the next two, and the last two are the
+activity and expectations channels.
+
+```{python}
+from pathlib import Path
+from scipy.special import gammaln
+import itertools
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+fred_c = pd.read_parquet(DATA / "fred_macro_monthly.parquet").dropna()
+lpce, lip_c = np.log(fred_c["core_pce"]), np.log(fred_c["industrial_prod"])
+
+panel_c = pd.DataFrame({
+    "infl_next": 100 * (lpce.shift(-12) - lpce),
+    "infl_past": 100 * (lpce - lpce.shift(12)),
+    "unemp": fred_c["unemployment"],
+    "spread": fred_c["yield_10y"] - fred_c["fed_funds"],
+    "d_ff": fred_c["fed_funds"].diff(12),
+    "ipg": 100 * (lip_c - lip_c.shift(12)),
+    "y10": fred_c["yield_10y"],
+}).dropna()
+
+pred_c = ["infl_past", "unemp", "spread", "d_ff", "ipg", "y10"]
+X_c = np.column_stack([np.ones(len(panel_c))] + [panel_c[c].to_numpy() for c in pred_c])
+y_c = panel_c["infl_next"].to_numpy()
+idx_c = panel_c.index
+
+print(f"{len(panel_c)} months, {idx_c[0]:%Y-%m} to {idx_c[-1]:%Y-%m}")
+print(panel_c.describe().loc[["mean", "std", "min", "max"]].round(2))
+print("correlation of each predictor with next year's inflation:")
+print(panel_c.corr()["infl_next"].drop("infl_next").round(3))
+```
+
+The raw correlations already sketch the answer. Past inflation correlates 0.863 with future
+inflation, which is the single dominant fact about inflation forecasting and the reason a
+random walk is so hard to beat. The ten-year yield follows at 0.589, unsurprising since a
+long yield contains an inflation expectation. The term spread correlates $-0.450$, the
+change in the funds rate $+0.247$, and industrial production growth essentially zero at
+$-0.000$. Unemployment correlates $+0.126$, the wrong sign for a Phillips curve, which is a
+warning that the unconditional correlation and the conditional coefficient are different
+objects and that the 1970s, when both unemployment and inflation were high, dominate the
+raw number.
+
+### Step one: the conjugate regression in closed form
+
+We use the course's notation throughout: $\beta \mid \sigma^2 \sim N(b_0, \sigma^2 B_0)$
+and $\sigma^2 \sim IG(\alpha_0, \delta_0)$, implemented as
+`scipy.stats.invgamma(a=alpha_0, scale=delta_0)`. The training sample for the illustration
+is everything whose twelve-month window had closed by the end of 1989, which is the
+information set of the first out-of-sample forecast made below.
+
+::: {.callout-note collapse="true"}
+## Derivation: the NIG posterior and its Student predictive, written out
+
+Model: $y = X\beta + \varepsilon$, $\varepsilon \sim N(0, \sigma^2 I_T)$, with
+$\beta \mid \sigma^2 \sim N(b_0, \sigma^2 B_0)$ and $\sigma^2 \sim IG(\alpha_0, \delta_0)$.
+
+Step 1, write the joint kernel. Dropping constants that do not involve $\beta$ or
+$\sigma^2$, the likelihood times the two prior factors is
+$$
+(\sigma^2)^{-T/2}\exp\!\Big(-\frac{(y - X\beta)'(y-X\beta)}{2\sigma^2}\Big)
+\times
+(\sigma^2)^{-k/2}\exp\!\Big(-\frac{(\beta - b_0)'B_0^{-1}(\beta - b_0)}{2\sigma^2}\Big)
+\times
+(\sigma^2)^{-\alpha_0 - 1}\exp\!\Big(-\frac{\delta_0}{\sigma^2}\Big).
+$$
+Note that $\sigma^2$ divides both quadratic forms, which is the whole reason the prior is
+written with $\sigma^2 B_0$ rather than a free $B_0$: it lets the two quadratics be
+combined into one.
+
+Step 2, complete the square in $\beta$. Expand and collect:
+$$
+(y - X\beta)'(y - X\beta) + (\beta - b_0)'B_0^{-1}(\beta - b_0)
+= \beta'\big(X'X + B_0^{-1}\big)\beta - 2\beta'\big(X'y + B_0^{-1}b_0\big)
++ y'y + b_0'B_0^{-1}b_0 .
+$$
+Define
+$$
+B_T = \big(B_0^{-1} + X'X\big)^{-1}, \qquad b_T = B_T\big(B_0^{-1}b_0 + X'y\big),
+$$
+so the first two terms are $\beta'B_T^{-1}\beta - 2\beta'B_T^{-1}b_T$, which equals
+$(\beta - b_T)'B_T^{-1}(\beta - b_T) - b_T'B_T^{-1}b_T$. The whole expression is therefore
+$$
+(\beta - b_T)'B_T^{-1}(\beta - b_T) \;+\; \underbrace{y'y + b_0'B_0^{-1}b_0
+- b_T'B_T^{-1}b_T}_{\text{free of } \beta} .
+$$
+
+Step 3, read off both posteriors. Substituting back, the joint posterior kernel factors as
+$$
+\underbrace{(\sigma^2)^{-k/2}\exp\!\Big(-\frac{(\beta - b_T)'B_T^{-1}(\beta-b_T)}{2\sigma^2}\Big)}_{
+N(b_T,\, \sigma^2 B_T) \text{ in } \beta}
+\times
+\underbrace{(\sigma^2)^{-\alpha_T - 1}\exp\!\Big(-\frac{\delta_T}{\sigma^2}\Big)}_{
+IG(\alpha_T, \delta_T) \text{ in } \sigma^2},
+$$
+with
+$$
+\alpha_T = \alpha_0 + \frac{T}{2}, \qquad
+\delta_T = \delta_0 + \tfrac12\big(y'y + b_0'B_0^{-1}b_0 - b_T'B_T^{-1}b_T\big).
+$$
+So $\beta \mid \sigma^2, y \sim N(b_T, \sigma^2 B_T)$ and $\sigma^2 \mid y \sim
+IG(\alpha_T, \delta_T)$, the conjugate pair the course uses everywhere.
+
+Step 4, the marginal posterior of $\beta$. Integrating $\sigma^2$ out of the product is the
+same scale-mixture integral as in Lecture 13, and it returns a multivariate Student
+distribution with $2\alpha_T$ degrees of freedom, location $b_T$ and scale matrix
+$(\delta_T/\alpha_T) B_T$. Its covariance is $(\delta_T/(\alpha_T - 1)) B_T$, which is why
+the posterior standard deviation of a coefficient is reported below as the square root of
+$E[\sigma^2 \mid y]$ times the corresponding diagonal element of $B_T$.
+
+Step 5, the predictive distribution. For a new $x_\ast$, $y_\ast = x_\ast'\beta +
+\varepsilon_\ast$ with $\varepsilon_\ast \sim N(0, \sigma^2)$ independent of the data. Given
+$\sigma^2$, adding two independent Normals gives
+$$
+y_\ast \mid \sigma^2, y \sim N\big(x_\ast' b_T,\; \sigma^2 (1 + x_\ast' B_T x_\ast)\big),
+$$
+and integrating $\sigma^2$ over its $IG(\alpha_T, \delta_T)$ posterior gives
+$$
+y_\ast \mid y \sim t_{2\alpha_T}\Big(x_\ast' b_T, \; \frac{\delta_T}{\alpha_T}
+\big(1 + x_\ast' B_T x_\ast\big)\Big).
+$$
+The two pieces inside the bracket are the two sources of forecast uncertainty this course
+keeps separating: the $1$ is the shock that will hit no matter how well we know the model,
+and the $x_\ast' B_T x_\ast$ is the part that comes from not knowing $\beta$. The second
+shrinks as the sample grows; the first never does.
+
+Step 6, the marginal likelihood, which Step 4 of the exercise needs. Integrating the joint
+kernel over both $\beta$ and $\sigma^2$ gives
+$$
+\log p(y \mid X) = \log \Gamma(\alpha_T) - \log \Gamma(\alpha_0)
++ \alpha_0 \log \delta_0 - \alpha_T \log \delta_T
++ \tfrac12 \log|B_T| - \tfrac12 \log|B_0| - \tfrac{T}{2}\log 2\pi ,
+$$
+the $\beta$ integral contributing $|B_T|^{1/2}$ over $|B_0|^{1/2}$ and the $\sigma^2$
+integral the two gamma functions. Every model comparison below is a difference of two such
+numbers.
+:::
+
+```{python}
+alpha_0_c, delta_0_c = 3.0, 3.0        # prior centred on sigma^2 near 1
+
+def nig_posterior(X, y, B0, b0=None):
+    """Conjugate NIG posterior and log marginal likelihood in the course's notation."""
+    k = X.shape[1]
+    b0 = np.zeros(k) if b0 is None else b0
+    B0_inv = np.linalg.inv(B0)
+    BT = np.linalg.inv(B0_inv + X.T @ X)
+    bT = BT @ (B0_inv @ b0 + X.T @ y)
+    aT = alpha_0_c + len(y) / 2
+    dT = delta_0_c + 0.5 * (y @ y + b0 @ B0_inv @ b0 - bT @ np.linalg.inv(BT) @ bT)
+    _, ld_BT = np.linalg.slogdet(BT)
+    _, ld_B0 = np.linalg.slogdet(B0)
+    lml = (gammaln(aT) - gammaln(alpha_0_c) + alpha_0_c * np.log(delta_0_c)
+           - aT * np.log(dT) + 0.5 * (ld_BT - ld_B0) - 0.5 * len(y) * np.log(2 * np.pi))
+    return bT, BT, aT, dT, lml
+
+def student_predictive(x_star, bT, BT, aT, dT):
+    return (float(x_star @ bT),
+            float(np.sqrt((dT / aT) * (1 + x_star @ BT @ x_star))),
+            2 * aT)
+
+train_end = int(np.searchsorted(idx_c, pd.Timestamp("1989-01-01")))
+X_train_c, y_train_c = X_c[:train_end], y_c[:train_end]
+names_c = ["intercept"] + pred_c
+
+B0_vague = np.eye(7) * 100.0
+bT1, BT1, aT1, dT1, lml1 = nig_posterior(X_train_c, y_train_c, B0_vague)
+sd1 = np.sqrt((dT1 / (aT1 - 1)) * np.diag(BT1))
+
+print(f"training sample: {len(y_train_c)} months, "
+      f"{idx_c[0]:%Y-%m} to {idx_c[train_end - 1]:%Y-%m}")
+print(pd.DataFrame({"post. mean": bT1, "post. sd": sd1}, index=names_c).round(4))
+print(f"E[sigma^2 | y] = {dT1 / (aT1 - 1):.4f}, "
+      f"log marginal likelihood {lml1:.2f}")
+```
+
+### Step two: the same posterior by simulation
+
+Nothing about the answer should change when we compute it a different way, and checking
+that is the discipline the middle third of the course was about. We draw from the conjugate
+posterior directly, $\sigma^2 \sim IG(\alpha_T, \delta_T)$ then $\beta \mid \sigma^2 \sim
+N(b_T, \sigma^2 B_T)$, and we also run a Gibbs sampler for the model with an
+independent prior $\beta \sim N(0, \tau_0^2 I)$, which is not conjugate jointly and
+therefore needs the sampler.
+
+```{python}
+rng_c = np.random.default_rng(20260115)
+
+S_c = 8000
+sig2_mc = stats.invgamma(a=aT1, scale=dT1).rvs(size=S_c, random_state=rng_c)
+L_BT1 = np.linalg.cholesky(BT1)
+beta_mc = bT1 + (np.sqrt(sig2_mc)[:, None]
+                 * (rng_c.standard_normal((S_c, 7)) @ L_BT1.T))
+
+tau0_c = 10.0
+XtX_c, Xty_c = X_train_c.T @ X_train_c, X_train_c.T @ y_train_c
+sig2_g, beta_g = float(y_train_c.var()), np.zeros(7)
+draws_g = np.empty((S_c, 7)); sig2_g_draws = np.empty(S_c)
+for s in range(S_c):
+    Vg = np.linalg.inv(XtX_c / sig2_g + np.eye(7) / tau0_c ** 2)
+    mg = Vg @ Xty_c / sig2_g
+    beta_g = mg + np.linalg.cholesky(Vg) @ rng_c.standard_normal(7)
+    res_g = y_train_c - X_train_c @ beta_g
+    sig2_g = float(stats.invgamma(a=alpha_0_c + len(y_train_c) / 2,
+                                  scale=delta_0_c + 0.5 * res_g @ res_g
+                                  ).rvs(random_state=rng_c))
+    draws_g[s], sig2_g_draws[s] = beta_g, sig2_g
+
+burn_c = 1000
+compare_mc = pd.DataFrame({
+    "closed form": bT1,
+    "direct Monte Carlo": beta_mc[burn_c:].mean(axis=0),
+    "Gibbs, independent prior": draws_g[burn_c:].mean(axis=0),
+}, index=names_c)
+print(compare_mc.round(4))
+print(f"E[sigma^2]: closed form {dT1 / (aT1 - 1):.4f}, "
+      f"direct MC {sig2_mc[burn_c:].mean():.4f}, "
+      f"Gibbs {sig2_g_draws[burn_c:].mean():.4f}")
+```
+
+The three columns agree to within about three thousandths on every coefficient, and the
+posterior mean of $\sigma^2$ is 1.1292 analytically against 1.1290 from the direct draws,
+which is the check every sampler must pass and the reason this step exists. The Gibbs column comes from a different
+model, since its prior is $\beta \sim N(0, \tau_0^2 I)$ with $\tau_0 = 10$ rather than
+$\beta \mid \sigma^2 \sim N(0, \sigma^2 B_0)$, and yet with 336 observations and a vague
+prior either way the data dominate and the two posteriors are numerically almost the same.
+That is the practical content of the first half of the course in one line: the algorithm
+never changes the answer, and with enough data the prior does not either. Both of those
+statements fail in exactly the situations the rest of the course was about, which is where
+step three begins.
+
+### Step three: a shrinkage prior
+
+Suppose instead of a vague prior we take the shrinkage view: most macroeconomic predictors
+have small coefficients, so centre them at zero with a prior variance small enough to
+matter and let the marginal likelihood choose how small. Setting $B_0 = c\, I$ on the six
+slopes while leaving the intercept vague, and running $c$ over a grid, is the simplest
+possible version of the Minnesota idea from Lecture 6.
+
+::: {.callout-note collapse="true"}
+## Derivation: why shrinking toward zero can lower predictive mean squared error
+
+Take the orthogonal case, $X'X = D = \operatorname{diag}(d_1, \dots, d_k)$, which loses no
+generality because any design can be rotated into it, and a prior
+$\beta \mid \sigma^2 \sim N(0, \sigma^2 c I)$. The posterior mean from the previous
+derivation is
+$$
+b_T = \big(c^{-1}I + D\big)^{-1} X'y,
+\qquad\text{so}\qquad
+b_{T,j} = \frac{d_j}{d_j + c^{-1}}\, \hat\beta_j^{\,\mathrm{OLS}},
+$$
+because $\hat\beta_j^{\mathrm{OLS}} = (X'y)_j / d_j$ in the orthogonal case. Write
+$\lambda = c^{-1}$ and $s_j = d_j/(d_j + \lambda) \in (0, 1]$, so each coefficient is the
+least-squares estimate multiplied by a shrinkage factor.
+
+Now compute the mean squared error of $b_{T,j}$ as an estimate of the true $\beta_j$, using
+$\hat\beta_j^{\mathrm{OLS}} \sim N(\beta_j, \sigma^2/d_j)$:
+$$
+E\big[(b_{T,j} - \beta_j)^2\big]
+= \underbrace{(s_j - 1)^2 \beta_j^2}_{\text{squared bias}}
++ \underbrace{s_j^2 \frac{\sigma^2}{d_j}}_{\text{variance}}
+= \frac{\lambda^2 \beta_j^2}{(d_j + \lambda)^2}
++ \frac{d_j \sigma^2}{(d_j + \lambda)^2}
+= \frac{\lambda^2 \beta_j^2 + d_j \sigma^2}{(d_j + \lambda)^2}.
+$$
+Differentiate with respect to $\lambda$. Writing $N(\lambda) = \lambda^2\beta_j^2 +
+d_j\sigma^2$ and $Q(\lambda) = (d_j + \lambda)^2$, the quotient rule gives
+$$
+\frac{d}{d\lambda}\frac{N}{Q}
+= \frac{2\lambda\beta_j^2 (d_j + \lambda)^2 - 2(d_j + \lambda)\big(\lambda^2\beta_j^2 + d_j\sigma^2\big)}
+{(d_j+\lambda)^4}
+= \frac{2\big[\lambda\beta_j^2 (d_j+\lambda) - \lambda^2\beta_j^2 - d_j\sigma^2\big]}{(d_j+\lambda)^3}
+= \frac{2 d_j\big(\lambda \beta_j^2 - \sigma^2\big)}{(d_j + \lambda)^3}.
+$$
+At $\lambda = 0$, which is least squares, the derivative equals $-2 d_j \sigma^2/d_j^3 < 0$
+whenever $\sigma^2 > 0$. So the mean squared error is strictly decreasing in $\lambda$ at
+$\lambda = 0$: some shrinkage always helps, no matter how large the true coefficient is.
+The derivative changes sign at $\lambda^\star = \sigma^2/\beta_j^2$, so the optimal amount
+of shrinkage is large when the noise is large and small when the coefficient is large,
+which is exactly what a prior variance $c = \beta_j^2/\sigma^2$ would say. This is the
+formal content of the sentence "shrinkage trades a little bias for a lot of variance", and
+it is worth being able to reproduce the three lines in an exam.
+
+The catch, and it is a real one, is that $\lambda^\star$ depends on the unknown $\beta_j$
+and $\sigma^2$. The Bayesian answer is to put a prior on $c$ or, as here, to let the
+marginal likelihood pick it, which is empirical Bayes and is not quite the same thing as
+integrating over it.
+:::
+
+```{python}
+c_grid_c = [0.01, 0.05, 0.1, 0.5, 1.0, 10.0]
+
+def B0_shrink(c):
+    B = np.eye(7) * c
+    B[0, 0] = 100.0                      # intercept stays vague
+    return B
+
+shrink_rows = []
+for c in c_grid_c:
+    bT_s, BT_s, aT_s, dT_s, lml_s = nig_posterior(X_train_c, y_train_c, B0_shrink(c))
+    shrink_rows.append({"c": c, "log marg lik": lml_s,
+                        **{nm: bT_s[j] for j, nm in enumerate(names_c)}})
+shrink_tab = pd.DataFrame(shrink_rows).set_index("c")
+print(shrink_tab.round(3).to_string())
+
+c_star = float(shrink_tab["log marg lik"].idxmax())
+bT3, BT3, aT3, dT3, lml3 = nig_posterior(X_train_c, y_train_c, B0_shrink(c_star))
+sd3 = np.sqrt((dT3 / (aT3 - 1)) * np.diag(BT3))
+print(f"marginal likelihood selects c = {c_star}")
+```
+
+### Step four: averaging over which predictors belong
+
+The shrinkage prior keeps all six predictors and makes them smaller. Model averaging asks a
+different question: which subsets of predictors are plausible at all? With six candidates
+there are $2^6 = 64$ models, few enough to enumerate exactly rather than sample, so the
+posterior model probabilities come straight from the marginal likelihood of Step 6 of the
+first derivation with equal prior model probabilities.
+
+```{python}
+combos_c = [c for r in range(7) for c in itertools.combinations(range(6), r)]
+
+def bma_fit(X, y):
+    lmls, posts = [], []
+    for combo in combos_c:
+        cols = [0] + [i + 1 for i in combo]
+        out = nig_posterior(X[:, cols], y, np.eye(len(cols)) * 100.0)
+        lmls.append(out[4]); posts.append((cols, out))
+    lmls = np.array(lmls)
+    wts = np.exp(lmls - lmls.max()); wts /= wts.sum()
+    return wts, posts
+
+w_bma, posts_bma = bma_fit(X_train_c, y_train_c)
+pip_c = np.zeros(6)
+for combo, wt in zip(combos_c, w_bma):
+    for j in combo:
+        pip_c[j] += wt
+order_c = np.argsort(-w_bma)[:5]
+print("top five models by posterior probability")
+for i in order_c:
+    inc = [pred_c[j] for j in combos_c[i]]
+    print(f"  {w_bma[i]:.3f}  {inc if inc else ['intercept only']}")
+print("posterior inclusion probabilities")
+print(pd.Series(pip_c, index=pred_c).round(3))
+
+bT_bma = np.zeros(7)
+for (cols, out), wt in zip(posts_bma, w_bma):
+    bT_bma[cols] += wt * out[0]
+print("model-averaged coefficient means")
+print(pd.Series(bT_bma, index=names_c).round(4))
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(7.6, 4.4))
+offsets = [-0.22, 0.0, 0.22]
+specs = [("vague conjugate", bT1, sd1, "C0"),
+         (f"shrinkage, c = {c_star}", bT3, sd3, "C1"),
+         ("model averaged", bT_bma, None, "C2")]
+pos_c = np.arange(6)
+for off, (lbl, bb, ss, col) in zip(offsets, specs):
+    vals = bb[1:]
+    ax.scatter(pos_c + off, vals, color=col, s=34, label=lbl, zorder=3)
+    if ss is not None:
+        ax.vlines(pos_c + off, vals - 1.645 * ss[1:], vals + 1.645 * ss[1:],
+                  color=col, lw=1.6)
+ax.axhline(0.0, color="black", lw=1.0, ls=":")
+ax.set_xticks(pos_c); ax.set_xticklabels(pred_c, rotation=20)
+ax.set_ylabel("coefficient on next year's inflation")
+ax.set_title("What each step does to the coefficients, same data throughout")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+```
+
+The picture is the point of the whole exercise. Three things are visible at once.
+
+The coefficient on past inflation is large and precisely estimated under every treatment,
+0.884 with the vague prior, 0.870 with the shrinkage prior and 0.812 after model averaging,
+and its interval is so tight that the three markers are effectively the same answer. Where
+the data speak loudly, nothing we do to the prior matters much.
+
+Three coefficients are effectively switched off by model averaging. The term spread goes
+from $-0.048$ to $-0.0002$, industrial production growth from $0.046$ to $0.0006$, and the
+ten-year yield from $-0.013$ to $-0.0007$, because their posterior inclusion probabilities
+are 0.007, 0.015 and 0.013: the evidence says these three add nothing once past inflation
+and the funds-rate change are in the model. Model averaging does not shrink a coefficient
+towards zero, it multiplies it by the probability that the variable belongs at all, which
+is a sharper instrument than the shrinkage prior and, as the out-of-sample check shows
+below, sometimes too sharp. The change in the funds rate moves the other way, from $0.115$
+to $0.201$, because in the models that survive it is the only monetary variable left and it
+absorbs the job the term spread and the long yield were doing.
+
+Unemployment carries a clearly negative coefficient under every treatment, the
+Phillips-curve sign, even though its raw correlation with future inflation was positive at
+$+0.126$. Conditioning on past inflation is what flips it, and that contrast between a
+correlation and a coefficient is worth having a ready sentence about in an exam.
+
+### Step five: the out-of-sample check
+
+The final step is the one that decides whether any of it was worth doing. From January 1990
+we forecast, month by month, using only observations whose twelve-month window had already
+closed, and score the four predictive distributions by root mean squared error and by mean
+log predictive score. The benchmark is the historical mean of the training window, the
+forecast that uses nothing.
+
+```{python}
+start_c = int(np.searchsorted(idx_c, pd.Timestamp("1990-01-01")))
+oos_c = []
+for t in range(start_c, len(y_c)):
+    end = t - 12
+    Xs, ys, x_star = X_c[:end], y_c[:end], X_c[t]
+    m1, s1, df1 = student_predictive(x_star, *nig_posterior(Xs, ys, B0_vague)[:4])
+    best = max((nig_posterior(Xs, ys, B0_shrink(c)) for c in c_grid_c),
+               key=lambda o: o[4])
+    m2, s2, df2 = student_predictive(x_star, *best[:4])
+    wts, posts = bma_fit(Xs, ys)
+    ms = np.array([student_predictive(x_star[cols], *out[:4])[0] for cols, out in posts])
+    ss = np.array([student_predictive(x_star[cols], *out[:4])[1] for cols, out in posts])
+    m3 = float(wts @ ms)
+    s3 = float(np.sqrt(wts @ ss ** 2 + wts @ (ms - m3) ** 2))
+    oos_c.append((idx_c[t], y_c[t], m1, s1, df1, m2, s2, df2, m3, s3,
+                  ys.mean(), ys.std()))
+
+O = pd.DataFrame(oos_c, columns=["date", "y", "m1", "s1", "df1", "m2", "s2", "df2",
+                                 "m3", "s3", "hm", "hs"]).set_index("date")
+
+def score_c(m, s, df=None):
+    rmse = float(np.sqrt(np.mean((O.y - m) ** 2)))
+    if df is None:
+        lps = float(np.mean(stats.norm.logpdf(O.y, m, s)))
+    else:
+        lps = float(np.mean(stats.t.logpdf((O.y - m) / s, df=df) - np.log(s)))
+    return rmse, lps
+
+oos_scores = pd.DataFrame(
+    [score_c(O.hm, O.hs), score_c(O.m1, O.s1, O.df1),
+     score_c(O.m2, O.s2, O.df2), score_c(O.m3, O.s3)],
+    columns=["OOS RMSE", "OOS log score"],
+    index=["historical mean", "conjugate (vague)", "shrinkage prior", "model averaged"])
+print(f"{len(O)} out-of-sample months, {O.index[0]:%Y-%m} to {O.index[-1]:%Y-%m}")
+print(oos_scores.round(4))
+```
+
+```{python}
+summary_c = pd.DataFrame({
+    "what it adds": ["nothing, a benchmark",
+                     "conjugate prior, closed form",
+                     "draws instead of algebra",
+                     "prior variance chosen by evidence",
+                     "uncertainty about which model"],
+    "unemployment coef": [np.nan, bT1[2], float(draws_g[burn_c:].mean(axis=0)[2]),
+                          bT3[2], bT_bma[2]],
+    "predictive sd at the last origin": [
+        float(O.hs.iloc[-1]), float(O.s1.iloc[-1]), float(O.s1.iloc[-1]),
+        float(O.s2.iloc[-1]), float(O.s3.iloc[-1])],
+    "OOS RMSE": [oos_scores.iloc[0, 0], oos_scores.iloc[1, 0], oos_scores.iloc[1, 0],
+                 oos_scores.iloc[2, 0], oos_scores.iloc[3, 0]],
+    "OOS log score": [oos_scores.iloc[0, 1], oos_scores.iloc[1, 1], oos_scores.iloc[1, 1],
+                      oos_scores.iloc[2, 1], oos_scores.iloc[3, 1]],
+}, index=["0 historical mean", "1 conjugate regression", "2 simulation-based posterior",
+          "3 shrinkage prior", "4 model averaging"])
+print(summary_c.round(4).to_string())
+```
+
+```{python}
+adv = pd.DataFrame({
+    "conjugate": stats.t.logpdf((O.y - O.m1) / O.s1, df=O.df1) - np.log(O.s1)
+                 - stats.norm.logpdf(O.y, O.hm, O.hs),
+    "shrinkage": stats.t.logpdf((O.y - O.m2) / O.s2, df=O.df2) - np.log(O.s2)
+                 - stats.norm.logpdf(O.y, O.hm, O.hs),
+    "model averaged": stats.norm.logpdf(O.y, O.m3, O.s3)
+                      - stats.norm.logpdf(O.y, O.hm, O.hs),
+}, index=O.index).cumsum()
+
+fig, ax = plt.subplots()
+for col, colour in zip(adv.columns, ["C0", "C1", "C2"]):
+    ax.plot(adv.index, adv[col], color=colour, lw=1.4, label=col)
+ax.axhline(0.0, color="black", lw=1.0, ls=":")
+ax.set_xlabel("forecast date")
+ax.set_ylabel("cumulative log predictive score minus the benchmark's")
+ax.set_title("Every step stays ahead of the no-predictor benchmark, and by a steady margin")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+print(adv.iloc[-1].round(2))
+```
+
+Read the cumulative curves as a running scoreboard: an upward slope means the method is
+beating the historical mean that month, a flat stretch means a tie and a downward stretch
+means it is losing. All three curves rise almost monotonically for thirty-six years, ending 286.68 log points
+ahead for the conjugate model, 288.06 for the shrinkage prior and 283.25 for model
+averaging, which is the strongest evidence in this chapter that the exercise was worth
+doing: the six
+predictors carry genuine information about inflation a year ahead, unlike the industry
+returns of the machine-learning chapter where the same picture would be flat.
+
+The steps do not all help equally, and the table is honest about it. The conjugate
+regression cuts the root mean squared error from 1.917 percentage points to 0.955, halving
+it. The shrinkage prior improves that to 0.952, a gain of a third of one per cent, because
+with three hundred and more observations and only six predictors there is not much
+estimation error left to shrink away. Model averaging is slightly worse than either at
+0.967, which is what happens when the evidence concentrates too hard: 96.7 per cent of the
+posterior model probability sits on just two specifications, both of which discard the term
+spread, industrial production growth and the long yield entirely. Setting three
+coefficients to zero because a marginal likelihood computed on pre-1989 data preferred it
+is a stronger restriction than the next thirty-six years support. Shrinking them towards
+zero, as Step three does, keeps a little of their information and turns out to forecast
+better.
+The log scores rank the methods the same way, $-1.403$ for the conjugate model, $-1.400$
+for shrinkage, $-1.411$ for model averaging, and $-2.076$ for the benchmark.
+
+The through-line is now visible as a single sentence. Steps one and two settle what the
+posterior is and check that we can compute it. Step three changes the prior and buys a
+little. Step four changes what we are uncertain about and here buys nothing, though in the
+high-dimensional settings of Lectures 6 and 9 it buys a great deal. Step five is the only
+one that could have told us the whole enterprise was pointless, which is why it is never
+optional.
+
+### A map of the methods and where each was used
+
+```{python}
+fig, ax = plt.subplots(figsize=(9.2, 5.4))
+ax.set_xlim(0, 10); ax.set_ylim(0, 6.6); ax.axis("off")
+
+stages = [
+    (1.15, "Prior", ["conjugate NIG (L2)", "Minnesota (L6)",
+                     "spike and slab (L11)", "CAPM prior (L13)",
+                     "GP over functions (L14)"], "#dce6f1"),
+    (3.55, "Likelihood", ["linear regression (L2)", "VAR (L6, L7)",
+                          "state space (L8)", "stochastic vol (L12)",
+                          "logit (L5)"], "#e6eedc"),
+    (5.95, "Computation", ["analytic (L1, L2)", "Monte Carlo (L3)",
+                           "Gibbs (L4)", "MH, HMC, NUTS (L5)",
+                           "Kalman filter (L8)"], "#f5e6d3"),
+    (8.35, "Decision or check", ["credible sets (L1)", "forecast, BMA (L9)",
+                                 "identification (L7, L10)",
+                                 "portfolio weights (L13)",
+                                 "log score, PPC (L9, L15)"], "#efdcdc"),
+]
+for xc, title, items, colour in stages:
+    ax.add_patch(plt.Rectangle((xc - 1.08, 0.45), 2.16, 5.5, facecolor=colour,
+                               edgecolor="#5a5a5a", lw=1.1, zorder=1))
+    ax.text(xc, 5.62, title, ha="center", va="center", fontsize=12, zorder=3)
+    for i, it in enumerate(items):
+        ax.text(xc, 4.85 - 0.78 * i, it, ha="center", va="center", fontsize=8.4, zorder=3)
+for xc, _, _, _ in stages[:-1]:
+    ax.annotate("", xy=(xc + 1.28, 3.2), xytext=(xc + 1.09, 3.2),
+                arrowprops=dict(arrowstyle="-|>", color="#3a3a3a", lw=1.6))
+ax.text(5.0, 6.3, "One recipe, five columns of the exam", ha="center", fontsize=13)
+ax.text(5.0, 0.12, "every lecture is one row through these four boxes",
+        ha="center", fontsize=9, style="italic")
+plt.tight_layout(); plt.show()
+```
+
+The map is deliberately organised by stage rather than by week, because the exam is
+organised that way too. A question that hands you a prior and a likelihood and asks for a
+posterior is testing column one and two; a question that says the full conditional is not
+standard is testing column three; a question that asks what an investor should do, or
+whether a forecast was any good, is testing column four. If you can place any question in
+this diagram within the first thirty seconds, you know which formula on the cheat sheet you
+need and, more importantly, which ones you do not. The five rows inside each column are
+the examples this course used, and the point of the run through inflation above is that a
+single dataset can be taken all the way across the diagram in one sitting.
+
 ## Exam preparation
 
 The assessment is a **single 90-minute written exam** that counts for 100% of the

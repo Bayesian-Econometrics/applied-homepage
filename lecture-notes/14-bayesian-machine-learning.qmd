@@ -432,6 +432,599 @@ the well-chosen model. With the long length scale the mean is nearly a straight 
 follow the oscillation, leaving residuals far above the noise and missing the truth by underfitting.
 The marginal likelihood ranked both below the intermediate value, which is why we let it choose.
 
+## Real data: industrial production and the shape of the yield curve
+
+Simulated sine waves are a good way to check that code is right and a bad way to find out
+whether a method is useful. We now put the same Gaussian process on a question
+macroeconomists actually ask, and one where a non-linearity is not a hypothetical.
+
+The question is how much industrial production will grow over the coming twelve months
+given the shape of the yield curve today. The predictors are the term spread, the ten-year
+Treasury yield minus the federal funds rate, and the change in the federal funds rate over
+the preceding twelve months, both from the FRED monthly file and both observable at the
+forecast date. The outcome is $100\,[\log IP_{t+12} - \log IP_t]$, growth over the next
+year in per cent. A twelve-month horizon rather than a one-month horizon is a deliberate
+choice: at one month, industrial production growth is almost entirely short-run
+noise and the linear regression's $R^2$ on these two predictors is 0.031, as the code below
+reports, so there is no shape to find. At twelve months the yield curve is the classic leading indicator and there
+is something to model. The cost is that consecutive observations overlap by eleven months
+and are therefore strongly serially correlated, which matters for the honesty of the
+uncertainty bands and which we return to below rather than hide.
+
+The economics predicts a non-linearity rather than a slope. An inverted curve is a
+recession signal and recessions cut industrial production hard. A curve that is already
+steep is a sign that policy is loose and recovery is under way, but a curve that is twice
+as steep does not mean twice as much growth, because output cannot expand without limit.
+The relationship should therefore rise sharply out of inversion and then flatten, which is
+exactly the saturating shape a straight line cannot represent and a Gaussian process can.
+
+```{python}
+from pathlib import Path
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+
+fred_mac = pd.read_parquet(DATA / "fred_macro_monthly.parquet").dropna()
+ip_log = np.log(fred_mac["industrial_prod"])
+mac = pd.DataFrame({
+    "spread": fred_mac["yield_10y"] - fred_mac["fed_funds"],
+    "dff": fred_mac["fed_funds"].diff(12),
+    "ipg": 100.0 * (ip_log.shift(-12) - ip_log),
+}).dropna()
+
+print(f"{len(mac)} months, {mac.index[0]:%Y-%m} to {mac.index[-1]:%Y-%m}")
+print(mac.describe().loc[["mean", "std", "min", "max"]].round(3))
+spread_bins = pd.qcut(mac["spread"], 6)
+print(mac.groupby(spread_bins, observed=True)["ipg"]
+         .agg(["mean", "std", "count"]).round(2))
+```
+
+The binned means are the shape, before any model. In the lowest sixth of term spreads,
+below $-0.42$ percentage points, industrial production over the following year fell by
+1.92 per cent on average. In the next sixth it grew by 1.36 per cent, in the third by 4.12
+and in the fourth by 4.03, and then the pattern stops climbing: 2.44 in the fifth sixth and
+3.68 in the top sixth, where spreads exceed 2.51 points. Moving from an inverted curve to a
+moderately steep one buys six percentage points of growth; moving from moderately steep to
+very steep buys nothing. A straight line fitted through these six points has to compromise
+between the steep left-hand part and the flat right-hand part, and it will misstate both.
+
+### Three derivations before the code
+
+The Gaussian process prediction formula was quoted earlier in this lecture. It is worth
+deriving once, because the derivation takes four lines and explains why no optimisation is
+needed anywhere.
+
+::: {.callout-note collapse="true"}
+## Derivation: the Gaussian process predictive distribution from the joint Normal
+
+Let $X$ be the $n \times d$ matrix of training inputs, $y$ the $n$-vector of observed
+outcomes, and $X_*$ a set of $n_*$ new inputs at which we want the latent function $f_*$.
+Write the three kernel blocks
+$$
+K = k(X, X) \; (n \times n), \qquad
+K_* = k(X, X_*) \; (n \times n_*), \qquad
+K_{**} = k(X_*, X_*) \; (n_* \times n_*),
+$$
+and set $A = K + \sigma_n^2 I_n$, which is the covariance of the observed $y$ because
+$y = f + \varepsilon$ with independent noise. The Gaussian process prior together with
+Gaussian noise makes the stacked vector jointly Normal,
+$$
+\begin{pmatrix} y \\ f_* \end{pmatrix} \sim
+\mathcal{N}\!\left( \begin{pmatrix} 0 \\ 0 \end{pmatrix},\;
+\begin{pmatrix} A & K_* \\ K_*^\top & K_{**} \end{pmatrix} \right).
+$$
+
+Step 1, construct a residual that is independent of the data. Define
+$$
+u \;=\; f_* - K_*^\top A^{-1} y .
+$$
+Its covariance with $y$ is
+$$
+\operatorname{Cov}(u, y)
+= \operatorname{Cov}(f_*, y) - K_*^\top A^{-1}\operatorname{Cov}(y, y)
+= K_*^\top - K_*^\top A^{-1} A
+= K_*^\top - K_*^\top = 0 .
+$$
+For jointly Normal vectors zero covariance is independence, so $u$ is independent of $y$,
+not merely uncorrelated with it. This is the only place Normality is used, and it is used
+twice: once to turn zero covariance into independence, and once to conclude that $u$ is
+itself Normal.
+
+Step 2, read off the conditional mean. Since $f_* = K_*^\top A^{-1} y + u$ and $u$ is
+independent of $y$ with mean zero,
+$$
+E[f_* \mid y] = K_*^\top A^{-1} y + E[u \mid y] = K_*^\top A^{-1} y + E[u]
+= K_*^\top A^{-1} y .
+$$
+Writing $\alpha = A^{-1} y$ this is $\bar m = K_*^\top \alpha$: the posterior mean at a new
+input is a weighted sum of kernel similarities to the training inputs, with weights
+$\alpha$ that do not depend on the new input at all. Compute $\alpha$ once and prediction
+anywhere costs one kernel evaluation.
+
+Step 3, read off the conditional variance. Conditioning on $y$ leaves only the randomness
+in $u$, so
+$$
+\operatorname{Var}(f_* \mid y) = \operatorname{Var}(u)
+= \operatorname{Var}(f_*) - 2 K_*^\top A^{-1}\operatorname{Cov}(y, f_*)
+  + K_*^\top A^{-1}\operatorname{Var}(y) A^{-1} K_* .
+$$
+Substituting $\operatorname{Var}(f_*) = K_{**}$, $\operatorname{Cov}(y, f_*) = K_*$ and
+$\operatorname{Var}(y) = A$, the last term collapses to $K_*^\top A^{-1} K_*$ because
+$A^{-1} A A^{-1} = A^{-1}$, and the middle term is $2 K_*^\top A^{-1} K_*$. Hence
+$$
+\bar V = \operatorname{Var}(f_* \mid y) = K_{**} - 2K_*^\top A^{-1}K_* + K_*^\top A^{-1}K_*
+= K_{**} - K_*^\top A^{-1} K_* .
+$$
+Notice that $y$ does not appear. The posterior variance depends on where the training
+inputs are, not on what was observed there, which is a peculiarity of the Gaussian model
+and the reason a Gaussian process cannot tell you that the data were surprising by widening
+its own bands.
+
+Step 4, the practical form. Never invert $A$. Factor $A = LL^\top$ by Cholesky, solve
+$L z = y$ then $L^\top \alpha = z$ by two triangular solves, and set $V = L^{-1}K_*$ by one
+more. Then $\bar m = K_*^\top \alpha$ and $\bar V = K_{**} - V^\top V$. Predicting a
+realised observation rather than the latent function adds $\sigma_n^2$ to the diagonal of
+$\bar V$, because the new observation carries its own fresh shock.
+:::
+
+The second derivation connects this apparatus to something already familiar, which is the
+best way to stop a Gaussian process looking exotic.
+
+::: {.callout-note collapse="true"}
+## Derivation: ridge regression is a Gaussian process with a linear kernel
+
+Take the Bayesian linear model $y = Xw + \varepsilon$ with $\varepsilon \sim
+\mathcal{N}(0, \sigma_n^2 I_n)$ and prior $w \sim \mathcal{N}(0, \sigma_w^2 I_p)$.
+
+Route one, in weight space. The posterior of $w$ follows from completing the square exactly
+as in Lecture 2,
+$$
+w \mid y \sim \mathcal{N}\big( \bar w, \; \bar\Sigma \big), \qquad
+\bar\Sigma = \Big( \frac{X^\top X}{\sigma_n^2} + \frac{I_p}{\sigma_w^2} \Big)^{-1},
+\qquad
+\bar w = \frac{\bar\Sigma X^\top y}{\sigma_n^2}
+= \Big( X^\top X + \lambda I_p \Big)^{-1} X^\top y,
+\qquad \lambda = \frac{\sigma_n^2}{\sigma_w^2},
+$$
+where the last equality follows by multiplying numerator and denominator by $\sigma_n^2$.
+That is the ridge estimator, with penalty $\lambda$ equal to the noise-to-prior variance
+ratio: a tight prior on the coefficients is a heavy penalty, a vague prior no penalty at
+all. Prediction at a new $x_*$ is $x_*^\top \bar w$.
+
+Route two, in function space. The function is $f(x) = x^\top w$, a linear function of a
+Normal vector, hence Normal with mean zero and covariance
+$$
+\operatorname{Cov}\big(f(x), f(x')\big)
+= x^\top \operatorname{Var}(w)\, x' = \sigma_w^2\, x^\top x' \;\equiv\; k_{\mathrm{lin}}(x,x'),
+$$
+the linear kernel. So $K = \sigma_w^2 X X^\top$ and $K_* = \sigma_w^2 X x_*$, and the
+Gaussian process posterior mean of the previous derivation is
+$$
+\bar m = K_*^\top A^{-1} y
+= \sigma_w^2 x_*^\top X^\top \big( \sigma_w^2 X X^\top + \sigma_n^2 I_n \big)^{-1} y .
+$$
+
+The two routes must agree, and the identity that shows it is the push-through identity
+$$
+X^\top \big( X X^\top + \lambda I_n \big)^{-1}
+= \big( X^\top X + \lambda I_p \big)^{-1} X^\top .
+$$
+It is proved in one line. Start from the obvious equality
+$X^\top X X^\top + \lambda X^\top = X^\top X X^\top + \lambda X^\top$, and group the two
+sides differently:
+$$
+X^\top \big( X X^\top + \lambda I_n \big) = \big( X^\top X + \lambda I_p \big) X^\top .
+$$
+Multiply on the left by $(X^\top X + \lambda I_p)^{-1}$ and on the right by
+$(X X^\top + \lambda I_n)^{-1}$, both of which exist for $\lambda > 0$, and the identity
+drops out.
+
+Apply it with $\lambda = \sigma_n^2/\sigma_w^2$ after pulling $\sigma_w^2$ out of the
+inverse,
+$$
+\bar m = x_*^\top\, X^\top \Big( X X^\top + \frac{\sigma_n^2}{\sigma_w^2} I_n \Big)^{-1} y
+= x_*^\top \Big( X^\top X + \lambda I_p \Big)^{-1} X^\top y
+= x_*^\top \bar w .
+$$
+Identical. The two descriptions are the same model seen from two sides, and the practical
+difference is only computational: weight space inverts a $p \times p$ matrix, function
+space an $n \times n$ one, so one uses weight space when $p \ll n$ and function space when
+$n \ll p$. Replacing $x^\top x'$ by the squared-exponential kernel corresponds to a
+$p = \infty$ basis, which is precisely the case where only the function-space route is
+available. A Gaussian process is not a departure from Bayesian regression; it is Bayesian
+regression written so that the number of basis functions never has to be named.
+:::
+
+The third derivation explains the object that chooses the hyperparameters, and in
+particular why it does not simply reward fit.
+
+::: {.callout-note collapse="true"}
+## Derivation: the marginal likelihood as fit minus complexity
+
+Under the Gaussian process prior with hyperparameters $\theta = (\ell, \sigma_n^2)$ the
+observations are marginally Normal, $y \sim \mathcal{N}(0, A)$ with $A = K_\theta +
+\sigma_n^2 I$, because $y$ is a sum of the Gaussian $f$ and Gaussian noise and the function
+values have been integrated out rather than estimated. Its log density is
+$$
+\log p(y \mid X, \theta)
+= \underbrace{-\tfrac{1}{2}\, y^\top A^{-1} y}_{\text{data fit}}
+\;\underbrace{-\; \tfrac{1}{2}\log |A|}_{\text{complexity penalty}}
+\;\underbrace{-\; \tfrac{n}{2}\log 2\pi}_{\text{constant}} .
+$$
+With the Cholesky factor $A = LL^\top$ the two non-constant terms cost nothing extra:
+$y^\top A^{-1} y = y^\top \alpha$ and $\log|A| = 2\sum_i \log L_{ii}$.
+
+To see that these two terms genuinely pull against each other, diagonalise. Let
+$A = \sum_{i=1}^n \lambda_i u_i u_i^\top$ with orthonormal eigenvectors $u_i$ and
+eigenvalues $\lambda_i > 0$, and write $c_i = u_i^\top y$ for the projection of the data on
+the $i$-th eigenvector. Then $A^{-1} = \sum_i \lambda_i^{-1} u_i u_i^\top$ and
+$|A| = \prod_i \lambda_i$, so
+$$
+\log p(y \mid X, \theta)
+= -\frac{1}{2}\sum_{i=1}^n \left[ \frac{c_i^2}{\lambda_i} + \log \lambda_i \right]
+- \frac{n}{2}\log 2\pi .
+$$
+The sum decouples into $n$ independent one-dimensional problems. Differentiating the
+$i$-th bracket with respect to $\lambda_i$ gives $-c_i^2/\lambda_i^2 + 1/\lambda_i$, which
+is zero at $\lambda_i = c_i^2$ and is a minimum of the bracket, hence a maximum of the log
+density. In words: the marginal likelihood is largest when the model's variance along each
+direction matches the squared amount of data actually observed along that direction. Too
+small a $\lambda_i$ makes $c_i^2/\lambda_i$ explode, which is the model being surprised by
+data it declared impossible. Too large a $\lambda_i$ makes $\log \lambda_i$ large, which is
+the model having spread its probability over outcomes that did not occur. That second term
+is the Occam factor, and it is why the marginal likelihood does not need a validation set.
+
+Now map this back to the length scale. A very short $\ell$ makes $K$ nearly diagonal, so
+$A \approx (1 + \sigma_n^2) I$ and all eigenvalues are small and equal: the complexity
+penalty $-\tfrac12 \sum \log \lambda_i$ is comfortable, but the prior has assigned no
+correlation between neighbouring inputs, so the smooth component of $y$ lies in directions
+with small $\lambda_i$ and the fit term suffers. A very long $\ell$ makes $K$ nearly a
+matrix of ones, whose leading eigenvalue is of order $n$: one direction is granted enormous
+variance and the rest almost none, so the model fits any level shift beautifully and is
+astonished by everything else. The interior maximum is the length scale at which the
+eigenvalue spectrum of $A$ resembles the spectrum of the data, which is what the grid below
+finds. Two warnings follow directly from the algebra. First, the maximum is over a
+non-convex surface and can have several local optima, which is why we use a grid rather
+than a gradient step. Second, the whole calculation assumes the $n$ observations are
+conditionally independent given $f$; when they are not, as with overlapping forecast
+windows, $\log|A|$ counts more independent information than the data contain and the
+selected $\sigma_n^2$ is too small.
+:::
+
+### Fitting the process to the macro data
+
+We split at the end of 1999, fit on 1961 to 1999 and keep 2000 onwards untouched. Inputs
+and outcome are standardised on the training sample so that a unit signal variance is the
+right prior scale and only the two length scales and the noise variance have to be chosen.
+The kernel now has one length scale per input, which lets the process decide separately how
+fast the response varies in the term spread and in the funds-rate change.
+
+```{python}
+def sq_exp_ard(A, B, ell):
+    """Squared-exponential kernel with one length scale per input dimension."""
+    d = (A[:, None, :] - B[None, :, :]) / ell
+    return np.exp(-0.5 * (d ** 2).sum(axis=-1))
+
+def gp_fit_ard(Z, w, ell, sn2):
+    """Cholesky factor, alpha, and the log marginal likelihood split into its parts."""
+    L = np.linalg.cholesky(sq_exp_ard(Z, Z, ell) + sn2 * np.eye(len(Z)))
+    a = np.linalg.solve(L.T, np.linalg.solve(L, w))
+    fit = -0.5 * w @ a
+    complexity = -np.log(np.diag(L)).sum()
+    return L, a, fit + complexity - 0.5 * len(Z) * np.log(2 * np.pi), fit, complexity
+
+def gp_pred_ard(Z, L, a, Zs, ell):
+    Ks = sq_exp_ard(Z, Zs, ell)
+    V = np.linalg.solve(L, Ks)
+    return Ks.T @ a, np.maximum(1.0 - (V ** 2).sum(axis=0), 0.0)
+
+mac_tr, mac_te = mac.loc[:"1999-12"], mac.loc["2000-01":]
+X_tr = mac_tr[["spread", "dff"]].to_numpy(); y_tr = mac_tr["ipg"].to_numpy()
+X_te = mac_te[["spread", "dff"]].to_numpy(); y_te = mac_te["ipg"].to_numpy()
+mx, sx = X_tr.mean(axis=0), X_tr.std(axis=0)
+my, sy = y_tr.mean(), y_tr.std()
+Z_tr, w_tr = (X_tr - mx) / sx, (y_tr - my) / sy
+Z_te = (X_te - mx) / sx
+
+cand = [0.25, 0.5, 1.0, 2.0, 4.0]
+best = max(((gp_fit_ard(Z_tr, w_tr, np.array([e1, e2]), s)[2], e1, e2, s)
+            for e1 in cand for e2 in cand for s in [0.2, 0.4, 0.6, 0.8]))
+lml_best, ell1_mac, ell2_mac, sn2_mac = best
+ell_mac = np.array([ell1_mac, ell2_mac])
+L_mac, a_mac, lml_mac, fit_mac, comp_mac = gp_fit_ard(Z_tr, w_tr, ell_mac, sn2_mac)
+
+print(f"training months {len(mac_tr)}, test months {len(mac_te)}")
+print(f"selected length scales: spread {ell1_mac}, funds-rate change {ell2_mac}; "
+      f"noise variance {sn2_mac}")
+print(f"log marginal likelihood {lml_mac:.2f} = fit {fit_mac:.2f} "
+      f"+ complexity {comp_mac:.2f} + constant {-0.5 * len(Z_tr) * np.log(2 * np.pi):.2f}")
+```
+
+The marginal likelihood picks a length scale of 0.5 standard deviations in the term spread
+and 1.0 in the funds-rate change, with a noise variance of 0.4 in standardised units. The
+first number is the interesting one: half a standard deviation of the term spread is about
+0.8 percentage points, so the process expects the relationship to bend appreciably over
+roughly one point of curve slope, which is the scale at which the binned means turned. The
+second says the response to the funds-rate change is twice as smooth, closer to linear. The
+decomposition prints as a fit term of $-220.35$ against a complexity term of $+169.81$: the
+complexity term is positive here only because the covariance has many eigenvalues below
+one in standardised units, and what matters is that shortening the length scale raises the
+fit term and lowers the complexity term, which the table in the next subsection shows
+directly.
+
+```{python}
+spread_grid = np.linspace(-8.0, 6.0, 200)
+q25_dff, q75_dff = np.percentile(X_tr[:, 1], [25, 75])
+
+fig, ax = plt.subplots(figsize=(7.6, 4.6))
+ax.scatter(X_tr[:, 0], y_tr, s=10, color="grey", alpha=0.45, label="1961-1999 months")
+for lev, colour, lbl in [(q25_dff, "C0", f"funds rate {q25_dff:+.1f} pts (easing)"),
+                         (q75_dff, "C3", f"funds rate {q75_dff:+.1f} pts (tightening)")]:
+    Zs = np.column_stack([(spread_grid - mx[0]) / sx[0],
+                          np.full(200, (lev - mx[1]) / sx[1])])
+    m_s, v_s = gp_pred_ard(Z_tr, L_mac, a_mac, Zs, ell_mac)
+    m_s, sd_s = m_s * sy + my, np.sqrt(v_s) * sy
+    ax.plot(spread_grid, m_s, color=colour, lw=1.9, label=lbl)
+    ax.fill_between(spread_grid, m_s - 1.96 * sd_s, m_s + 1.96 * sd_s,
+                    color=colour, alpha=0.18)
+b_lin_mac = np.linalg.solve(np.column_stack([np.ones(len(X_tr)), X_tr]).T
+                            @ np.column_stack([np.ones(len(X_tr)), X_tr]),
+                            np.column_stack([np.ones(len(X_tr)), X_tr]).T @ y_tr)
+ax.plot(spread_grid, b_lin_mac[0] + b_lin_mac[1] * spread_grid,
+        color="black", ls="--", lw=1.4, label="linear fit (at mean funds-rate change)")
+ax.axvspan(X_tr[:, 0].min(), X_tr[:, 0].max(), color="C2", alpha=0.05)
+ax.set_xlabel("term spread, 10-year yield minus funds rate, percentage points")
+ax.set_ylabel("industrial production growth over next 12 months, %")
+ax.set_title("The yield curve signal bends, and the bands flare where no data lie")
+ax.legend(fontsize=8, loc="lower right")
+plt.tight_layout(); plt.show()
+
+for lev, lbl in [(q25_dff, "easing"), (q75_dff, "tightening")]:
+    Zs = np.column_stack([(spread_grid - mx[0]) / sx[0],
+                          np.full(200, (lev - mx[1]) / sx[1])])
+    m_s, v_s = gp_pred_ard(Z_tr, L_mac, a_mac, Zs, ell_mac)
+    m_s, sd_s = m_s * sy + my, np.sqrt(v_s) * sy
+    picks = {q: (round(float(m_s[np.argmin(abs(spread_grid - q))]), 2),
+                 round(float(sd_s[np.argmin(abs(spread_grid - q))]), 2))
+             for q in [-7, -2, 0, 1, 2, 5]}
+    print(lbl, "mean and sd at selected spreads:", picks)
+print(f"observed spread range in training data: "
+      f"{X_tr[:, 0].min():.2f} to {X_tr[:, 0].max():.2f}")
+Xd_mac = np.column_stack([np.ones(len(X_tr)), X_tr])
+r2_lin_mac = 1 - np.var(y_tr - Xd_mac @ b_lin_mac) / np.var(y_tr)
+print(f"linear fit: intercept {b_lin_mac[0]:.3f}, spread {b_lin_mac[1]:.3f}, "
+      f"funds-rate change {b_lin_mac[2]:.3f}, in-sample R2 {r2_lin_mac:.3f}")
+ipg_1m = 100.0 * (np.log(fred_mac["industrial_prod"]).shift(-1)
+                  - np.log(fred_mac["industrial_prod"]))
+one_m = pd.concat([mac[["spread", "dff"]], ipg_1m.rename("g1")], axis=1).dropna()
+Xd_1m = np.column_stack([np.ones(len(one_m)), one_m[["spread", "dff"]].to_numpy()])
+b_1m = np.linalg.solve(Xd_1m.T @ Xd_1m, Xd_1m.T @ one_m["g1"].to_numpy())
+print("same regression at a one-month horizon, in-sample R2: "
+      f"{1 - np.var(one_m['g1'].to_numpy() - Xd_1m @ b_1m) / np.var(one_m['g1']):.3f}")
+```
+
+This figure is the chapter's main picture and it carries three separate messages.
+
+The first is the shape. Along the tightening curve, the red line, a term spread of $-2$
+points implies industrial production growth of $-6.11$ per cent over the following year,
+and the curve climbs steeply to $+4.96$ per cent at a spread of one point, then goes flat:
+$2.56$ at a spread of two and $4.16$ at three. The steep part and the flat part are both
+real, and the dashed straight line runs through the middle of both, overstating growth
+during inversions and understating it around a spread of one. A slope of $1.33$ percentage
+points of growth per point of spread is the best single number available to a linear model,
+and the honest summary is that no single number is right.
+
+The second is the interaction between the two predictors. The blue easing curve and the red
+tightening curve are not parallel. Deep in inversion the tightening curve is far below the
+easing one, $-8.80$ against $-2.57$ at a spread of $-4$: a curve inverted because the Fed
+has been raising rates hard is a much worse signal than a curve inverted with the funds
+rate unchanged. At the right-hand end they converge. This is a genuine non-linearity in two
+dimensions, and it is invisible to an additive model of any kind, which is what makes a
+kernel with a product structure the natural device.
+
+The third is the honesty of the bands. Inside the shaded region, where the training spreads
+lie between $-6.51$ and $3.85$ points, the ninety-five per cent band is narrow, with a
+posterior standard deviation of $0.44$ per cent at a spread of one where hundreds of months
+cluster. Outside it the band flares: at a spread of $-7$ the standard deviation is $4.49$
+and the mean has already begun drifting back towards the prior mean of zero, which after
+undoing the standardisation is the sample average growth rate. The process is saying that
+it has no idea what happens at a curve inversion deeper than anything in the record, which
+is correct, and it says so without being told. A cubic polynomial fitted to the same data
+would extrapolate to that region with complete confidence and a large error.
+
+### What the length scale does, and what the marginal likelihood picks
+
+```{python}
+ell1_try = [0.15, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+sweep_rows = []
+for e1 in ell1_try:
+    ell_t = np.array([e1, ell2_mac])
+    Lt, at, lml_t, fit_t, comp_t = gp_fit_ard(Z_tr, w_tr, ell_t, sn2_mac)
+    m_in, _ = gp_pred_ard(Z_tr, Lt, at, Z_tr, ell_t)
+    m_out, _ = gp_pred_ard(Z_tr, Lt, at, Z_te, ell_t)
+    sweep_rows.append({"length scale": e1,
+                       "log marg lik": lml_t, "fit term": fit_t,
+                       "complexity term": comp_t,
+                       "in-sample R2": 1 - np.var(w_tr - m_in) / np.var(w_tr),
+                       "out-of-sample RMSE": np.sqrt(np.mean((y_te - (m_out * sy + my)) ** 2))})
+sweep = pd.DataFrame(sweep_rows).set_index("length scale")
+print(sweep.round(3).to_string())
+
+fig, ax1 = plt.subplots()
+ax1.plot(sweep.index, sweep["log marg lik"], "o-", color="C0",
+         label="log marginal likelihood")
+ax1.set_xscale("log")
+ax1.set_xlabel("length scale on the term spread (standardised units, log scale)")
+ax1.set_ylabel("log marginal likelihood", color="C0")
+ax1.axvline(ell1_mac, color="C0", ls=":", lw=1.2)
+ax2 = ax1.twinx()
+ax2.plot(sweep.index, sweep["out-of-sample RMSE"], "s--", color="C3",
+         label="out-of-sample RMSE")
+ax2.set_ylabel("out-of-sample RMSE, percentage points", color="C3")
+ax2.grid(False)
+ax1.set_title("The marginal likelihood has an interior maximum; the test error barely cares")
+plt.tight_layout(); plt.show()
+```
+
+The left-hand axis shows exactly the trade-off the third derivation predicted. Shrinking
+the length scale from 0.5 to 0.15 raises the fit term from $-220.35$ to $-211.19$, because
+a wigglier prior can pass closer to every observation, but it costs 36.7 in the complexity
+term, from $169.81$ down to $133.11$, and the marginal likelihood falls from $-480.60$ to
+$-508.14$. Stretching it to 8.0 does the opposite, buying 28.0 of complexity and losing
+98.6 of fit. The maximum at 0.5 is interior and clear, and nothing but the training data
+and the prior was used to find it. The in-sample $R^2$ column shows why a fit criterion
+could not have done this job: it rises monotonically as the length scale shrinks, so
+maximising it would drive us to the wiggliest model on the grid.
+
+The right-hand axis is the deflating half. Out-of-sample root mean squared error over the
+2000 to 2025 period varies from 6.02 at the shortest length scale to 6.17 at the longest, a
+spread of two and a half per cent, and its minimum is not at the value the marginal
+likelihood chose. The curvature the process found is real, the marginal likelihood found it
+by a principled route, and it makes almost no difference to how well the model forecasts.
+That is a pattern worth expecting rather than being disappointed by.
+
+### An honest out-of-sample horse race
+
+The cleanest test gives every method only past data at every date. From January 1990
+onwards, we re-estimate on all observations whose twelve-month window had already closed,
+refit the process every three months, and forecast the next twelve months of industrial
+production growth. The competitors are the Gaussian process, a Bayesian linear regression
+on the same two predictors whose Student predictive distribution accounts for parameter
+uncertainty, and the historical mean of the training window, a forecast that uses no
+predictors at all. The hyperparameters are selected by marginal likelihood once, on data
+through 1989, and then held fixed, so no test information leaks backwards.
+
+```{python}
+X_all = mac[["spread", "dff"]].to_numpy()
+y_all = mac["ipg"].to_numpy()
+idx_all = mac.index
+h_mac, t_start = 12, int(np.searchsorted(idx_all, pd.Timestamp("1990-01-01")))
+hyp_grid = [(e1, e2, s) for e1 in [0.25, 0.5, 1.0, 2.0]
+            for e2 in [0.5, 1.0, 2.0] for s in [0.3, 0.4, 0.6]]
+
+oos_rows, hyp_sel, cache = [], None, None
+for t in range(t_start, len(y_all)):
+    if (t - t_start) % 3 == 0:
+        end = t - h_mac                      # only windows that have already closed
+        Xs, ys = X_all[:end], y_all[:end]
+        mxs, sxs = Xs.mean(axis=0), Xs.std(axis=0)
+        mys, sys_ = ys.mean(), ys.std()
+        Zs, ws = (Xs - mxs) / sxs, (ys - mys) / sys_
+        if hyp_sel is None:
+            hyp_sel = max(hyp_grid,
+                          key=lambda g: gp_fit_ard(Zs, ws, np.array(g[:2]), g[2])[2])
+            print("hyperparameters selected on data through "
+                  f"{idx_all[end - 1]:%Y-%m}: {hyp_sel}")
+        e_sel, sn_sel = np.array(hyp_sel[:2]), hyp_sel[2]
+        Lc, ac = gp_fit_ard(Zs, ws, e_sel, sn_sel)[:2]
+        Xd = np.column_stack([np.ones(end), Xs])
+        bb = np.linalg.solve(Xd.T @ Xd, Xd.T @ ys)
+        ee = ys - Xd @ bb
+        dof = end - 3
+        s2 = ee @ ee / dof
+        XtXi = np.linalg.inv(Xd.T @ Xd)
+        cache = (mxs, sxs, mys, sys_, Zs, Lc, ac, e_sel, sn_sel, bb, s2, XtXi, dof,
+                 ys.mean(), ys.std())
+    (mxs, sxs, mys, sys_, Zs, Lc, ac, e_sel, sn_sel, bb, s2, XtXi, dof,
+     hist_m, hist_s) = cache
+    m_g, v_g = gp_pred_ard(Zs, Lc, ac, (X_all[t:t + 1] - mxs) / sxs, e_sel)
+    xo = np.r_[1.0, X_all[t]]
+    oos_rows.append((idx_all[t], X_all[t, 0], y_all[t],
+                     m_g[0] * sys_ + mys, np.sqrt(v_g[0] + sn_sel) * sys_,
+                     float(xo @ bb), float(np.sqrt(s2 * (1 + xo @ XtXi @ xo))),
+                     dof, hist_m, hist_s))
+
+oos = pd.DataFrame(oos_rows, columns=["date", "spread", "y", "gp_m", "gp_sd",
+                                      "lin_m", "lin_sd", "dof", "hist_m",
+                                      "hist_sd"]).set_index("date")
+
+def score_block(sub, label):
+    return {"regime": label, "months": len(sub),
+            "GP RMSE": np.sqrt(np.mean((sub.y - sub.gp_m) ** 2)),
+            "linear RMSE": np.sqrt(np.mean((sub.y - sub.lin_m) ** 2)),
+            "mean RMSE": np.sqrt(np.mean((sub.y - sub.hist_m) ** 2)),
+            "GP log score": np.mean(stats.norm.logpdf(sub.y, sub.gp_m, sub.gp_sd)),
+            "linear log score": np.mean(stats.t.logpdf((sub.y - sub.lin_m) / sub.lin_sd,
+                                                       df=sub.dof) - np.log(sub.lin_sd)),
+            "mean log score": np.mean(stats.norm.logpdf(sub.y, sub.hist_m, sub.hist_sd))}
+
+blocks = [score_block(oos, "all months"),
+          score_block(oos[oos.spread < 0], "inverted curve"),
+          score_block(oos[(oos.spread >= 0) & (oos.spread < 1.5)], "flat curve"),
+          score_block(oos[oos.spread >= 1.5], "steep curve")]
+print(pd.DataFrame(blocks).set_index("regime").round(3).T)
+```
+
+Start with the row that a practitioner would look at first. Over all 426 months from 1990
+to 2025, the Gaussian process has a root mean squared error of 5.05 percentage points, the
+linear model 4.89, and the historical mean 4.51. Neither model beats a forecast that
+ignores the yield curve completely. That is not a bug in the code and it is not unique to
+this pair of predictors: industrial production growth trended down between the two halves
+of the sample, so a model with a fixed intercept estimated on an expanding window carries
+a stale level, and the two great shocks of the period, 2008 and 2020, were not visible in
+any term spread.
+
+Split by regime and the picture changes in exactly the place the economics said it would.
+In the 71 months when the curve was inverted, both models beat the historical mean
+decisively: 4.94 for the process and 4.87 for the linear model against 5.84 for the mean,
+an improvement of roughly sixteen per cent in root mean squared error. In the 202 months
+when the curve was steep, the mean wins comfortably, 3.67 against 4.53 and 4.96, because a
+steep curve says nothing beyond "conditions are normal" and the models insist on using it
+anyway. This is the sense in which non-linearity pays at turning points and nowhere else.
+A flat or steep curve is a non-signal, and the value of the yield curve as a predictor is
+concentrated in the small number of months when it inverts.
+
+The log-score columns add a second lesson and it is about calibration rather than
+accuracy. The process scores $-3.81$ overall against the linear model's $-3.12$ and the
+historical mean's $-2.97$, a far larger gap than the root mean squared errors suggest. The
+reason is the last warning in the marginal-likelihood derivation. Because consecutive
+twelve-month windows overlap by eleven months, the 468 training observations contain
+something closer to forty independent pieces of information, and a marginal likelihood that
+treats them as independent concludes that the noise is small and the function is well
+pinned down. The selected noise variance of 0.3 produces predictive bands that are far too
+narrow, and a narrow band that misses is punished heavily by a log score. The linear
+model's Student predictive is wider and survives better. If you take one practical rule
+from this section, let it be that a marginal likelihood computed under an independence
+assumption that the data violate will select a model that is overconfident, and the log
+score, not the squared error, is where you will discover it.
+
+```{python}
+fig, ax = plt.subplots(figsize=(8, 4.4))
+ax.fill_between(oos.index, oos.gp_m - 1.96 * oos.gp_sd, oos.gp_m + 1.96 * oos.gp_sd,
+                color="C0", alpha=0.22, label="GP 95% predictive band")
+ax.plot(oos.index, oos.gp_m, color="C0", lw=1.3, label="GP forecast")
+ax.plot(oos.index, oos.lin_m, color="C3", lw=1.1, label="linear forecast")
+ax.plot(oos.index, oos.y, color="black", lw=1.4, label="realised 12-month growth")
+ax.axhline(0.0, color="grey", lw=0.8, ls=":")
+ax.set_xlabel("forecast date")
+ax.set_ylabel("industrial production growth over next 12 months, %")
+ax.set_title("Forecasts and outcomes, 1990 to 2025")
+ax.legend(fontsize=8, ncol=2)
+plt.tight_layout(); plt.show()
+
+worst = oos.assign(err=(oos.y - oos.gp_m).abs()).nlargest(3, "err")
+print("three largest Gaussian process errors")
+print(worst[["y", "gp_m", "gp_sd", "lin_m"]].round(2))
+print(f"average GP forecast 1990-2025: {oos.gp_m.mean():.2f}")
+for lo, hi in [("1989-06", "1990-12"), ("2000-01", "2001-06"), ("2006-06", "2007-12")]:
+    w_ = oos.loc[lo:hi]
+    print(f"  {lo} to {hi}: GP forecast {w_.gp_m.mean():5.2f}, "
+          f"realised {w_.y.mean():5.2f}")
+```
+
+The time-series view shows where the errors live. Both forecast lines are flat and modest
+compared with the black line of realised growth, which swings from $+15$ per cent in the
+2021 rebound to $-19$ per cent for the year that began in April 2019 and to $-16$ per cent
+for the year that began in May 2008. Those three dates are precisely the three largest
+errors the process makes, and the predictive band drawn around the forecast does not come
+close to containing any of them. A model whose inputs are the slope of the yield curve and
+the stance of policy cannot see a banking crisis or a pandemic, and no amount of
+flexibility in the functional form changes that. What the picture does show is a forecast
+that moves in the right direction some of the time: against its own 1990 to 2025 average of
+3.50 per cent, the process predicted 2.79 per cent on average through 2000 and the first
+half of 2001, and 1.16 per cent through the second half of 2006 and 2007, both stretches
+following inversions and both followed by contractions. It gives no warning at all before
+the 1990 recession, where it averaged 4.58 per cent and growth came in at $-1.60$.
+
 ## Bayesian neural networks
 
 A neural network is a different route to a flexible function. Write a single hidden layer as $f(x) =
@@ -606,6 +1199,326 @@ method can move a prediction far from the unconditional mean when the signal is 
 overlap, which is the scatterplot version of the closely matched log predictive densities in the table.
 
 
+
+## Trees against a line: industry returns from factor exposures
+
+The Gaussian process section used macroeconomic data, where there is at least some signal.
+The harder test, and the one a finance student will be asked about, is whether a flexible
+model helps on returns. This section builds the tree ensemble of the opening section from
+scratch in numpy and puts it against a Bayesian linear model on a real cross-section.
+
+The panel is the forty-nine Fama-French industry portfolios, monthly, from January 1970.
+For each industry and each month we construct five predictors, all of them known at the
+end of that month: the industry's exposures to the market, size and value factors,
+estimated from a rolling sixty-month regression ending that month; its trailing twelve-month
+return, the standard momentum variable; and its trailing twelve-month return volatility.
+The target is the industry's excess return in the following month, in per cent. Nothing
+about the target enters any predictor, which is the only discipline that matters here. We
+train on everything before January 2000 and test on everything from January 2000 onwards,
+pooling industries so that the model learns a single cross-sectional relationship rather
+than forty-nine separate ones.
+
+This is the classic setup for cross-sectional return prediction, and the question is whether
+the relationship between exposures and expected returns is non-linear enough that a tree
+ensemble beats a straight line.
+
+```{python}
+ff_fac = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
+ind49 = pd.read_parquet(DATA / "ff_industry49_monthly.parquet")
+common_idx = ind49.loc["1970-01":].index.intersection(ff_fac.index)
+FAC = ff_fac.loc[common_idx, ["mkt_rf", "smb", "hml"]].to_numpy() * 100.0
+EXC = (ind49.loc[common_idx].mul(100.0)
+       .sub(ff_fac.loc[common_idx, "rf"] * 100.0, axis=0)).to_numpy()
+
+WIN = 60
+panel_rows = []
+for t in range(WIN, len(common_idx) - 1):
+    Xw = np.column_stack([np.ones(WIN), FAC[t - WIN + 1:t + 1]])
+    B = np.linalg.solve(Xw.T @ Xw, Xw.T @ EXC[t - WIN + 1:t + 1])   # 4 x 49 exposures
+    mom12 = EXC[t - 11:t + 1].sum(axis=0)
+    vol12 = EXC[t - 11:t + 1].std(axis=0)
+    for j in range(EXC.shape[1]):
+        panel_rows.append((common_idx[t], B[1, j], B[2, j], B[3, j],
+                           mom12[j], vol12[j], EXC[t + 1, j]))
+
+feat_names = ["b_mkt", "b_smb", "b_hml", "mom12", "vol12"]
+panel = pd.DataFrame(panel_rows, columns=["date"] + feat_names + ["y"])
+p_tr = panel[panel.date < "2000-01-01"]
+p_te = panel[panel.date >= "2000-01-01"]
+Xb_tr, yb_tr = p_tr[feat_names].to_numpy(), p_tr["y"].to_numpy()
+Xb_te, yb_te = p_te[feat_names].to_numpy(), p_te["y"].to_numpy()
+
+print(f"{len(panel)} industry-months, {panel.date.min():%Y-%m} to {panel.date.max():%Y-%m}")
+print(f"training {len(p_tr)} rows to 1999-12, test {len(p_te)} rows from 2000-01")
+print(panel[feat_names + ["y"]].describe().loc[["mean", "std", "min", "max"]].round(3))
+```
+
+### The linear benchmark, in the course's notation
+
+The benchmark is the conjugate regression of Lecture 2, written exactly as the course
+writes it: $\beta \mid \sigma^2 \sim N(b_0, \sigma^2 B_0)$ with $b_0 = 0$ and
+$B_0 = 100 I$, a prior so vague it barely shrinks, and $\sigma^2 \sim IG(\alpha_0,
+\delta_0)$ with $\alpha_0 = 3$ and $\delta_0 = 120$, centred on a monthly residual
+volatility of about 6.3 per cent, which is the right order of magnitude for an industry
+portfolio. The predictive distribution for a new observation is Student with $2\alpha_T$
+degrees of freedom, exactly as derived in the portfolio chapter.
+
+```{python}
+Zb_tr = np.column_stack([np.ones(len(Xb_tr)), Xb_tr])
+Zb_te = np.column_stack([np.ones(len(Xb_te)), Xb_te])
+k_b = Zb_tr.shape[1]
+b_0, B_0 = np.zeros(k_b), np.eye(k_b) * 100.0
+alpha_0, delta_0 = 3.0, 120.0
+
+B0_inv = np.linalg.inv(B_0)
+B_T = np.linalg.inv(B0_inv + Zb_tr.T @ Zb_tr)
+b_T = B_T @ (B0_inv @ b_0 + Zb_tr.T @ yb_tr)
+alpha_T = alpha_0 + len(yb_tr) / 2
+delta_T = delta_0 + 0.5 * (yb_tr @ yb_tr + b_0 @ B0_inv @ b_0
+                           - b_T @ np.linalg.inv(B_T) @ b_T)
+
+m_lin_b = Zb_te @ b_T
+v_lin_b = (delta_T / alpha_T) * (1 + np.einsum("ij,jk,ik->i", Zb_te, B_T, Zb_te))
+print(pd.Series(b_T, index=["intercept"] + feat_names).round(4))
+print(f"posterior mean residual sd: {np.sqrt(delta_T / (alpha_T - 1)):.3f} % per month")
+```
+
+The coefficients are the cross-sectional anomalies of the 1970s to 1990s, and it is worth
+reading them before scoring anything. An industry with a market beta one unit higher earned
+$0.27$ per cent a month less, the flat security market line that has been documented since
+Black, Jensen and Scholes. An industry with a value exposure one unit higher earned $0.20$
+per cent a month less in this sample. Trailing twelve-month return carries a coefficient of
+$-0.006$, so a hundred per cent better past year predicts about 0.6 percentage points lower
+next month, a reversal rather than momentum at the industry level. Trailing volatility
+carries $+0.13$. The posterior residual standard deviation is 6.31 per cent a month, which
+is the number every predictive claim here has to be judged against: these coefficients move
+the conditional mean by tenths of a per cent against a noise of six per cent.
+
+### A BART-style ensemble in numpy
+
+The ensemble follows the structure set out at the start of this lecture. Each tree is
+grown greedily on the partial residuals left by the trees already in the ensemble, and each
+terminal node is filled not with the leaf mean but with the posterior mean of the leaf under
+the prior $\mu_\ell \sim N(0, v_\mu)$,
+$$
+V_\ell = \Big(\frac{n_\ell}{\sigma^2} + \frac{1}{v_\mu}\Big)^{-1},
+\qquad
+m_\ell = V_\ell \frac{1}{\sigma^2}\sum_{i \in \ell} r_{i\ell},
+$$
+which is the formula derived earlier. Setting $v_\mu = \sigma_y^2 / m$ with $m$ trees keeps
+the prior variance of the sum at $\sigma_y^2$ regardless of how many trees we use, the
+scaling argument from the same section. This is a boosted approximation to BART rather than
+BART itself: it takes the posterior mean of each leaf given a greedily chosen tree, instead
+of sampling tree structures from their posterior. That distinction was made at the start of
+the lecture and it matters for interpreting the output, since the uncertainty reported below
+comes from the residual variance alone and not from uncertainty about the trees.
+
+```{python}
+rng_bart = np.random.default_rng(20260114)
+
+def grow_tree(X, r, depth, sigma2, v_mu, min_leaf, n_cand=10):
+    """Greedy tree whose leaves hold the shrunken posterior mean of the leaf parameter."""
+    def leaf(idx):
+        V = 1.0 / (len(idx) / sigma2 + 1.0 / v_mu)
+        return {"leaf": V * r[idx].sum() / sigma2}
+    def rec(idx, d):
+        if d == depth or len(idx) < 2 * min_leaf:
+            return leaf(idx)
+        best = None
+        for j in range(X.shape[1]):
+            v = X[idx, j]
+            for c in np.unique(np.quantile(v, np.linspace(0.1, 0.9, n_cand))):
+                left = v <= c
+                n_l, n_r = int(left.sum()), len(idx) - int(left.sum())
+                if n_l < min_leaf or n_r < min_leaf:
+                    continue
+                s_l = r[idx][left].sum()
+                s_r = r[idx].sum() - s_l
+                gain = s_l ** 2 / n_l + s_r ** 2 / n_r
+                if best is None or gain > best[0]:
+                    best = (gain, j, c, left)
+        if best is None:
+            return leaf(idx)
+        _, j, c, left = best
+        return {"j": j, "c": c, "L": rec(idx[left], d + 1), "R": rec(idx[~left], d + 1)}
+    return rec(np.arange(len(X)), 0)
+
+def tree_predict(node, X):
+    out = np.empty(len(X))
+    def rec(nd, idx):
+        if "leaf" in nd:
+            out[idx] = nd["leaf"]; return
+        left = X[idx, nd["j"]] <= nd["c"]
+        rec(nd["L"], idx[left]); rec(nd["R"], idx[~left])
+    rec(node, np.arange(len(X)))
+    return out
+
+m_trees, depth_b = 50, 3
+sigma2_b = yb_tr.var()
+v_mu_b = sigma2_b / m_trees
+offset_b = yb_tr.mean()
+resid_b = yb_tr - offset_b
+fit_tr, fit_te = np.zeros(len(yb_tr)), np.zeros(len(yb_te))
+for _ in range(m_trees):
+    sub = rng_bart.choice(len(yb_tr), size=6000, replace=False)
+    tree = grow_tree(Xb_tr[sub], resid_b[sub], depth_b, sigma2_b, v_mu_b, 200)
+    f_in = tree_predict(tree, Xb_tr)
+    fit_tr += f_in
+    resid_b = resid_b - f_in
+    fit_te += tree_predict(tree, Xb_te)
+
+m_tree_b = offset_b + fit_te
+res_in = yb_tr - (offset_b + fit_tr)
+sd_tree_b = np.sqrt(res_in @ res_in / len(yb_tr))
+print(f"ensemble of {m_trees} trees of depth {depth_b}, leaf prior sd "
+      f"{np.sqrt(v_mu_b):.3f} % per month")
+print(f"in-sample R2 of the ensemble: {1 - res_in.var() / yb_tr.var():.4f}")
+```
+
+The in-sample $R^2$ of the ensemble is under one per cent. That is not a failure of the
+implementation, it is the leaf prior working: with $v_\mu = \sigma_y^2/50$ the prior
+standard deviation of a leaf is 0.89 per cent a month, and a leaf containing two hundred
+observations with a partial residual mean of one per cent gets pulled most of the way back
+towards zero. An unshrunk boosted tree on this data would report an in-sample $R^2$ of
+several per cent and would be fitting noise.
+
+```{python}
+def score_pred(m, sd, df=None):
+    rmse = np.sqrt(np.mean((yb_te - m) ** 2))
+    if df is None:
+        lps = np.mean(stats.norm.logpdf(yb_te, m, sd))
+    else:
+        lps = np.mean(stats.t.logpdf((yb_te - m) / sd, df=df) - np.log(sd))
+    return rmse, lps
+
+rmse_l, lps_l = score_pred(m_lin_b, np.sqrt(v_lin_b), df=2 * alpha_T)
+rmse_t, lps_t = score_pred(m_tree_b, np.full(len(yb_te), sd_tree_b))
+rmse_m, lps_m = score_pred(np.full(len(yb_te), offset_b),
+                           np.full(len(yb_te), yb_tr.std()))
+race = pd.DataFrame({"out-of-sample RMSE": [rmse_m, rmse_l, rmse_t],
+                     "mean log predictive score": [lps_m, lps_l, lps_t]},
+                    index=["historical mean", "Bayesian linear", "tree ensemble"])
+print(race.round(4))
+print(f"linear beats the mean by {(rmse_m - rmse_l) * 100:.2f} basis points of monthly RMSE")
+print(f"tree loses to the linear model by {(rmse_t - rmse_l) * 100:.2f} basis points")
+```
+
+Here is the result, and it should be read slowly because its smallness is the point. The
+historical mean forecast has a root mean squared error of 6.9643 per cent a month. The
+Bayesian linear model, with five predictors chosen because the asset-pricing literature says
+they matter, achieves 6.9552, an improvement of 0.91 basis points, or about one seventh of
+one per cent of the error. The tree ensemble achieves 7.1440, which is worse than both. The
+log predictive scores tell the same story with the same ordering: $-3.3699$ for the mean,
+$-3.3683$ for the linear model, $-3.4030$ for the ensemble.
+
+There is no way to dress this up as a victory for flexible modelling, and dressing it up is
+what a great deal of published machine-learning-in-finance does. The honest description is
+that the linear model extracts a genuine but minuscule amount of cross-sectional signal, and
+that allowing the conditional mean to bend costs more in estimation variance than the
+bending is worth.
+
+```{python}
+lam_grid = np.linspace(0.0, 1.5, 13)
+lam_rmse = [np.sqrt(np.mean((yb_te - (m_lin_b + lam * (m_tree_b - m_lin_b))) ** 2))
+            for lam in lam_grid]
+
+fig, ax = plt.subplots()
+ax.plot(lam_grid, lam_rmse, "o-", color="C0")
+ax.axhline(rmse_m, color="grey", ls=":", lw=1.2, label="historical mean forecast")
+ax.axvline(0.0, color="C3", ls="--", lw=1.1, label="pure linear model")
+ax.axvline(1.0, color="C2", ls="--", lw=1.1, label="pure tree ensemble")
+ax.set_xlabel(r"weight $\lambda$ on the tree ensemble's deviation from the linear forecast")
+ax.set_ylabel("out-of-sample RMSE, % per month")
+ax.set_title("The best amount of non-linearity in this problem is none")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+print(pd.DataFrame({"lambda": lam_grid, "RMSE": lam_rmse}).round(4).head(7).to_string(index=False))
+```
+
+The figure blends the two forecasts, predicting $m_{\text{lin}} + \lambda(m_{\text{tree}} -
+m_{\text{lin}})$ and sweeping $\lambda$ from zero, the pure linear model, to 1.5, an
+extrapolated version of the ensemble's disagreement with it. If the tree were finding real
+curvature, the curve would dip somewhere to the right of zero. Instead it rises
+monotonically, from 6.9552 at $\lambda = 0$ to 7.3678 at $\lambda = 1.5$, so the
+out-of-sample optimal weight on the tree ensemble's deviation is zero or below. This is a
+cleaner statement than a table of two numbers, because it shows that no amount of the
+ensemble helps rather than only that all of it does not. The dotted line marks the
+historical mean, which the whole curve sits near: at a weight above about 0.17 the blend is
+already worse than not forecasting at all, since the blend's error passes 6.9643 between
+$\lambda = 0.125$ and $\lambda = 0.25$.
+
+```{python}
+dec_lin = pd.qcut(pd.Series(m_lin_b), 10, labels=False, duplicates="drop")
+dec_tree = pd.qcut(pd.Series(m_tree_b), 10, labels=False, duplicates="drop")
+mean_by_lin = pd.Series(yb_te).groupby(dec_lin).mean()
+mean_by_tree = pd.Series(yb_te).groupby(dec_tree).mean()
+
+fig, ax = plt.subplots()
+width = 0.4
+pos = np.arange(10)
+ax.bar(pos - width / 2, mean_by_lin.to_numpy(), width, color="C3", label="Bayesian linear")
+ax.bar(pos + width / 2, mean_by_tree.to_numpy(), width, color="C2", label="tree ensemble")
+ax.axhline(yb_te.mean(), color="black", ls=":", lw=1.2,
+           label="unconditional test-sample mean")
+ax.set_xticks(pos); ax.set_xticklabels([str(i + 1) for i in pos])
+ax.set_xlabel("decile of the model's predicted return, 1 = lowest")
+ax.set_ylabel("realised average excess return, % per month")
+ax.set_title("Sorting industry-months by predicted return, 2000 to 2026")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+print(f"top minus bottom decile: linear {mean_by_lin.iloc[-1] - mean_by_lin.iloc[0]:.3f}, "
+      f"tree {mean_by_tree.iloc[-1] - mean_by_tree.iloc[0]:.3f} % per month")
+print(f"unconditional test mean {yb_te.mean():.3f} % per month")
+```
+
+The decile sort is how a practitioner would look at this, and it is more forgiving than the
+squared error because it asks only whether the ordering is informative. The linear model's
+top decile of predicted returns realised 1.69 per cent a month against 0.88 per cent in the
+bottom decile, a spread of 0.82 points, which sounds impressive until one notices that the
+middle deciles are not ordered at all: decile 6 realised less than decile 1. The tree
+ensemble's spread is 0.26 points, again with no monotone pattern in between. A sort that
+works only at the extremes and is scrambled in the middle is what a weak signal plus a lot
+of noise looks like, and the squared-error comparison above is the summary that does not
+let the eye fill in the pattern.
+
+### Where the flexibility does pay
+
+None of this says non-linear Bayesian methods are useless, and it is worth being precise
+about where they earn their place, because an exam answer that says only "machine learning
+does not work in finance" is as wrong as one that says it always does.
+
+They pay where the signal-to-noise ratio is high. The first application in this lecture is
+an example: forecasting industrial production over a year has an in-sample $R^2$ of 0.373 for a linear
+model and a clear non-linear shape, and the Gaussian process recovered that shape from the
+data alone. Derivative pricing surfaces and term-structure fitting are the same kind of
+problem, where the quantity being modelled is nearly deterministic given the inputs and the
+only difficulty is the functional form.
+
+They pay where the object of interest is second moments rather than first. Conditional
+volatility is far more predictable than conditional mean return, which is the entire reason
+the stochastic volatility lecture exists, and the non-linearity in the map from state
+variables to volatility is real and large. A flexible model of $\log \sigma_t^2$ has far
+more to work with than a flexible model of $E_t[r_{t+1}]$.
+
+They pay at turning points, which the regime split earlier made concrete. The value of the
+term spread was concentrated in the 71 inverted months out of 426, and a model constrained
+to a single slope has to average that signal away across the other 355. A flexible model
+that can be flat in the middle of the range and steep at one end is doing something that a
+linear model cannot, even when the average improvement across all months is negative.
+
+And they pay wherever a conditional mean function is an input to something else rather than
+an end in itself, as in the causal-inference lecture, where the outcome regression is a
+nuisance function whose flexibility protects against misspecification rather than a forecast
+anyone trades on.
+
+The honest summary for return prediction specifically is the one the horse race delivered:
+the Bayesian version of a flexible method is worth more than the flexibility, because the
+marginal likelihood and the predictive distribution tell you which regime you are in. A
+method that reports an improvement of 0.91 basis points and a log score that is worse than
+the unconditional mean's has told you something true and useful, which is more than a point
+forecast with an impressive in-sample $R^2$ ever does.
 
 ## Reading guide and sources
 

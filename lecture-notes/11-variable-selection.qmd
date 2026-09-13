@@ -199,6 +199,151 @@ posterior inclusion probabilities, not frequentist significance levels.
 Because both components are continuous Normals, coefficients are almost surely
 nonzero even in the spike; “excluded” means strongly shrunk in this SSVS model.
 
+::: {.callout-note collapse="true"}
+## Derivation: the spike-and-slab hierarchy and the indicator's posterior as a Bayes factor times prior odds
+
+The update printed above conditions on the current $\beta_j$, which is what the Gibbs sampler needs but
+is not what a model comparison looks like. Integrating $\beta_j$ out turns the same quantity into a
+genuine Bayes factor, and seeing both forms is the fastest way to understand what the prior inclusion
+probability is buying.
+
+Write the hierarchy in full. The indicators come first,
+$$
+\gamma_j \sim \text{Bernoulli}(\pi) \quad \text{independently}, \qquad j = 1, \dots, p ,
+$$
+then the coefficients conditional on them,
+$$
+\beta_j \mid \gamma_j \sim \mathcal{N}(0, v_{\gamma_j}), \qquad
+v_0 = \tau_j^2, \quad v_1 = c^2\tau_j^2 ,
+$$
+then the data and the variance,
+$$
+y \mid \beta, \sigma^2 \sim \mathcal{N}(X\beta, \sigma^2 I_n), \qquad
+\sigma^2 \sim \mathcal{IG}(\alpha_0, \delta_0) .
+$$
+Fix every coefficient except the $j$-th and define the partial residual
+$r_j = y - \sum_{k \neq j} x_k \beta_k$, so that $r_j = x_j \beta_j + \varepsilon$. Conditional on
+$\gamma_j = g$ and $\sigma^2$, both the likelihood of $r_j$ given $\beta_j$ and the prior for $\beta_j$
+are Normal, so their convolution is Normal too:
+$$
+r_j \mid \gamma_j = g, \sigma^2 \sim \mathcal{N}\big(0, \; \sigma^2 I_n + v_g\, x_j x_j^\top\big) .
+$$
+Two standard identities evaluate this density. The matrix determinant lemma gives
+$\det(\sigma^2 I + v_g x_j x_j^\top) = (\sigma^2)^n (1 + v_g S_j/\sigma^2)$ with $S_j = x_j^\top x_j$,
+and the Sherman-Morrison formula gives
+$$
+(\sigma^2 I + v_g x_j x_j^\top)^{-1} = \frac{1}{\sigma^2}\left[I - \frac{v_g\, x_j
+x_j^\top}{\sigma^2 + v_g S_j}\right] .
+$$
+Substituting both into the multivariate Normal density and keeping only the parts that depend on $g$,
+$$
+\log p(r_j \mid \gamma_j = g, \sigma^2) = -\tfrac12 \log\!\left(1 + \frac{v_g S_j}{\sigma^2}\right)
++ \frac{v_g\,(x_j^\top r_j)^2}{2\sigma^2(\sigma^2 + v_g S_j)} + \text{terms free of } g .
+$$
+The Bayes factor for inclusion is the difference of these at $g = 1$ and $g = 0$, exponentiated:
+$$
+\mathrm{BF}_j = \sqrt{\frac{1 + v_0 S_j / \sigma^2}{1 + v_1 S_j / \sigma^2}} \;
+\exp\!\left\{\frac{(x_j^\top r_j)^2}{2\sigma^2}\left[\frac{v_1}{\sigma^2 + v_1 S_j}
+- \frac{v_0}{\sigma^2 + v_0 S_j}\right]\right\} ,
+$$
+and the full conditional of the indicator is prior odds times this Bayes factor,
+$$
+\frac{\Pr(\gamma_j = 1 \mid r_j, \sigma^2)}{\Pr(\gamma_j = 0 \mid r_j, \sigma^2)}
+= \frac{\pi}{1-\pi}\,\mathrm{BF}_j .
+$$
+The two factors have clean readings. The square root is smaller than one whenever $v_1 > v_0$, and it is
+the Occam penalty: a wide slab spreads its prior mass over coefficient values the data did not produce,
+and pays for that in the marginal likelihood. The exponential is the evidence, and it depends on the
+data only through $(x_j^\top r_j)^2$, the squared covariance between the candidate column and what the
+other regressors left unexplained.
+
+Put the numbers of the industry application below into it. There $S_j = n = 480$ because every column is
+standardised, the posterior mean of $\sigma^2$ is $0.2279$, and $\tau_j = 0.02$ with $c = 20$ gives
+$v_0 = 0.0004$ and $v_1 = 0.16$. The Occam penalty is then
+$\sqrt{1.8425/337.99} = 0.0738$, a log penalty of $-2.606$, and the bracket in the exponent multiplies
+$(x_j^\top r_j)^2$ by $0.002467$. Setting the two against each other, the Bayes factor exceeds one once
+$(x_j^\top r_j)^2 > 2.606/0.002467 = 1056$, that is once $|x_j^\top r_j| > 32.5$, which for a
+standardised column with $S_j = 480$ means a partial regression coefficient larger in absolute value
+than $32.5/480 = 0.068$. Look ahead to the table of results and that is exactly the dividing line: the
+six industries the sampler keeps have posterior mean coefficients from $0.078$ up to $0.431$ in absolute
+value, and everything the sampler discards sits below $0.068$.
+
+One warning follows directly from the same algebra. Suppose we push the slab towards a flat prior by
+letting $v_1 \to \infty$ with everything else fixed. The Occam penalty behaves like
+$\sqrt{\sigma^2 / (v_1 S_j)}$ and goes to zero, while the exponent converges to the finite limit
+$(x_j^\top r_j)^2 / (2\sigma^2 S_j)$. The Bayes factor therefore goes to zero for every data set, and
+the indicator switches off no matter how strong the evidence. This is Lindley's paradox in its
+variable-selection form: an uninformative slab is not a neutral choice but an aggressive vote against
+inclusion, which is why $c$ must be set to an economically meaningful effect size rather than made as
+large as possible.
+:::
+
+### Marginal likelihoods and the g-prior
+
+The spike-and-slab keeps every column in the design matrix and shrinks the excluded ones. The other
+standard formulation deletes them, so that a model $M_\gamma$ literally has a design matrix $X_\gamma$
+with $q_\gamma = \sum_j \gamma_j$ columns and its own coefficient vector. Comparing such models needs
+the marginal likelihood $p(y \mid M_\gamma)$, and the reason Zellner's g-prior is ubiquitous in this
+literature is that it is essentially the only prior for which that integral collapses to something a
+student can read.
+
+::: {.callout-note collapse="true"}
+## Derivation: the marginal likelihood of a model under the g-prior
+
+Take the model $y = X_\gamma \beta_\gamma + \varepsilon$ with
+$\varepsilon \sim \mathcal{N}(0, \sigma^2 I_n)$ and Zellner's prior
+$$
+\beta_\gamma \mid \sigma^2, M_\gamma \sim \mathcal{N}\!\big(0, \; g\,\sigma^2 (X_\gamma^\top
+X_\gamma)^{-1}\big),
+$$
+whose covariance is deliberately proportional to the inverse of the data's own cross-product matrix, so
+that the prior is equally informative in every direction of the design rather than in every coordinate
+of $\beta$. Integrating the coefficients out is a convolution of two Normals,
+$$
+y \mid \sigma^2, M_\gamma \sim \mathcal{N}\!\Big(0, \; \sigma^2 I_n + g\sigma^2 X_\gamma
+(X_\gamma^\top X_\gamma)^{-1} X_\gamma^\top\Big) = \mathcal{N}\big(0, \; \sigma^2 (I_n + g P_\gamma)\big),
+$$
+where $P_\gamma = X_\gamma (X_\gamma^\top X_\gamma)^{-1} X_\gamma^\top$ is the projection onto the column
+space of $X_\gamma$. That projection is what makes everything work, because its eigenvalues are known
+without computing anything: $q_\gamma$ of them equal one and $n - q_\gamma$ equal zero. Hence
+$$
+\det(I_n + g P_\gamma) = (1 + g)^{q_\gamma}, \qquad
+(I_n + g P_\gamma)^{-1} = I_n - \frac{g}{1+g} P_\gamma ,
+$$
+the second identity being checked by multiplying out and using $P_\gamma^2 = P_\gamma$. The quadratic
+form in the exponent is therefore
+$$
+y^\top (I_n + gP_\gamma)^{-1} y = y^\top y - \frac{g}{1+g}\, y^\top P_\gamma y
+= y^\top y \left[1 - \frac{g}{1+g} R^2_\gamma\right],
+$$
+since $y^\top P_\gamma y$ is the explained sum of squares of the least-squares fit in model $\gamma$ and
+$R^2_\gamma$ is its coefficient of determination. Collecting,
+$$
+p(y \mid \sigma^2, M_\gamma) = (2\pi\sigma^2)^{-n/2}(1+g)^{-q_\gamma/2}
+\exp\!\left\{-\frac{y^\top y}{2\sigma^2}\left[1 - \frac{g}{1+g}R^2_\gamma\right]\right\} .
+$$
+Integrating $\sigma^2$ against the reference prior $p(\sigma^2) \propto 1/\sigma^2$ is a Gamma integral
+that contributes a factor $\Gamma(n/2)\,2^{n/2}$ free of the model, leaving
+$$
+p(y \mid M_\gamma) \;\propto\; (1+g)^{-q_\gamma/2}
+\left[1 - \frac{g}{1+g}R^2_\gamma\right]^{-n/2} .
+$$
+Everything a model comparison needs is in those two factors: a fixed penalty $(1+g)^{-1/2}$ for each
+variable admitted, and a reward that rises with the fit. Posterior model probabilities follow by
+multiplying by the prior $\pi^{q_\gamma}(1-\pi)^{p - q_\gamma}$ and normalising over whatever set of
+models the sampler visited.
+
+The trade-off can be priced. Take the unit information choice $g = n$, which makes the prior worth one
+observation, and use the dimensions of the industry application below, $n = 480$ and a baseline
+$R^2_\gamma = 0.70$. Admitting one more variable costs a factor $(1+480)^{-1/2} = 1/21.93$, so the fit
+factor must rise by at least $21.93^{2/n} = 21.93^{1/240} = 1.0129$. Solving
+$1 - \tfrac{g}{1+g}R^2_{new} = (1 - \tfrac{g}{1+g}\,0.70)/1.0129$ gives $R^2_{new} = 0.7039$: an extra
+regressor earns its place only if it raises the in-sample $R^2$ by at least $0.0039$. Raising $g$ to
+$10n$ would raise that hurdle by a further factor of $\sqrt{10}$ in the penalty, which is the same
+Lindley effect as in the spike-and-slab callout and the same instruction to choose $g$ deliberately.
+:::
+
+
 ### Correlated predictors change the interpretation
 
 If two factors are nearly interchangeable, draws may use either one. Each can
@@ -542,6 +687,622 @@ genuinely non-zero the simulated truth itself turns dense and the printed gap na
 direction the point Giannone, Lenza and Primiceri make about real data: a sparse prior's apparent edge is a property
 of how sparse the world actually is, not of the method, so it must be checked rather than assumed.
 
+## A real high-dimensional problem: forty-eight industry portfolios
+
+Everything so far ran on a simulated design in which we knew which factors were real. That was the right
+way to check that the sampler works, and it is now the wrong way to learn what selection feels like,
+because the simulation gave SSVS a gift it will never receive again: candidate columns that were
+independent standard Normals except for three deliberately planted decoys. Real candidate regressors in
+finance are correlated with each other from the start, because they are all driven by the same aggregate
+factor, and that changes what inclusion probabilities mean.
+
+The Kenneth French forty-nine industry portfolios give us a genuinely high-dimensional problem with no
+simulation anywhere in it. Take one industry's monthly excess return as the dependent variable and the
+other forty-eight as candidate regressors. The economic question is a real one that a risk manager asks:
+how much of a bank portfolio's monthly movement is spanned by the rest of the economy's industries, and
+which ones carry that span? The statistical question is the one this chapter is about, with $p = 48$
+candidates and $2^{48} \approx 2.8 \times 10^{14}$ possible models, a quarter of the quadrillion the
+opening section warned about.
+
+### The data and the design matrix
+
+We use the banking portfolio as the target, subtract the risk-free rate to work in excess returns, and
+split the sample at the end of 2009 so that the entire post-crisis period is held out. Both sides are
+standardised using training-sample moments only, so that the held-out months cannot leak information
+back into the estimation.
+
+**Reading the computation.** The standardisation uses the training mean and standard deviation for every column, including for the held-out block, which is what an honest forecasting exercise requires. The diagnostics printed at the end describe the geometry of the design rather than any model fitted to it.
+
+```{python}
+from pathlib import Path
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+rng_i = np.random.default_rng(2026)
+
+ind = pd.read_parquet(DATA / "ff_industry49_monthly.parquet").loc["1970-01":]
+rf_m = pd.read_parquet(DATA / "ff_factors_monthly.parquet")["rf"].reindex(ind.index)
+exc = ind.sub(rf_m, axis=0)
+
+TARGET, SPLIT = "banks", "2009-12"
+y_raw, X_raw = exc[TARGET], exc.drop(columns=[TARGET])
+ind_names = list(X_raw.columns)
+
+y_tr_raw, X_tr_raw = y_raw.loc[:SPLIT].to_numpy(), X_raw.loc[:SPLIT].to_numpy()
+y_te_raw, X_te_raw = y_raw.loc["2010-01":].to_numpy(), X_raw.loc["2010-01":].to_numpy()
+mx, sx = X_tr_raw.mean(0), X_tr_raw.std(0)
+my, sy = y_tr_raw.mean(), y_tr_raw.std()
+Xi, yi = (X_tr_raw - mx) / sx, (y_tr_raw - my) / sy
+Xi_te, yi_te = (X_te_raw - mx) / sx, (y_te_raw - my) / sy
+n_i, p_i = Xi.shape
+
+C_ind = np.corrcoef(Xi.T)
+iu = np.triu_indices(p_i, 1)
+ev_i = np.linalg.eigvalsh(Xi.T @ Xi / n_i)
+print(f"target: {TARGET}; {p_i} candidate industries; "
+      f"{n_i} training months {exc.index[0]:%Y-%m} to {SPLIT}, "
+      f"{len(yi_te)} held-out months to {exc.index[-1]:%Y-%m}")
+print(f"target monthly excess return: mean {y_tr_raw.mean():.4f}, sd {sy:.4f}")
+print(f"candidate correlations with the target: "
+      f"min {min(np.corrcoef(Xi[:, j], yi)[0,1] for j in range(p_i)):.3f}, "
+      f"max {max(np.corrcoef(Xi[:, j], yi)[0,1] for j in range(p_i)):.3f}")
+print(f"pairwise correlations among candidates: mean {np.abs(C_ind[iu]).mean():.3f}, "
+      f"max {np.abs(C_ind[iu]).max():.3f} "
+      f"({ind_names[iu[0][np.argmax(np.abs(C_ind[iu]))]]} and "
+      f"{ind_names[iu[1][np.argmax(np.abs(C_ind[iu]))]]})")
+print(f"condition number of the standardised X'X: {ev_i.max()/ev_i.min():.0f}")
+```
+
+The estimation sample is $480$ months from January 1970 to December 2009 and the held-out block is $199$
+months to July 2026, so roughly three fifths of the data are used for fitting and two fifths for
+scoring. The banking portfolio earned $0.0048$ per month in excess of the risk-free rate over the
+training period with a standard deviation of $0.0624$, a high monthly volatility that reflects how
+cyclical the industry is.
+
+The two correlation lines are the important ones. Every single candidate is positively correlated with
+the target, from a minimum of $0.148$ to a maximum of $0.809$, which is what a common equity factor
+does: there is no column here that is obviously irrelevant in the way eighteen of the twenty-five
+simulated factors were. Among the candidates themselves the average absolute correlation is $0.565$ and
+the largest is $0.876$, between business services and wholesale. The condition number of the
+standardised cross-product matrix is $454$, so the design has directions along which the data are about
+twenty times less informative than along others. This is a much harder selection problem than the
+simulated one, and the fact that it is harder is the point.
+
+### Running SSVS on forty-eight candidate industries
+
+The sampler is the same three-block Gibbs sweep written earlier, packaged as a function so that we can
+re-run it under different priors. The spike standard deviation is $\tau = 0.02$ and the slab factor is
+$c = 20$, so a coefficient is called excluded when it is within roughly two hundredths of a target
+standard deviation of zero and included when it is up to $0.4$ away, with a prior inclusion probability
+of $0.2$ meaning about ten of the forty-eight industries a priori.
+
+**Reading the computation.** The three blocks are identical in structure to the simulated version: the coefficient vector is drawn through a Cholesky factor of the posterior precision, the variance from its inverse-Gamma full conditional, and the indicators in one vectorised Bernoulli step. Only the data have changed.
+
+```{python}
+def ssvs_sampler(X, y, pi_prior=0.2, tau_s=0.02, c_s=20.0, alpha_0=3.0, delta_0=0.1,
+                 n_iter=8000, burn=2000, rng=None):
+    n_s, p_s = X.shape
+    XtX_s, Xty_s = X.T @ X, X.T @ y
+    log_prior_odds = np.log(pi_prior) - np.log1p(-pi_prior) - np.log(c_s)
+    slab_gain = 0.5 * (1.0 / tau_s ** 2 - 1.0 / (c_s * tau_s) ** 2)
+    beta_s, gamma_s, sig2 = np.zeros(p_s), np.ones(p_s, dtype=bool), float(np.var(y))
+    bd = np.empty((n_iter, p_s)); gd = np.empty((n_iter, p_s), dtype=bool)
+    sd = np.empty(n_iter)
+    for t in range(n_iter):
+        d_s = np.where(gamma_s, (c_s * tau_s) ** 2, tau_s ** 2)
+        L = np.linalg.cholesky(XtX_s / sig2 + np.diag(1.0 / d_s))
+        b1 = np.linalg.solve(L.T, np.linalg.solve(L, Xty_s / sig2))
+        beta_s = b1 + np.linalg.solve(L.T, rng.standard_normal(p_s))
+        r_s = y - X @ beta_s
+        sig2 = 1.0 / rng.gamma(alpha_0 + n_s / 2, 1.0 / (delta_0 + 0.5 * r_s @ r_s))
+        gamma_s = rng.random(p_s) < 1.0 / (1.0 + np.exp(
+            -(log_prior_odds + slab_gain * beta_s ** 2)))
+        bd[t], gd[t], sd[t] = beta_s, gamma_s, sig2
+    return bd[burn:], gd[burn:], sd[burn:]
+
+b_ind, g_ind, s2_ind = ssvs_sampler(Xi, yi, rng=rng_i)
+pip_i = g_ind.mean(axis=0)
+mean_i = b_ind.mean(axis=0)
+size_i = g_ind.sum(axis=1)
+print(f"kept {len(size_i)} draws; posterior sigma^2 {s2_ind.mean():.4f} "
+      f"(residual sd {np.sqrt(s2_ind.mean()):.4f} in target standard deviations)")
+print(f"model size: mean {size_i.mean():.2f}, median {np.median(size_i):.0f}, "
+      f"90% interval [{np.quantile(size_i,0.05):.0f}, {np.quantile(size_i,0.95):.0f}]")
+print(f"distinct visited models: {len(np.unique(g_ind, axis=0))}")
+```
+
+The posterior residual variance is $0.2279$ in units of the target's own variance, so the included
+industries between them explain about seventy-seven per cent of the banking portfolio's monthly
+variation and the residual standard deviation is $0.4774$ target standard deviations, or about $2.98$
+percentage points a month. The posterior mean model size is $7.42$ with a 90 per cent interval running
+from five to ten industries, so the posterior is not confident about how many industries belong, let
+alone which. Most instructive is the last line: across six thousand retained draws the chain visited
+$3{,}656$ distinct inclusion vectors. It is not hovering over one model and occasionally flirting with
+a neighbour; it is genuinely wandering, and the average of those wanderings is what the inclusion
+probabilities summarise.
+
+### Posterior inclusion probabilities and the median probability model
+
+**Reading the computation.** The correlation column is the raw correlation between each candidate and the target, included so that inclusion probabilities can be compared with the marginal association a screening exercise would have looked at.
+
+```{python}
+ordi = np.argsort(-pip_i)
+tbl = pd.DataFrame({
+    "industry": [ind_names[j] for j in ordi[:12]],
+    "PIP": pip_i[ordi[:12]].round(3),
+    "post mean": mean_i[ordi[:12]].round(3),
+    "post sd": b_ind[:, ordi[:12]].std(axis=0).round(3),
+    "corr with target": [round(float(np.corrcoef(Xi[:, j], yi)[0, 1]), 2)
+                         for j in ordi[:12]],
+})
+print(tbl.to_string(index=False))
+mpm_i = pip_i >= 0.5
+print(f"\nmedian probability model ({mpm_i.sum()} industries): "
+      f"{[ind_names[j] for j in np.where(mpm_i)[0]]}")
+print(f"remaining {p_i - mpm_i.sum()} candidates: max PIP {pip_i[~mpm_i].max():.3f}, "
+      f"mean PIP {pip_i[~mpm_i].mean():.3f}")
+```
+
+The median probability model keeps six industries: trading and financial services with an inclusion
+probability of $1.000$ and a posterior mean coefficient of $0.431$, insurance also at $1.000$ with
+$0.316$, paper at $0.982$ with $0.185$, steel at $0.881$ with $-0.148$, laboratory equipment at $0.611$
+with $-0.094$ and textiles at $0.553$ with $0.078$. The other forty-two candidates have a maximum
+inclusion probability of $0.359$ and an average of $0.057$, well below the prior value of $0.2$, so the
+data have argued most of the industry universe out of the regression.
+
+The economics is worth pausing on, because it is not what a naive screening would have produced. The
+column of raw correlations shows insurance at $0.81$, trading and financial services at $0.78$, and
+paper at $0.69$, but it also shows business services at $0.69$, transport at $0.71$ and household
+products at $0.67$, all of which the sampler discards with inclusion probabilities of $0.135$, $0.147$
+and $0.105$. Steel is the sharpest illustration: its raw correlation with banking returns is only
+$0.51$, the lowest of the six selected, and its posterior mean coefficient is $-0.148$, the opposite
+sign. It enters not because it moves with banks but because, once the financial industries have
+absorbed the common exposure, steel's remaining variation is a useful control for the cyclical component
+the financials over-represent. That is a conditional statement, and no amount of staring at marginal
+correlations would have produced it.
+
+**Reading the computation.** The left panel shows all forty-eight inclusion probabilities, coloured by whether they reach the median-probability threshold; the right panel is the posterior distribution of the number of included industries from the same draws.
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.4))
+cols = ["firebrick" if v >= 0.5 else "0.6" for v in pip_i]
+axes[0].bar(np.arange(p_i), pip_i, color=cols)
+axes[0].axhline(0.5, color="black", ls="--", lw=1, label="median-probability threshold")
+axes[0].axhline(0.2, color="C2", ls=":", lw=1.2, label="prior inclusion probability")
+axes[0].set_xticks(np.arange(p_i))
+axes[0].set_xticklabels(ind_names, rotation=90, fontsize=5)
+axes[0].set(ylabel="posterior inclusion probability",
+            title="PIPs for 48 candidate industries")
+axes[0].legend(fontsize=8)
+axes[1].hist(size_i, bins=np.arange(size_i.min(), size_i.max() + 2) - 0.5,
+             density=True, color="steelblue", alpha=0.85)
+axes[1].axvline(size_i.mean(), color="black", ls="--", lw=1,
+                label=f"mean {size_i.mean():.1f}")
+axes[1].set(xlabel="number of included industries", ylabel="posterior probability",
+            title="Posterior distribution of model size")
+axes[1].legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The left panel shows the shape a real selection problem has: six red bars, a long grey floor at or below
+$0.1$, and two or three grey bars in the awkward middle, the tallest being the residual industry
+category at $0.359$. The awkward middle is where the honest reporting happens, because a candidate with
+an inclusion probability of $0.36$ is neither in nor out and thresholding it either way throws away the
+posterior's actual opinion. The right panel shows that model size is spread over roughly four to twelve
+industries with a mode at seven, which is another way of saying that the posterior is not choosing a
+list at all: it is choosing a distribution over lists whose typical length is seven.
+
+::: {.callout-note collapse="true"}
+## Derivation: why a posterior inclusion probability is not a p-value, and what the median probability model optimises
+
+Start with what the two objects actually are. The posterior inclusion probability sums posterior model
+probability over every model containing the variable,
+$$
+\text{PIP}_j \;=\; \Pr(\gamma_j = 1 \mid y) \;=\; \sum_{\gamma : \gamma_j = 1} p(M_\gamma \mid y),
+$$
+a probability over models, conditional on the data we saw. A p-value is
+$\Pr\big(T(Y) \geq T(y_{obs}) \mid \gamma_j = 0\big)$, a probability over data sets we did not see,
+conditional on a hypothesis. The conditioning is reversed and the sample space is different, so no
+monotone transformation carries one into the other. Three practical consequences follow.
+
+First, the inclusion probability moves when the prior moves. Its odds are $\pi/(1-\pi)$ times a Bayes
+factor, so halving the prior inclusion probability shifts the log odds of every candidate by
+$\log[(0.1/0.9)/(0.2/0.8)] = -0.81$ at once, and the sweep later in this section shows the posterior
+mean model size falling from $7.46$ to $5.89$ as a result. A p-value has no such dependence, which
+sounds like an advantage until one remembers that the multiplicity problem the prior is solving does not
+go away by being ignored.
+
+Second, the inclusion probability of a variable depends on which other variables are in the candidate
+set, because a model containing a near-duplicate competes for the same posterior mass. Adding a
+near-copy of a candidate roughly halves its inclusion probability without changing anything about its
+relationship to the outcome. The corresponding p-value in a regression that also contains the near-copy
+does change too, but the marginal p-value from a univariate screening does not, and it is univariate
+screening that produces the factor zoo.
+
+Third, one minus the inclusion probability is not a frequentist false discovery rate, but it does have a
+clean Bayesian reading. For any selected set $S$, the posterior expected number of variables in $S$ that
+do not belong is
+$$
+\mathbb{E}\Big[\textstyle\sum_{j \in S}(1 - \gamma_j) \;\Big|\; y\Big]
+= \sum_{j \in S}\big(1 - \text{PIP}_j\big),
+$$
+directly by linearity of expectation. For the six industries selected above, with inclusion
+probabilities $1.000$, $1.000$, $0.982$, $0.881$, $0.611$ and $0.553$, this is
+$0 + 0 + 0.018 + 0.119 + 0.389 + 0.447 = 0.973$, so the posterior expects roughly one of the six to be
+a mistake, and it can even tell us which one it is most worried about.
+
+Now the median probability model. Barbieri and Berger showed that the set
+$\{j : \text{PIP}_j \geq 1/2\}$, not the single most probable model, minimises expected predictive
+squared error among single models under conditions that include an orthogonal design. The reason the
+threshold is exactly one half is elementary once the problem is set up. Suppose $X^\top X = n I_p$ and
+that a future predictor vector $x_f$ has $\mathbb{E}[x_f x_f^\top] = q I_p$. Let $\bar\beta$ denote the
+model-averaged posterior mean and $\hat\beta_\gamma$ the posterior mean under a single model $\gamma$.
+Expected squared prediction error decomposes as
+$$
+\mathbb{E}\big[(x_f^\top \hat\beta_\gamma - x_f^\top \beta)^2\big]
+= q\,\|\hat\beta_\gamma - \bar\beta\|^2 + \text{a term free of } \gamma,
+$$
+because the cross term vanishes when $\bar\beta$ is the posterior mean, the same orthogonality that
+makes the posterior mean optimal under squared loss in Lecture 1. With an orthogonal design and a
+point-mass spike, the posterior mean of the $j$-th coefficient in a model that includes it is a common
+value $b_j$ that does not depend on which other variables are present, so
+$\hat\beta_{\gamma,j} = \gamma_j b_j$ while $\bar\beta_j = \text{PIP}_j\, b_j$. The objective becomes
+$$
+q\sum_{j=1}^{p} b_j^2\big(\gamma_j - \text{PIP}_j\big)^2 ,
+$$
+a sum of independent terms, each minimised separately over $\gamma_j \in \{0,1\}$. Choosing
+$\gamma_j = 1$ costs $(1 - \text{PIP}_j)^2$ and choosing $\gamma_j = 0$ costs $\text{PIP}_j^2$, so
+inclusion wins exactly when $(1 - \text{PIP}_j)^2 < \text{PIP}_j^2$, that is when
+$\text{PIP}_j > 1/2$. The famous one-half threshold is nothing more than the point where those two
+squares cross.
+
+What the derivation assumed is what breaks in the application. With correlated columns the posterior
+mean of a coefficient depends on which other columns are in the model, so $\hat\beta_{\gamma,j}$ is not
+$\gamma_j b_j$ and the objective no longer separates. In the industry data the average absolute pairwise
+correlation is $0.565$, about as far from orthogonal as a design gets while remaining invertible, so the
+optimality result simply does not apply, and the numbers below confirm it: the model-averaged
+prediction beats the median probability model out of sample, by $0.7532$ against $0.7512$. The
+median probability model is a reasonable summary to report and a worse thing to forecast with than the
+posterior it came from.
+:::
+
+### How correlated industries split posterior mass
+
+If two candidates are close substitutes, a draw that includes one has little use for the other, and the
+posterior spreads its mass over models containing either rather than concentrating on models containing
+both. The way to see this is not in the marginal inclusion probabilities, which cannot express it, but
+in the joint distribution of the indicators.
+
+**Reading the computation.** The "if independent" column is the product of the two marginal inclusion probabilities, which is what the joint would be if the two indicators carried no information about each other. A "both" entry below it is the fingerprint of substitution; the "either" column reports how often the pair contributes at all.
+
+```{python}
+def pair_table(gd, pip, pairs):
+    rows = []
+    for a, b in pairs:
+        ja, jb = ind_names.index(a), ind_names.index(b)
+        both = float((gd[:, ja] & gd[:, jb]).mean())
+        rows.append({"pair": f"{a} / {b}", "corr": round(float(C_ind[ja, jb]), 2),
+                     "PIP A": round(float(pip[ja]), 3), "PIP B": round(float(pip[jb]), 3),
+                     "both": round(both, 3),
+                     "if independent": round(float(pip[ja] * pip[jb]), 3),
+                     "either": round(float((gd[:, ja] | gd[:, jb]).mean()), 3)})
+    return pd.DataFrame(rows)
+
+pairs_i = [("steel", "labeq"), ("bussv", "labeq"), ("txtls", "other"),
+           ("mach", "labeq"), ("fin", "insur")]
+print(pair_table(g_ind, pip_i, pairs_i).to_string(index=False))
+
+b_tight, g_tight, _ = ssvs_sampler(Xi, yi, pi_prior=0.01, rng=rng_i)
+pip_tight = g_tight.mean(axis=0)
+print(f"\nwith prior inclusion probability 0.01 the mean model size falls to "
+      f"{g_tight.sum(axis=1).mean():.2f}")
+print(pair_table(g_tight, pip_tight,
+                 [("steel", "labeq"), ("paper", "txtls")]).to_string(index=False))
+```
+
+Every pair in the first table appears together less often than independence would predict. Steel and
+laboratory equipment, correlated at $0.72$, appear together in $0.509$ of draws against $0.538$ under
+independence; business services and laboratory equipment, correlated at $0.81$, appear together in
+$0.068$ against $0.082$; machinery and laboratory equipment, correlated at $0.83$, in $0.029$ against
+$0.044$, a third less often than independence. The last row is the useful control: trading and financial
+services and insurance are correlated at $0.75$, yet both have inclusion probability $1.000$ and appear
+together in every draw. Correlation alone does not produce substitution. Substitution happens when two
+correlated candidates are competing for a marginal place in the model, and financials are not competing
+for anything, because the posterior wants them both unconditionally.
+
+That observation suggests the experiment in the second half of the chunk. Tightening the prior inclusion
+probability from $0.2$ to $0.01$ shrinks the mean model size from $7.42$ to $3.56$, which makes places
+in the model scarce and competition fierce. Under the tight prior, steel and laboratory equipment have
+inclusion probabilities of $0.478$ and $0.088$ but appear together in only $0.013$ of draws against
+$0.042$ under independence, a factor of more than three, while at least one of them is present in
+$0.554$. That last number is the honest summary of this pair: the posterior is reasonably confident that
+this cyclical-industrials exposure belongs in the regression and close to agnostic about which column
+should carry it. Reporting the two inclusion probabilities of $0.478$ and $0.088$ separately would
+suggest, misleadingly, that steel is a marginal call and laboratory equipment a clear exclusion.
+
+**Reading the computation.** The ten industries with the highest inclusion probability under the baseline prior are shown under both priors, so the bars can be compared candidate by candidate.
+
+```{python}
+fig, ax = plt.subplots()
+js = np.argsort(-pip_i)[:10]
+w = 0.38
+ax.barh(np.arange(len(js)) + w/2, pip_i[js], height=w, color="steelblue",
+        label="prior inclusion prob. 0.20")
+ax.barh(np.arange(len(js)) - w/2, pip_tight[js], height=w, color="firebrick",
+        label="prior inclusion prob. 0.01")
+ax.set_yticks(np.arange(len(js)))
+ax.set_yticklabels([ind_names[j] for j in js], fontsize=8)
+ax.set_xlabel("posterior inclusion probability")
+ax.set_title("Competition sharpens when the prior demands a shorter list")
+ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The figure shows the ordering surviving the change of prior while the levels collapse unevenly.
+Financials and insurance stay pinned at one under both priors, paper falls only from $0.982$ to
+$0.772$, but laboratory equipment falls from $0.611$ to $0.088$ and textiles from $0.553$ to $0.093$.
+The candidates that survive a twenty-fold tightening of the prior are the ones the data insist on; the
+ones that evaporate were being carried by the prior's willingness to admit ten industries rather than
+half of one. A referee asking which of your selected variables are robust is asking for exactly this
+picture.
+
+### Out of sample against continuous shrinkage and least squares
+
+The selection story is only half of the case. The other half is whether any of this forecasts. We score
+four predictors on the $199$ held-out months: the SSVS posterior mean, which averages over every model
+visited; the median probability model refitted by least squares on its six columns; a continuous
+shrinkage prior, which is the Normal prior of Lecture 6 with its penalty swept over a grid; and
+unrestricted least squares on all forty-eight industries.
+
+**Reading the computation.** The shrinkage penalty is chosen by its best value on the held-out block itself, which flatters it. SSVS is given no such advantage: its single number comes from the posterior fitted on the training sample alone.
+
+```{python}
+XtX_i, Xty_i = Xi.T @ Xi, Xi.T @ yi
+
+def oos_r2(b):
+    e = yi_te - Xi_te @ b
+    return 1.0 - e @ e / (yi_te @ yi_te)
+
+b_ols_i = np.linalg.solve(XtX_i, Xty_i)
+b_mpm_i = np.zeros(p_i)
+b_mpm_i[mpm_i] = np.linalg.solve(XtX_i[np.ix_(mpm_i, mpm_i)], Xty_i[mpm_i])
+lam_grid = np.geomspace(1.0, 5000.0, 60)
+r2_lam = np.array([oos_r2(np.linalg.solve(XtX_i + l * np.eye(p_i), Xty_i))
+                   for l in lam_grid])
+lam_star = lam_grid[int(np.argmax(r2_lam))]
+b_ridge_i = np.linalg.solve(XtX_i + lam_star * np.eye(p_i), Xty_i)
+print(pd.Series({"SSVS (model averaged)": oos_r2(mean_i),
+                 "SSVS median-probability model": oos_r2(b_mpm_i),
+                 "continuous shrinkage (best lambda)": r2_lam.max(),
+                 "OLS (all 48)": oos_r2(b_ols_i)},
+                name="held-out predictive R^2").round(4).to_string())
+print(f"best lambda {lam_star:.1f}; absolute weight on the "
+      f"{p_i - mpm_i.sum()} excluded industries: "
+      f"SSVS {np.abs(mean_i[~mpm_i]).sum():.3f}, "
+      f"shrinkage {np.abs(b_ridge_i[~mpm_i]).sum():.3f}, "
+      f"OLS {np.abs(b_ols_i[~mpm_i]).sum():.3f}")
+```
+
+The ordering is the one the theory predicts and the margins are larger than in the simulated example.
+Model-averaged SSVS reaches a held-out $R^2$ of $0.7532$, the median probability model $0.7512$,
+continuous shrinkage at its best penalty of $87.8$ reaches $0.7298$, and unrestricted least squares
+$0.7025$. Selection therefore buys about two and a third points of predictive $R^2$ over shrinkage and
+five over least squares, against the couple of points the simulated design produced, and it does so
+having been fitted on data from 1970 to 2009 and scored on 2010 to 2026, a period that includes a
+regime in which bank equity behaved very differently from the crisis years that ended the training
+sample.
+
+The last line explains where the gain comes from. Spread across the forty-two industries the
+median probability model excludes, SSVS places a total absolute weight of $0.446$, continuous shrinkage
+$1.093$ and least squares $1.637$. Least squares is carrying more than a full standard deviation of
+coefficient mass on industries that the posterior says contribute nothing, which is exactly the variance
+that hurts out of sample, and shrinkage removes two thirds of it without ever driving any of it close to
+zero.
+
+**Reading the computation.** The left panel accumulates squared forecast errors month by month, so a curve that rises more steeply is forecasting worse in that period; the right panel is the shrinkage sweep with the two reference lines drawn flat because they involve no penalty.
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2))
+for b, lbl, col in [(mean_i, "SSVS", "steelblue"),
+                    (b_ridge_i, "shrinkage", "darkorange"),
+                    (b_ols_i, "OLS", "0.55")]:
+    e = (yi_te - Xi_te @ b) ** 2
+    axes[0].plot(np.arange(1, len(e) + 1), np.cumsum(e), label=lbl, color=col, lw=1.4)
+axes[0].set(xlabel="held-out month", ylabel="cumulative squared forecast error",
+            title="Out-of-sample error, 2010-01 onwards")
+axes[0].legend(fontsize=8)
+axes[1].plot(lam_grid, r2_lam, color="darkorange", label="continuous shrinkage")
+axes[1].axhline(oos_r2(mean_i), color="steelblue", ls="--", label="SSVS (model averaged)")
+axes[1].axhline(oos_r2(b_ols_i), color="0.55", ls=":", label="OLS")
+axes[1].set_xscale("log")
+axes[1].set(xlabel=r"shrinkage penalty $\lambda$", ylabel="held-out predictive $R^2$",
+            title="Tuning the dense prior against a self-tuning sparse one")
+axes[1].legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+In the left panel the three curves separate steadily rather than in one episode, which is the
+comfortable case: the advantage is not an artefact of a single month. In the right panel the shrinkage
+curve rises from the least-squares value at small penalties, peaks near $\lambda = 88$, and falls away
+again as the penalty starts to crush the genuine exposures. Note where the curve sits relative to the
+dashed line: no value of $\lambda$ on the grid brings the dense prior up to the SSVS line. Unlike the
+simulated example, where the two were nearly tied, here the sparse prior wins at every tuning of its
+dense rival, which is worth taking seriously precisely because the illusion-of-sparsity argument would
+have predicted otherwise.
+
+### What the prior inclusion probability buys you
+
+The prior inclusion probability $\pi$ is the one knob that directly encodes how many industries we
+expect to matter, and its effect on the reported answer deserves to be measured rather than assumed.
+
+**Reading the computation.** Each row re-runs the sampler from scratch at a different prior inclusion probability. The shorter chains are enough for the summaries reported here, and every other setting is held fixed.
+
+```{python}
+pi_grid = [0.02, 0.05, 0.1, 0.2, 0.4, 0.6]
+sweep = []
+for pv in pi_grid:
+    bs, gs, _ = ssvs_sampler(Xi, yi, pi_prior=pv, n_iter=5000, burn=1500, rng=rng_i)
+    pp = gs.mean(axis=0)
+    sweep.append({"prior pi": pv, "mean size": gs.sum(axis=1).mean(),
+                  "median size": float(np.median(gs.sum(axis=1))),
+                  "MPM size": int((pp >= 0.5).sum()),
+                  "held-out R^2": oos_r2(bs.mean(axis=0))})
+sweep = pd.DataFrame(sweep)
+print(sweep.round(4).to_string(index=False))
+```
+
+The posterior mean model size rises monotonically from $4.07$ at $\pi = 0.02$ to $15.07$ at
+$\pi = 0.6$, and the median probability model grows from four industries to eight. The held-out $R^2$
+does not move: it runs $0.7575$, $0.7533$, $0.7493$, $0.7493$, $0.7509$, $0.7491$ across the six
+settings, a total range of eight thousandths while the reported model size nearly quadruples. That
+contrast is the single most useful thing in this section. The prior inclusion probability is a statement
+about how long a list you want to publish, and it determines the length of the list almost completely
+while determining the quality of the forecast almost not at all.
+
+Notice also that the posterior does not simply obey the prior. The prior mean model size is $p\pi$,
+which is $0.96$ at $\pi = 0.02$ and $28.8$ at $\pi = 0.6$; the posterior means are $4.07$ and $15.07$.
+The data pull the small prior up by a factor of four and the large prior down by nearly half, so there
+is real information about model size in these returns. It is just far less information than about
+forecasting.
+
+**Reading the computation.** Two quantities share the horizontal axis. The left vertical axis counts industries; the right one is the held-out predictive $R^2$, plotted on a fixed range so that its flatness is visible rather than magnified.
+
+```{python}
+fig, ax = plt.subplots()
+ax.plot(sweep["prior pi"], sweep["mean size"], "o-", color="steelblue",
+        label="posterior mean model size")
+ax.plot(sweep["prior pi"], sweep["MPM size"], "s--", color="firebrick",
+        label="size of the median-probability model")
+ax.plot(sweep["prior pi"], np.array(pi_grid) * p_i, ":", color="0.5",
+        label=r"prior mean size $p\pi$")
+ax.set_xlabel("prior inclusion probability"); ax.set_ylabel("number of industries")
+ax2 = ax.twinx(); ax2.grid(False)
+ax2.plot(sweep["prior pi"], sweep["held-out R^2"], "^-", color="darkgreen",
+         label="held-out $R^2$ (right axis)")
+ax2.set_ylabel("held-out predictive $R^2$")
+ax2.set_ylim(0.70, 0.80)
+ax.legend(fontsize=8, loc="upper left"); ax2.legend(fontsize=8, loc="lower right")
+ax.set_title("The prior sets the reported model size, not the forecast")
+plt.tight_layout(); plt.show()
+```
+
+The green line is flat against a range that is ten times its own variation, while the blue and red lines
+climb steadily and the dotted prior line climbs faster than either. Read from left to right, the picture
+says that a researcher who wants a short list and a researcher who wants a long one will both get what
+they asked for, will both forecast equally well, and will report different findings. The remedy is the
+one this chapter has argued for throughout: publish the sweep, not the row of it you liked.
+
+## A second example: which lags matter for industrial production growth?
+
+Selection is not only a finance problem. A forecaster building a monthly model for industrial production
+growth faces the same question in a smaller and more interpretable form: how many own lags, and which
+macroeconomic variables at which lags, deserve to be in the equation? The candidate set below is twelve
+own lags of industrial production growth together with six lags each of consumer price inflation, the
+change in the unemployment rate, the term spread and the change in the federal funds rate, for
+thirty-six candidates in all. Lags of the same variable are, by construction, strongly correlated with
+one another, which makes this a clean laboratory for the substitution effects the industry data showed
+more faintly.
+
+**Reading the computation.** Every regressor is a lag, so nothing here is contemporaneous and the design is one a forecaster could actually have used in real time. Both sides are standardised so the coefficients are comparable across variables measured in different units.
+
+```{python}
+fred_v = pd.read_parquet(DATA / "fred_macro_monthly.parquet").dropna()
+ipg = 100 * np.log(fred_v["industrial_prod"]).diff()
+infl = 100 * np.log(fred_v["cpi"]).diff()
+d_unemp = fred_v["unemployment"].diff()
+spread = fred_v["yield_10y"] - fred_v["fed_funds"]
+d_ff = fred_v["fed_funds"].diff()
+
+lag_cols = {}
+for L in range(1, 13):
+    lag_cols[f"ipg_L{L}"] = ipg.shift(L)
+for series, tag in [(infl, "infl"), (d_unemp, "dunemp"), (spread, "spread"), (d_ff, "dff")]:
+    for L in range(1, 7):
+        lag_cols[f"{tag}_L{L}"] = series.shift(L)
+lags = pd.DataFrame(lag_cols)
+lags["y"] = ipg
+lags = lags.dropna()
+lag_names = [c for c in lags.columns if c != "y"]
+Xm_raw, ym_raw = lags[lag_names].to_numpy(), lags["y"].to_numpy()
+Xm = (Xm_raw - Xm_raw.mean(0)) / Xm_raw.std(0)
+ym = (ym_raw - ym_raw.mean()) / ym_raw.std()
+print(f"{len(ym)} months, {lags.index[0]:%Y-%m} to {lags.index[-1]:%Y-%m}, "
+      f"{len(lag_names)} candidate lags")
+
+b_m, g_m, s2_m = ssvs_sampler(Xm, ym, pi_prior=0.2, n_iter=8000, burn=2000, rng=rng_i)
+pip_m, mean_m = g_m.mean(axis=0), b_m.mean(axis=0)
+om = np.argsort(-pip_m)
+print(pd.DataFrame({"lag": [lag_names[j] for j in om[:12]],
+                    "PIP": pip_m[om[:12]].round(3),
+                    "post mean": mean_m[om[:12]].round(3)}).to_string(index=False))
+print(f"model size: mean {g_m.sum(axis=1).mean():.2f}, "
+      f"median-probability model: {[lag_names[j] for j in np.where(pip_m >= 0.5)[0]]}")
+js1, js2 = lag_names.index("spread_L1"), lag_names.index("spread_L2")
+print(f"spread lags 1 and 2: posterior means {mean_m[js1]:+.3f} and {mean_m[js2]:+.3f}, "
+      f"sum {mean_m[js1] + mean_m[js2]:+.3f}, sample correlation "
+      f"{np.corrcoef(Xm[:, js1], Xm[:, js2])[0,1]:.3f}, joint inclusion "
+      f"{(g_m[:, js1] & g_m[:, js2]).mean():.3f}")
+for nm in ("dunemp_L1", "dunemp_L2", "dunemp_L3"):
+    print(f"raw correlation of {nm} with IP growth: "
+          f"{np.corrcoef(Xm[:, lag_names.index(nm)], ym)[0, 1]:+.3f}")
+```
+
+The sample is $785$ months from February 1961 to July 2026 and the median probability model keeps seven
+of the thirty-six lags: the first and third own lags, the second and third lags of the unemployment
+change, the first two lags of the term spread and the first lag of the funds rate change. Own
+persistence is the strongest single effect, with the first lag at an inclusion probability of $1.000$
+and a coefficient of $0.215$ standard deviations. The second lag of the unemployment change is also at
+$1.000$ with a coefficient of $+0.205$, and the positive sign is worth a sentence: the raw correlation
+between industrial production growth and the unemployment change one month earlier is $-0.136$, while
+at two lags it is $+0.114$, so what the model has picked up is a rebound, output falling as
+unemployment rises and then recovering a little two months later, rather than a leading indicator with
+the intuitive sign.
+
+The term spread supplies the clearest illustration of correlated candidates in the whole chapter. Its
+first two lags have posterior means $+0.626$ and $-0.492$, they are correlated at $0.955$, and they
+appear together in $0.910$ of draws. Individually each coefficient is large, roughly three times the
+own-lag effect, and their sum is only $+0.135$. A regression whose two adjacent coefficients on a
+near-random-walk variable are large with opposite signs is not saying that last month's spread matters
+enormously; it is saying that the change in the spread matters, because
+$0.626\,s_{t-1} - 0.492\,s_{t-2}$ is $0.492(s_{t-1} - s_{t-2}) + 0.134\,s_{t-1}$ to three decimals. The
+posterior has found, without being told, that a steepening curve predicts stronger industrial
+production next month. This is complementarity rather than substitution, the mirror image of the steel
+and laboratory equipment pair: two correlated candidates that the posterior wants together because
+their difference carries the signal, so their joint inclusion probability of $0.910$ is close to the
+smaller of the two marginals rather than far below their product.
+
+**Reading the computation.** Colour groups the candidates by the variable they lag, so that blocks of adjacent bars can be read as a lag polynomial rather than as thirty-six unrelated candidates.
+
+```{python}
+fig, ax = plt.subplots(figsize=(9, 4.2))
+grp = ["own lag" if s.startswith("ipg") else "inflation" if s.startswith("infl")
+       else "unemployment" if s.startswith("dunemp")
+       else "term spread" if s.startswith("spread") else "funds rate" for s in lag_names]
+pal = {"own lag": "steelblue", "inflation": "darkorange", "unemployment": "firebrick",
+       "term spread": "darkgreen", "funds rate": "purple"}
+ax.bar(np.arange(len(lag_names)), pip_m, color=[pal[g] for g in grp])
+ax.axhline(0.5, color="black", ls="--", lw=1)
+ax.set_xticks(np.arange(len(lag_names)))
+ax.set_xticklabels(lag_names, rotation=90, fontsize=6)
+ax.set_ylabel("posterior inclusion probability")
+ax.set_title("Which lags matter for industrial production growth")
+handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in pal.values()]
+ax.legend(handles, list(pal.keys()), fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The picture is the one a time-series economist would hope for. The blue own-lag block decays, with lags
+one and three above the threshold, lag four at $0.250$ and almost everything beyond lag six flat against
+the axis, the exception being a curious bump at lag ten with an inclusion probability of $0.446$ that
+sits just under the threshold and is the sort of thing one would want to see survive a different sample
+before believing it. The orange inflation block is essentially empty, the highest being the first lag at
+$0.291$, which says that monthly consumer price inflation carries no information about next month's
+industrial production once the real and financial variables are in. The red unemployment block and the
+green spread block each have two tall bars at short lags and nothing after, and the single purple bar at
+the first lag of the funds rate change completes the picture: a short-memory model with output
+persistence, labour market information and two financial variables, selected from thirty-six candidates
+without anyone choosing a lag length by hand.
+
+
 ## Selecting observed factors versus learning latent factors
 
 SSVS asks which columns of an observed design matrix should enter a regression.
@@ -580,6 +1341,25 @@ coefficient, and SSVS turns it into a three-block Gibbs sampler whose indicator 
 and spike densities at the current draw. Inclusion probabilities and the median-probability model summarise the
 posterior but become unstable when candidates are near-duplicates, and out-of-sample performance separates sparse from
 dense priors only weakly, so sparsity is a prior belief rather than a finding.
+
+Integrating the coefficient out of the indicator's conditional turns that odds ratio into a Bayes factor
+times prior odds, whose Occam term $\sqrt{(1+v_0 S_j/\sigma^2)/(1+v_1 S_j/\sigma^2)}$ goes to zero as the
+slab widens, so an uninformative slab votes against inclusion rather than staying neutral; the same
+effect appears in the g-prior marginal likelihood as the per-variable penalty $(1+g)^{-1/2}$, which on
+the industry design of this chapter requires a new regressor to raise the in-sample $R^2$ by at least
+$0.0039$ before it earns its place. On forty-eight real industry portfolios explaining bank returns, the
+sampler visits $3{,}656$ distinct models in six thousand draws and lands on a median probability model of
+six industries whose posterior expected number of false inclusions is $0.973$, and the correlated
+candidates behave exactly as the theory says: steel and laboratory equipment appear together far less
+often than independence would predict while financials and insurance always appear together, because
+substitution needs competition for a scarce slot and not merely correlation. Out of sample the
+model-averaged posterior reaches a held-out $R^2$ of $0.7532$ against $0.7298$ for the best-tuned
+continuous shrinkage prior and $0.7025$ for least squares, while sweeping the prior inclusion
+probability from $0.02$ to $0.6$ moves the reported model size from $4.07$ to $15.07$ and the held-out
+$R^2$ by eight thousandths, which is the sharpest available statement of what the prior actually
+controls. The macroeconomic companion makes the correlated-candidate point in reverse: the first two
+lags of the term spread enter together in $0.910$ of draws with coefficients $+0.626$ and $-0.492$,
+because what predicts industrial production is their difference rather than either level.
 
 
 

@@ -333,6 +333,655 @@ This makes the regression–allocation connection tangible. The full method and
 its empirical results belong to the paper; the identity is a reading extension,
 while the scheduled exercise focuses on expected utility using predictive draws.
 
+## A real allocation: the three Fama-French factors since 1970
+
+Everything so far has run on four simulated assets, which is fine for seeing the mechanics
+and useless for judging whether any of it matters. We now put the same two rules on real
+monthly data and let them trade.
+
+The assets are the three Fama-French factors, the excess return on the market, the size
+factor and the value factor, taken from the monthly file and measured from January 1970
+onwards. Three reasons make this the right test bed rather than, say, forty-nine industry
+portfolios. First, all three are excess returns on zero-cost or self-financing positions,
+so an unconstrained mean-variance weight has a direct reading as leverage on a traded
+strategy, and a weight of 0.7 on the market means seventy cents of market exposure per
+euro of wealth. Second, with only three assets the sample covariance matrix is well
+conditioned, as we verify below, so whatever damage the plug-in rule does here comes from
+estimating three expected returns and not from inverting a nearly singular matrix; that
+isolates the effect the chapter is about. Third, the second application later in this
+section needs exactly these three series, because the question of how a belief in the
+CAPM tilts a portfolio is a question about the size and value factors. The 1970 start
+date is the one at which the industry file used for comparison is complete, so the two
+exercises cover the same period.
+
+```{python}
+from pathlib import Path
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+rng_ff = np.random.default_rng(20260113)
+
+ff_m = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
+F_ff = ff_m.loc["1970-01":, ["mkt_rf", "smb", "hml"]].dropna()
+R_ff = F_ff.to_numpy()
+T_ff, n_ff = R_ff.shape
+mu_ff, S_ff = R_ff.mean(axis=0), np.cov(R_ff, rowvar=False)
+ev_ff = np.linalg.eigvalsh(S_ff)
+
+desc_ff = pd.DataFrame({
+    "mean % p.a.": mu_ff * 1200,
+    "vol % p.a.": np.sqrt(np.diag(S_ff)) * np.sqrt(12) * 100,
+    "Sharpe p.a.": mu_ff / np.sqrt(np.diag(S_ff)) * np.sqrt(12),
+}, index=F_ff.columns)
+print(f"{T_ff} months, {F_ff.index[0]:%Y-%m} to {F_ff.index[-1]:%Y-%m}, {n_ff} assets")
+print(desc_ff.round(3))
+print(f"condition number of the sample covariance: {ev_ff.max() / ev_ff.min():.2f}")
+print(F_ff.corr().round(3))
+```
+
+The market earned 7.50 per cent a year in excess of cash with a volatility of 15.85 per
+cent, a Sharpe ratio of 0.473. Value earned 3.74 per cent at a volatility of 10.63, a
+Sharpe ratio of 0.351, and size earned almost nothing, 0.96 per cent a year at a
+volatility of 10.51, a Sharpe ratio of 0.091 that fifty-seven years of data cannot
+distinguish from zero. The condition number of the sample covariance is 2.92, which is
+about as benign as a covariance matrix ever gets, and the correlations are small: the
+market and size move together at 0.275, the market and value against each other at
+-0.221. This is the easy case. Whatever goes wrong below is not a matrix-inversion
+pathology.
+
+The plug-in rule on the full sample asks for 0.731 in the market, 0.003 in size and 0.903
+in value, gross leverage 1.64. The value position is larger than the market position,
+which is the first warning sign: the rule is confident about a factor whose annual premium
+it measures with a standard error of about 1.4 percentage points.
+
+### What the predictive distribution does to those weights
+
+To integrate over parameter uncertainty we need a prior. Writing the asset return as a
+regression on a constant, $r_t = \beta + \varepsilon_t$ with
+$\varepsilon_t \sim N(0, \sigma^2)$, puts us back in the notation of Lecture 2 exactly:
+$\beta \mid \sigma^2 \sim N(b_0, \sigma^2 B_0)$ and $\sigma^2 \sim IG(\alpha_0, \delta_0)$.
+The derivation below works that scalar case out in full, because it is where the famous
+$(1 + 1/T)$ factor comes from and where you can see it rather than be told it.
+
+::: {.callout-note collapse="true"}
+## Derivation: the predictive mean and variance under the NIG prior
+
+Take one risky asset and $T$ observed excess returns $r_1, \dots, r_T$. Write the model as
+a regression on a constant, $y = X\beta + \varepsilon$ with $y = (r_1, \dots, r_T)'$,
+$X = \iota$ the $T$-vector of ones, $\beta = \mu$ the unknown expected return, and
+$\varepsilon \sim N(0, \sigma^2 I_T)$. The course's conjugate prior is
+$$
+\beta \mid \sigma^2 \sim N(b_0, \sigma^2 B_0), \qquad
+\sigma^2 \sim IG(\alpha_0, \delta_0),
+$$
+so that $p(\beta, \sigma^2) = p(\beta \mid \sigma^2) p(\sigma^2)$ and the posterior stays
+in the same family. Note $X'X = T$ and $X'y = T\bar r$ with $\bar r$ the sample mean.
+
+Step 1, the posterior of $\beta$ given $\sigma^2$. Multiplying the Gaussian likelihood by
+the Gaussian prior and completing the square in $\beta$ gives the familiar pair
+$$
+B_T = \big(B_0^{-1} + X'X\big)^{-1} = \frac{1}{B_0^{-1} + T},
+\qquad
+b_T = B_T\big(B_0^{-1} b_0 + X'y\big)
+    = \frac{B_0^{-1} b_0 + T\bar r}{B_0^{-1} + T},
+$$
+and $\beta \mid \sigma^2, y \sim N(b_T, \sigma^2 B_T)$. The posterior mean is a
+precision-weighted average of the prior mean and the sample mean, and the $\sigma^2$ in
+front of $B_T$ is what keeps the pair conjugate.
+
+Step 2, the posterior of $\sigma^2$. Collecting the leftover terms from the same
+completion of the square gives $\sigma^2 \mid y \sim IG(\alpha_T, \delta_T)$ with
+$$
+\alpha_T = \alpha_0 + \frac{T}{2},
+\qquad
+\delta_T = \delta_0 + \frac{1}{2}\Big( y'y + b_0' B_0^{-1} b_0 - b_T' B_T^{-1} b_T \Big).
+$$
+The posterior mean of the variance is $E[\sigma^2 \mid y] = \delta_T / (\alpha_T - 1)$,
+which for a diffuse prior and large $T$ is close to the sample variance.
+
+Step 3, the predictive distribution conditional on $\sigma^2$. Next period's return is
+$r_{T+1} = \beta + \varepsilon_{T+1}$ where $\varepsilon_{T+1} \sim N(0, \sigma^2)$ is a
+fresh shock, independent of the data and therefore of the posterior of $\beta$. A sum of
+two independent Normals is Normal with the variances added, so
+$$
+r_{T+1} \mid \sigma^2, y \sim N\big(b_T, \; \sigma^2(1 + B_T)\big).
+$$
+Already the structure is visible. The $\sigma^2$ is the shock we would face even knowing
+$\mu$; the $\sigma^2 B_T$ is the extra spread contributed by not knowing $\mu$.
+
+Step 4, integrating out $\sigma^2$. Write $c = 1 + B_T$ and multiply the Normal by the
+inverse-gamma density,
+$$
+p(r_{T+1} \mid y) = \int_0^\infty
+\frac{1}{\sqrt{2\pi \sigma^2 c}}
+\exp\!\Big(-\frac{(r_{T+1} - b_T)^2}{2\sigma^2 c}\Big)
+\cdot \frac{\delta_T^{\alpha_T}}{\Gamma(\alpha_T)} (\sigma^2)^{-\alpha_T - 1}
+\exp\!\Big(-\frac{\delta_T}{\sigma^2}\Big)\, d\sigma^2 .
+$$
+Collect the powers of $\sigma^2$, which give $(\sigma^2)^{-\alpha_T - 3/2}$, and collect
+the two exponents, which give $-\big[\delta_T + (r_{T+1} - b_T)^2/(2c)\big]/\sigma^2$.
+What is left inside the integral is an unnormalised inverse-gamma density with shape
+$\alpha_T + \tfrac12$ and scale $\delta_T + (r_{T+1} - b_T)^2/(2c)$, so the integral equals
+$\Gamma(\alpha_T + \tfrac12)$ divided by that scale raised to the power $\alpha_T + \tfrac12$.
+Dropping every factor that does not involve $r_{T+1}$,
+$$
+p(r_{T+1} \mid y) \;\propto\;
+\Big[\delta_T + \frac{(r_{T+1} - b_T)^2}{2c}\Big]^{-(\alpha_T + 1/2)}
+\;\propto\;
+\Big[1 + \frac{(r_{T+1} - b_T)^2}{2 c\, \delta_T}\Big]^{-(\alpha_T + 1/2)} .
+$$
+Compare this with the Student-$t$ kernel
+$[1 + (r-m)^2/(\nu s^2)]^{-(\nu+1)/2}$. Matching the exponent gives $\nu = 2\alpha_T$, and
+matching the quadratic gives $\nu s^2 = 2 c\, \delta_T$, hence $s^2 = c\,\delta_T/\alpha_T$.
+So the predictive distribution is
+$$
+r_{T+1} \mid y \sim t_{2\alpha_T}\Big(b_T, \; (1 + B_T)\frac{\delta_T}{\alpha_T}\Big).
+$$
+
+Step 5, mean and variance. A $t_\nu(m, s^2)$ variable has mean $m$ for $\nu > 1$ and
+variance $s^2 \nu/(\nu - 2)$ for $\nu > 2$. Therefore
+$$
+E[r_{T+1} \mid y] = b_T,
+\qquad
+\operatorname{Var}(r_{T+1} \mid y)
+= (1 + B_T)\,\frac{\delta_T}{\alpha_T}\cdot\frac{2\alpha_T}{2\alpha_T - 2}
+= (1 + B_T)\,\frac{\delta_T}{\alpha_T - 1}
+= (1 + B_T)\, E[\sigma^2 \mid y].
+$$
+Now let the prior on $\beta$ become diffuse, $B_0^{-1} \to 0$, so that $B_T \to 1/T$ and
+$b_T \to \bar r$. The predictive variance becomes
+$$
+\operatorname{Var}(r_{T+1} \mid y) = \Big(1 + \frac{1}{T}\Big) E[\sigma^2 \mid y],
+$$
+which is the plug-in variance multiplied by $1 + 1/T$. The factor is exactly the ratio of
+two pieces of the same total: one unit of shock variance we could never avoid, plus
+$1/T$ of a unit because the mean was estimated from $T$ observations and the standard
+error of a sample mean is $\sigma/\sqrt{T}$, whose square is $\sigma^2/T$. Averaging the
+Normal predictive over the posterior of $\sigma^2$ also turns it into a $t$ with
+$2\alpha_T$ degrees of freedom, which adds tail weight on top of the variance inflation.
+Nothing here required a special trick: the extra variance is the variance of the posterior
+of the mean, and it falls at rate $1/T$ because that is the rate at which a posterior for a
+mean concentrates.
+
+With $n$ assets the algebra is the same with matrices. The conjugate pair becomes
+$\mu \mid \Sigma \sim N(m_0, \Sigma/k_0)$ and $\Sigma \sim IW(\nu_0, S_0)$, the
+one-asset prior precision $B_0^{-1}$ turning into the prior sample size $k_0$ and the
+inverse gamma turning into an inverse Wishart. The posterior is
+$$
+k_T = k_0 + T, \qquad m_T = \frac{k_0 m_0 + T\bar r}{k_0 + T}, \qquad \nu_T = \nu_0 + T,
+$$
+$$
+S_T = S_0 + \sum_{t=1}^T (r_t - \bar r)(r_t - \bar r)'
+      + \frac{k_0 T}{k_0 + T}(\bar r - m_0)(\bar r - m_0)',
+$$
+and the predictive distribution is multivariate $t$ with $\nu_T - n + 1$ degrees of
+freedom, location $m_T$ and covariance
+$$
+\Sigma_{\text{pred}} = \Big(1 + \frac{1}{k_T}\Big)\frac{S_T}{\nu_T - n - 1}.
+$$
+Setting $n = 1$, $k_0 = B_0^{-1}$, $\nu_0 = 2\alpha_0$ and $S_0 = 2\delta_0$ reproduces
+Step 5 line for line, which is the check worth doing once so that the two parameterisations
+stop looking like different models.
+:::
+
+The prior we use is deliberately mild but genuinely informative about the means: $m_0 = 0$,
+so that before seeing data we do not claim any factor earns a premium; $k_0 = 24$, so that
+the prior mean carries the weight of two years of data against the sample's fifty-seven;
+$\nu_0 = n + 5$ and $S_0 = \nu_0 \times 0.05^2 I$, a prior centred on a monthly volatility
+of five per cent, about 17 per cent a year, which is the right order of magnitude for a
+diversified equity position. None of these is tuned to the outcome, and the backtest below
+never lets the prior see data from the future.
+
+The second derivation is the one that says what the inflated covariance does to the
+weights, and it is two lines long, which is the point.
+
+::: {.callout-note collapse="true"}
+## Derivation: the mean-variance solution and why extra variance scales the weights down
+
+The investor maximises $f(w) = w'm - \frac{\gamma}{2} w' V w$ over $w \in \mathbb{R}^n$,
+where $m$ is the mean of the distribution being maximised against and $V$ its covariance.
+Differentiate with respect to the vector $w$. The first term is linear, so its gradient is
+$m$. The second is a quadratic form with symmetric $V$, so $\partial (w'Vw)/\partial w =
+2Vw$ and the gradient of the second term is $\gamma V w$. Setting the gradient to zero,
+$$
+m - \gamma V w = 0 \quad \Longrightarrow \quad w^\star = \frac{1}{\gamma} V^{-1} m .
+$$
+The second derivative is $-\gamma V$, negative definite whenever $V$ is positive definite
+and $\gamma > 0$, so the stationary point is the maximum and not a saddle.
+
+Now compare two investors who agree on the mean but disagree on the covariance, one using
+the plug-in $S$ and the other the predictive $\Sigma_{\text{pred}}$. Suppose the predictive
+covariance is a scalar multiple of the plug-in one, $\Sigma_{\text{pred}} = \kappa S$ with
+$\kappa > 1$, which is exactly the diffuse-prior case where
+$\kappa = (1 + 1/T)(T-1)/(T-n-2)$. Then
+$$
+w^\star_{\text{pred}} = \frac{1}{\gamma}(\kappa S)^{-1} m
+= \frac{1}{\kappa}\cdot \frac{1}{\gamma} S^{-1} m
+= \frac{1}{\kappa}\, w^\star_{\text{plug}} .
+$$
+Every weight is multiplied by the same number $1/\kappa < 1$. The direction of the
+portfolio, which asset is long and which is short and in what proportion, is untouched;
+only its size changes. Parameter uncertainty under a diffuse prior is therefore pure
+de-levering, and the amount of de-levering is
+$$
+1 - \frac{1}{\kappa} \;=\; 1 - \frac{T(T-n-2)}{(T+1)(T-1)} \;\approx\; \frac{n+1}{T}
+$$
+to first order in $1/T$, so with $T = 120$ months and $n = 3$ assets the position shrinks
+by roughly three per cent and with $T = 24$ months by roughly seventeen. That is the whole
+effect of a diffuse-prior Bayesian correction, and it is small, which is why the
+informative prior on $m$ matters more in practice: when $m_0 = 0$ and $k_0 > 0$, the
+predictive mean $m_T$ is itself shrunk toward zero, the direction of the portfolio changes
+too, and the correction is no longer a pure rescaling.
+:::
+
+```{python}
+k0_ff, m0_ff = 24.0, np.zeros(n_ff)
+nu0_ff, S0_ff = n_ff + 5.0, (n_ff + 5.0) * np.diag(np.full(n_ff, 0.05 ** 2))
+
+def niw_predictive(R_sample):
+    """Predictive mean and covariance of the next return under the conjugate NIW prior."""
+    T_s, n_s = R_sample.shape
+    rbar = R_sample.mean(axis=0)
+    scatter = (R_sample - rbar).T @ (R_sample - rbar)
+    kT = k0_ff + T_s
+    mT = (k0_ff * m0_ff + T_s * rbar) / kT
+    nuT = nu0_ff + T_s
+    d = (rbar - m0_ff)[:, None]
+    ST = S0_ff + scatter + (k0_ff * T_s / kT) * (d @ d.T)
+    return mT, ST * (1 + 1 / kT) / (nuT - n_s - 1)
+
+w_plug_ff = mv_weights(mu_ff, S_ff, gamma)
+m_pred_ff, C_pred_ff = niw_predictive(R_ff)
+w_bayes_ff = mv_weights(m_pred_ff, C_pred_ff, gamma)
+
+comp_ff = pd.DataFrame({"plug-in": w_plug_ff, "Bayes predictive": w_bayes_ff},
+                       index=F_ff.columns)
+print(comp_ff.round(4))
+print(f"gross leverage: plug-in {np.abs(w_plug_ff).sum():.3f}, "
+      f"Bayes {np.abs(w_bayes_ff).sum():.3f}")
+print("predictive mean % p.a.:", np.round(m_pred_ff * 1200, 3),
+      " sample mean % p.a.:", np.round(mu_ff * 1200, 3))
+print("ratio of predictive to sample variances:",
+      np.round(np.diag(C_pred_ff) / np.diag(S_ff), 4))
+```
+
+On the full sample the two rules barely differ, and that is worth saying out loud rather
+than hiding. With 679 months the predictive variances exceed the sample variances by between
+0.9 and 2.6 per cent, the $(1+1/T)$ factor with $T$ near seven hundred plus the small
+contribution of the prior scale $S_0$, and the prior on the mean carries 24 months against
+679, so the predictive means are shrunk toward zero by roughly three and a half per cent. The weights move correspondingly little. The
+Bayesian correction is not a full-sample story. It is a short-sample story, and an investor
+in 1980 had exactly that problem.
+
+### An expanding-window backtest
+
+The honest test is to give each rule only the data an investor would have had. We start in
+January 1980 with the first ten years as an estimation sample, compute weights, hold them
+for one month, record the realised excess return, add that month to the estimation sample
+and repeat until the data run out. Four rules compete: the plug-in, the Bayes predictive,
+a fifty-fifty blend of the plug-in weights with the equal-weight portfolio, and the
+equal-weight portfolio itself, one third in each factor, which never estimates anything and
+is the benchmark that so much of the literature finds hard to beat.
+
+Turnover is the average across months of $\sum_j |w_{j,t} - w_{j,t-1}|$, the gross amount
+of trading each rebalancing requires. The maximum drawdown is computed on the compounded
+wealth path of the strategy's excess return, and the certainty equivalent is
+$\bar r_p - \tfrac{\gamma}{2}\,\widehat{\operatorname{Var}}(r_p)$ evaluated on the realised
+out-of-sample series, which is the mean-variance investor's own scorecard applied to what
+actually happened.
+
+```{python}
+burn_ff = 120
+w_ew_ff = np.full(n_ff, 1.0 / n_ff)
+rule_names = ["plug-in", "Bayes predictive", "shrink to equal weight", "equal weight"]
+W_hist = {k: [] for k in rule_names}
+r_hist = {k: [] for k in rule_names}
+dates_oos = []
+
+for t in range(burn_ff, T_ff):
+    R_sub = R_ff[:t]
+    w_p = mv_weights(R_sub.mean(axis=0), np.cov(R_sub, rowvar=False), gamma)
+    w_b = mv_weights(*niw_predictive(R_sub), gamma)
+    w_s = 0.5 * w_p + 0.5 * w_ew_ff
+    for name, w in zip(rule_names, [w_p, w_b, w_s, w_ew_ff]):
+        W_hist[name].append(w)
+        r_hist[name].append(float(w @ R_ff[t]))
+    dates_oos.append(F_ff.index[t])
+
+dates_oos = pd.DatetimeIndex(dates_oos)
+
+def max_drawdown(r):
+    wealth = np.cumprod(1.0 + np.asarray(r))
+    return float((wealth / np.maximum.accumulate(wealth) - 1.0).min())
+
+bt_rows = []
+for name in rule_names:
+    r = np.array(r_hist[name]); Wk = np.array(W_hist[name])
+    bt_rows.append({"strategy": name,
+                    "mean % p.a.": r.mean() * 1200,
+                    "vol % p.a.": r.std(ddof=1) * np.sqrt(12) * 100,
+                    "Sharpe": r.mean() / r.std(ddof=1) * np.sqrt(12),
+                    "turnover": np.abs(np.diff(Wk, axis=0)).sum(axis=1).mean(),
+                    "max DD %": max_drawdown(r) * 100,
+                    "CE % p.a.": (r.mean() - 0.5 * gamma * r.var(ddof=1)) * 1200,
+                    "avg leverage": np.abs(Wk).sum(axis=1).mean()})
+backtest = pd.DataFrame(bt_rows).set_index("strategy")
+print(f"out-of-sample months: {len(dates_oos)}, "
+      f"{dates_oos[0]:%Y-%m} to {dates_oos[-1]:%Y-%m}")
+print(backtest.round(3).T)
+```
+
+Read the table one column at a time, because each column says something different and only
+one of them is the investor's objective.
+
+The plug-in rule earns the highest average return, 10.21 per cent a year, and that is the
+column people quote. It also runs the highest volatility, 17.90 per cent, the highest
+average gross leverage, 2.59, the most trading, and the deepest drawdown, a fall of 68.7
+per cent from peak to trough. Its Sharpe ratio, 0.570, is no better than the equal-weight
+portfolio's 0.587: all the extra return came from taking more risk, none of it from
+choosing better. The Bayes predictive rule earns 8.73 per cent at a volatility of 15.63,
+cutting average leverage from 2.59 to 2.23, turnover from 0.048 to 0.040 and the maximum
+drawdown from 68.7 to 64.4 per cent. Its Sharpe ratio, 0.559, is also indistinguishable
+from the others.
+
+The column that decides the question is the certainty equivalent, because that is the
+quantity the mean-variance investor is actually maximising. The plug-in rule delivers 2.20
+per cent a year, the Bayes predictive rule 2.63, the equal-weight portfolio 2.86 and the
+blend of plug-in and equal weight 3.72. Ranking by certainty equivalent reverses the
+ranking by average return completely. Integrating over parameter uncertainty bought 0.43
+percentage points of annual certainty equivalent over the plug-in rule, a gain of about a
+fifth, entirely by taking less risk for a little less return. Shrinking half way toward
+equal weights bought 1.52 percentage points, considerably more, which is the uncomfortable
+finding this literature keeps producing: with three well-behaved assets and forty-six years
+of out-of-sample months, the crude shrinkage does more good than the principled one,
+because a fifty per cent shrink toward a fixed portfolio is a much stronger prior than
+$k_0 = 24$ months. The lesson is not that Bayesian machinery fails but that the strength of
+the prior, not its provenance, is what moves the answer.
+
+```{python}
+fig, ax = plt.subplots()
+for name, colour in zip(rule_names, ["C1", "C0", "C2", "black"]):
+    wealth = np.cumprod(1.0 + np.array(r_hist[name]))
+    ax.plot(dates_oos, wealth, color=colour, lw=1.3, label=name)
+ax.set_yscale("log")
+ax.set_xlabel("date"); ax.set_ylabel("cumulative excess-return wealth (log scale)")
+ax.set_title("Four allocation rules on the Fama-French factors, 1980 to 2026")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+final_wealth = {k: float(np.cumprod(1.0 + np.array(r_hist[k]))[-1]) for k in rule_names}
+print({k: round(v, 2) for k, v in final_wealth.items()})
+```
+
+The log scale matters here: on a linear axis the plug-in path would look like a triumph,
+because a euro invested in it in 1980 grows to about 53.6 euros against 5.9 for the
+equal-weight portfolio. On a log scale, where equal vertical distances are equal
+percentage moves, the plug-in path is visibly the most violent of the four, with its
+deepest hole in the 1999 to 2000 stretch when the value factor collapsed and the rule was
+heavily long value. The equal-weight path is the smoothest and the shrinkage path sits
+between. A path that ends higher after a 69 per cent drawdown is not obviously the one a
+risk-averse investor would have chosen, and the certainty-equivalent column is the formal
+version of that intuition.
+
+```{python}
+fig, ax = plt.subplots()
+lev_p = np.abs(np.array(W_hist["plug-in"])).sum(axis=1)
+lev_b = np.abs(np.array(W_hist["Bayes predictive"])).sum(axis=1)
+ax.plot(dates_oos, lev_p, color="C1", lw=1.1, label="plug-in")
+ax.plot(dates_oos, lev_b, color="C0", lw=1.1, label="Bayes predictive")
+ax.axhline(1.0, color="black", ls=":", lw=1, label="equal weight")
+ax.set_xlabel("date"); ax.set_ylabel("gross leverage, sum of |weights|")
+ax.set_title("How much the two rules ask the investor to bet, month by month")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+
+print(f"gross leverage, plug-in: mean {lev_p.mean():.2f}, max {lev_p.max():.2f}; "
+      f"Bayes: mean {lev_b.mean():.2f}, max {lev_b.max():.2f}")
+print(f"weight on value, plug-in: min {np.array(W_hist['plug-in'])[:, 2].min():.2f}, "
+      f"max {np.array(W_hist['plug-in'])[:, 2].max():.2f}")
+```
+
+Both lines start high, because in 1980 each rule had only ten years of data, and both fall
+as the estimation sample lengthens and the posterior concentrates. The plug-in line sits
+above the Bayesian line throughout and the gap is widest at the left, exactly as the
+$1 - 1/\kappa \approx (n+1)/T$ approximation in the derivation predicts: with $T = 120$ the
+de-levering is a few per cent, but the informative prior on the mean adds to it, and both
+effects are largest when the sample is shortest. The peak leverage the plug-in rule reaches
+in the early 1980s is above three, meaning three euros of factor exposure per euro of
+wealth, which no risk manager would sign off and which the rule arrives at purely because
+the value premium looked enormous in a ten-year sample.
+
+### The certainty-equivalent cost of ignoring parameter uncertainty
+
+The backtest is one history and therefore one draw. To price the mistake properly we need
+the expected loss, and for that the third derivation gives an exact expression.
+
+::: {.callout-note collapse="true"}
+## Derivation: the certainty equivalent and the expected loss from plugging in
+
+Fix the true parameters $\mu$ and $\Sigma$. The certainty equivalent of a weight vector
+$w$, the risk-free return that would leave the mean-variance investor equally well off, is
+$$
+\mathrm{CE}(w) = w'\mu - \frac{\gamma}{2} w'\Sigma w .
+$$
+By the previous derivation the best possible choice is $w^\star = \Sigma^{-1}\mu/\gamma$,
+whose certainty equivalent is
+$$
+\mathrm{CE}^\star = \frac{1}{\gamma}\mu'\Sigma^{-1}\mu
+- \frac{\gamma}{2}\cdot\frac{1}{\gamma^2}\mu'\Sigma^{-1}\Sigma\Sigma^{-1}\mu
+= \frac{1}{2\gamma}\,\mu'\Sigma^{-1}\mu ,
+$$
+half the squared maximum Sharpe ratio divided by risk aversion, which is the textbook
+result and a useful sanity check on any code.
+
+Now take any other weight $w = w^\star + d$ and expand:
+$$
+\mathrm{CE}(w) = (w^\star + d)'\mu - \frac{\gamma}{2}(w^\star + d)'\Sigma(w^\star + d)
+= \mathrm{CE}^\star + d'\mu - \gamma\, d'\Sigma w^\star - \frac{\gamma}{2} d'\Sigma d .
+$$
+The cross term vanishes, because $\Sigma w^\star = \Sigma \Sigma^{-1}\mu/\gamma = \mu/\gamma$,
+so $\gamma\, d'\Sigma w^\star = d'\mu$ cancels the linear term exactly. What is left is
+$$
+L(w) \;\equiv\; \mathrm{CE}^\star - \mathrm{CE}(w) \;=\; \frac{\gamma}{2}\, d'\Sigma d ,
+$$
+an exactly quadratic loss in the weight error, with no approximation anywhere. A weight
+error costs the investor in proportion to risk aversion and to how much portfolio variance
+that error adds.
+
+Apply this to the plug-in rule when $\Sigma$ is known and only the mean is estimated. Then
+$\hat w = \Sigma^{-1}\hat\mu/\gamma$ and
+$d = \Sigma^{-1}(\hat\mu - \mu)/\gamma$, so
+$$
+d'\Sigma d = \frac{1}{\gamma^2}(\hat\mu - \mu)'\Sigma^{-1}\Sigma\Sigma^{-1}(\hat\mu-\mu)
+= \frac{1}{\gamma^2}(\hat\mu - \mu)'\Sigma^{-1}(\hat\mu - \mu).
+$$
+With $T$ i.i.d. observations, $\hat\mu \sim N(\mu, \Sigma/T)$, so the quadratic form
+$T(\hat\mu-\mu)'\Sigma^{-1}(\hat\mu-\mu)$ is $\chi^2_n$ and its expectation is $n$.
+Therefore
+$$
+E\big[L(\hat w)\big] = \frac{\gamma}{2}\cdot \frac{1}{\gamma^2}\cdot\frac{n}{T}
+= \frac{n}{2\gamma T}.
+$$
+Three readings follow immediately. The loss is proportional to the number of assets, so
+adding assets costs something even when they are useless. It falls like $1/T$, so halving
+the loss requires doubling the history, which is why waiting is such a bad strategy. And
+it is smaller for a more risk-averse investor, because a large $\gamma$ scales the whole
+position down and a smaller position makes a smaller mistake. With $n = 3$ assets,
+$\gamma = 5$ and $T = 120$ months the expected monthly loss is $3/(2\cdot 5\cdot 120) =
+0.0025$, or 3.0 percentage points a year, against a maximum attainable certainty
+equivalent of 4.4 per cent a year in our data: two thirds of the available gain thrown
+away by a rule that looks like it is doing the right thing. Estimating $\Sigma$ as well
+makes it worse, which is what the simulation below measures.
+:::
+
+The experiment treats the full-sample moments as the truth, draws samples of length $T$
+from the implied Normal distribution, applies each rule to each sample and evaluates the
+resulting weights at the pseudo-true parameters. Averaging over 400 replications turns
+the one-history backtest into an expectation.
+
+```{python}
+w_opt_ff = mv_weights(mu_ff, S_ff, gamma)
+ce_star_ff = float(w_opt_ff @ mu_ff - 0.5 * gamma * (w_opt_ff @ S_ff @ w_opt_ff))
+
+def ce_at_truth(w):
+    return float(w @ mu_ff - 0.5 * gamma * (w @ S_ff @ w))
+
+sizes_ff = [24, 36, 60, 120, 240, 480]
+loss_rows = []
+for T_s in sizes_ff:
+    lp, lb, le = [], [], []
+    for _ in range(400):
+        R_s = rng_ff.multivariate_normal(mu_ff, S_ff, size=T_s)
+        lp.append(ce_star_ff - ce_at_truth(
+            mv_weights(R_s.mean(axis=0), np.cov(R_s, rowvar=False), gamma)))
+        lb.append(ce_star_ff - ce_at_truth(mv_weights(*niw_predictive(R_s), gamma)))
+        le.append(ce_star_ff - ce_at_truth(w_ew_ff))
+    loss_rows.append({"T": T_s, "plug-in": np.mean(lp) * 1200,
+                      "Bayes predictive": np.mean(lb) * 1200,
+                      "equal weight": np.mean(le) * 1200,
+                      "theory n/(2 gamma T)": n_ff / (2 * gamma * T_s) * 1200})
+loss_tab = pd.DataFrame(loss_rows).set_index("T")
+print(f"maximum attainable certainty equivalent: {ce_star_ff * 1200:.3f} % p.a.")
+print("expected certainty-equivalent loss, % per year")
+print(loss_tab.round(3))
+```
+
+```{python}
+fig, ax = plt.subplots()
+ax.plot(sizes_ff, loss_tab["plug-in"], "o-", color="C1", label="plug-in")
+ax.plot(sizes_ff, loss_tab["Bayes predictive"], "o-", color="C0", label="Bayes predictive")
+ax.plot(sizes_ff, loss_tab["equal weight"], "o-", color="C2", label="equal weight")
+ax.plot(sizes_ff, loss_tab["theory n/(2 gamma T)"], "k--", lw=1.2,
+        label=r"theory $n/(2\gamma T)$, known $\Sigma$")
+ax.axhline(ce_star_ff * 1200, color="grey", ls=":", lw=1.2,
+           label="maximum attainable CE")
+ax.set_xscale("log"); ax.set_yscale("log")
+ax.set_xlabel("estimation sample length T, months")
+ax.set_ylabel("expected certainty-equivalent loss, % per year")
+ax.set_title("What ignoring parameter uncertainty costs, and how fast it fades")
+ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+```
+
+The picture is the argument of the chapter in one frame. The maximum attainable certainty
+equivalent is 4.43 per cent a year, drawn as the horizontal dotted line. At $T = 24$ months
+the plug-in rule loses 27.1 percentage points a year, which is to say it does not merely
+fail to capture the 4.43 but destroys roughly six times that much: with two years of data
+the sample covariance is so badly estimated that the rule takes wild positions and they are
+wrong. The Bayes predictive rule at the same sample length loses 3.6 points. At $T = 120$,
+the length used to start the backtest, the plug-in loses 3.56 and the Bayesian 2.09, and by
+$T = 480$ the two have nearly converged at 0.77 and 0.67, the Bernstein-von Mises pattern
+again. The dashed theory line $n/(2\gamma T)$ sits just below the plug-in curve for large
+$T$ and far below it for small $T$, which is exactly right: the formula assumes $\Sigma$
+known, so it prices only the mean estimation error, and the gap between the dashed line and
+the orange curve is the additional cost of having to estimate and invert the covariance.
+The equal-weight line is flat at 1.64 points a year, because that rule estimates nothing
+and therefore has a loss that does not depend on $T$; it crosses the plug-in curve
+between $T = 240$ and $T = 480$, which is the formal version of the folk wisdom that below
+about twenty years of monthly data you are better off not optimising at all.
+
+### A prior belief in the CAPM and the size and value tilts
+
+The second real application changes the question. Instead of asking how sure we are about
+a mean, it asks what happens when an investor holds an economic theory and lets it discipline
+the data. The theory is the CAPM: every asset's expected excess return should be its beta
+times the market's expected excess return, and nothing else. In a time-series regression
+$$
+r_{i,t} = \alpha_i + \beta_i\, r_{m,t} + \varepsilon_{i,t}
+$$
+the CAPM is the statement $\alpha_i = 0$. An investor who believes it dogmatically holds only
+the market. An investor who rejects it entirely lets the data set $\alpha_i$ freely. Between
+those poles is the interesting case, a prior $\alpha_i \sim N(0, \sigma_\alpha^2)$ whose
+standard deviation says how much mispricing the investor is willing to entertain, measured
+in per cent per year so it can be argued about.
+
+Given the prior and a diffuse prior on $\beta_i$, the posterior mean of $(\alpha_i, \beta_i)$
+is the usual conjugate update, and the implied expected return of factor $i$ is
+$\bar\alpha_i + \bar\beta_i\,\bar r_m$. We feed those means, with the sample covariance
+matrix of the three factors, into the same mean-variance rule and trace the weights as
+$\sigma_\alpha$ runs from essentially zero to essentially infinite.
+
+```{python}
+mkt_ff = R_ff[:, 0]
+X_capm = np.column_stack([np.ones(T_ff), mkt_ff])
+XtX_capm = X_capm.T @ X_capm
+mu_mkt_ff = mkt_ff.mean()
+
+capm_fit = {}
+for j, nm in [(1, "smb"), (2, "hml")]:
+    y_j = R_ff[:, j]
+    b_ols = np.linalg.solve(XtX_capm, X_capm.T @ y_j)
+    e_j = y_j - X_capm @ b_ols
+    s2_j = e_j @ e_j / (T_ff - 2)
+    se_a = np.sqrt(s2_j * np.linalg.inv(XtX_capm)[0, 0])
+    capm_fit[nm] = (b_ols, s2_j)
+    print(f"{nm}: alpha {b_ols[0] * 1200:6.3f} % p.a. (t = {b_ols[0] / se_a:5.2f}), "
+          f"beta {b_ols[1]:6.3f}")
+
+sig_a_grid = np.array([0.0001, 0.0025, 0.005, 0.01, 0.02, 0.04, 0.08, 0.20, 1.0])
+tilt_rows = []
+for sa in sig_a_grid:
+    s_a_m = sa / np.sqrt(12)                      # annual prior sd to monthly
+    mus = np.empty(n_ff); mus[0] = mu_mkt_ff
+    for j, nm in [(1, "smb"), (2, "hml")]:
+        b_ols, s2_j = capm_fit[nm]
+        V0inv = np.diag([1.0 / s_a_m ** 2, 1.0 / 10.0 ** 2])
+        Vn = np.linalg.inv(V0inv + XtX_capm / s2_j)
+        bn = Vn @ (XtX_capm @ b_ols / s2_j)
+        mus[j] = bn[0] + bn[1] * mu_mkt_ff
+    w_c = mv_weights(mus, S_ff, gamma)
+    tilt_rows.append({"prior sd of alpha, % p.a.": sa * 100,
+                      "mkt": w_c[0], "smb": w_c[1], "hml": w_c[2]})
+tilt = pd.DataFrame(tilt_rows).set_index("prior sd of alpha, % p.a.")
+print(tilt.round(4))
+```
+
+The two estimated alphas answer the economics before any prior is imposed. The size factor
+has an alpha of $-0.41$ per cent a year with a $t$ statistic of $-0.30$: over fifty-seven
+years, size has delivered nothing the market does not explain, and the CAPM has nothing to
+apologise for here. The value factor has an alpha of $4.85$ per cent a year with a $t$
+statistic of $3.48$, a beta of $-0.149$, and that is the anomaly the literature has argued
+about since the early 1990s.
+
+```{python}
+fig, ax = plt.subplots()
+for col, colour, lbl in [("mkt", "C0", "market"), ("smb", "C2", "size"),
+                         ("hml", "C1", "value")]:
+    ax.plot(tilt.index, tilt[col], "o-", color=colour, label=lbl)
+ax.set_xscale("log")
+ax.set_xlabel("prior standard deviation of alpha, % per year (log scale)")
+ax.set_ylabel("optimal weight")
+ax.set_title("A tight prior on the CAPM removes the value tilt and leaves size alone")
+ax.legend(fontsize=9)
+plt.tight_layout(); plt.show()
+```
+
+The figure separates two things that a table of $t$ statistics cannot. On the left, where
+the investor allows the factors an alpha of at most a hundredth of a per cent a year, the
+CAPM binds: the value weight is 0.017, essentially zero, and the portfolio is the market
+plus nothing. Move right and the value weight climbs steeply, reaching 0.264 at a prior
+standard deviation of a quarter of a per cent a year, 0.555 at half a per cent, 0.779 at
+one per cent and 0.868 at two per cent, after which the curve flattens onto the
+unconstrained 0.903. An investor who concedes
+that mispricing of one per cent a year is possible has already given up 86 per cent of the
+distance between the dogmatic CAPM and the free-data answer, which is a striking amount of
+movement for a prior most people would call tight. The reason is the size of the $t$
+statistic: a 4.85 per cent alpha measured with a standard error of about 1.4 points
+overwhelms a prior centred on zero with a standard deviation of one point.
+
+The size weight, by contrast, is flat and near zero across the whole range, rising only
+from 0.0001 to 0.0034. The prior has nothing to fight: the data never claimed a size alpha,
+so tightening or loosening the CAPM restriction changes nothing. This is the single most
+useful thing the picture teaches. A prior matters exactly where the likelihood is loud and
+disagrees with it, and it is invisible where the likelihood is quiet. The market weight is
+also nearly flat, moving from 0.600 to 0.731, because the market's own expected return is
+not restricted by the CAPM at all; it drifts up only because as the value position grows,
+the negative correlation between value and the market makes market exposure cheaper to
+hold.
+
+The practical reading for a portfolio manager is that the CAPM prior is a dial, not a
+switch, and stating where you sit on it is a more honest description of an investment
+process than either "we follow the theory" or "we follow the data".
+
 ## Maximising expected utility numerically
 
 Mean–variance is a decision criterion in its own right. Its equivalence with

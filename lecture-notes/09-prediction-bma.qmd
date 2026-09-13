@@ -237,6 +237,84 @@ coefficient posterior in Week 2, hence the Student-t distribution. The stated se
 argument is its **scale squared**, not its variance; multiply by $\nu/(\nu-2)$ for
 the variance when $\nu>2$.
 
+
+The steps from that argument to the displayed Student $t$ are worth seeing once in full, because the
+same algebra reappears under the g-prior later in this chapter and because the place where the degrees
+of freedom come from is not obvious.
+
+::: {.callout-note collapse="true"}
+## Derivation: the posterior predictive density as a multivariate t
+
+We want $p(y^* \mid y)$ where $y^* \mid \beta, \sigma^2 \sim N(x_*^\top\beta, \sigma^2)$ and the
+posterior is Normal-Inverse-Gamma,
+$$
+\beta \mid \sigma^2, y \sim N(\bar b,\, \sigma^2 \bar V), \qquad
+\sigma^2 \mid y \sim IG(\bar a, \bar d).
+$$
+Do the integral in two stages, first over $\beta$ at fixed $\sigma^2$, then over $\sigma^2$.
+
+Stage one. At fixed $\sigma^2$, write $y^* = x_*^\top\beta + \varepsilon^*$ with
+$\varepsilon^* \sim N(0, \sigma^2)$ independent of $\beta$. A linear function of a Normal vector is
+Normal, and adding an independent Normal keeps it Normal, so $y^*$ is Normal with
+$$
+E[y^* \mid \sigma^2, y] = x_*^\top \bar b, \qquad
+\operatorname{Var}(y^* \mid \sigma^2, y) = x_*^\top(\sigma^2\bar V)x_* + \sigma^2
+= \sigma^2\left(1 + x_*^\top \bar V x_*\right).
+$$
+Write $c = 1 + x_*^\top \bar V x_*$ for that bracket, so
+$y^* \mid \sigma^2, y \sim N(x_*^\top\bar b,\, \sigma^2 c)$.
+
+Stage two. Integrate over the inverse-Gamma variance,
+$$
+p(y^* \mid y) = \int_0^\infty \frac{1}{\sqrt{2\pi\sigma^2 c}}
+\exp\!\left(-\frac{(y^* - x_*^\top\bar b)^2}{2\sigma^2 c}\right)
+\cdot \frac{\bar d^{\,\bar a}}{\Gamma(\bar a)}(\sigma^2)^{-\bar a - 1}
+\exp\!\left(-\frac{\bar d}{\sigma^2}\right) d\sigma^2 .
+$$
+Write $r = (y^* - x_*^\top\bar b)^2$ and collect the powers of $\sigma^2$ and the two exponentials:
+$$
+p(y^* \mid y) = \frac{\bar d^{\,\bar a}}{\Gamma(\bar a)\sqrt{2\pi c}}
+\int_0^\infty (\sigma^2)^{-\bar a - 3/2}
+\exp\!\left(-\frac{1}{\sigma^2}\left[\bar d + \frac{r}{2c}\right]\right) d\sigma^2 .
+$$
+The integrand is now an unnormalised $IG(\bar a + \tfrac{1}{2},\, \bar d + r/(2c))$ density in
+$\sigma^2$, so the integral equals the reciprocal of that density's normalising constant, namely
+$\Gamma(\bar a + \tfrac{1}{2}) \big/ \big(\bar d + r/(2c)\big)^{\bar a + 1/2}$. Substituting,
+$$
+p(y^* \mid y) = \frac{\Gamma(\bar a + \tfrac{1}{2})}{\Gamma(\bar a)\sqrt{2\pi c}}
+\left(\bar d + \frac{r}{2c}\right)^{-\bar a - 1/2}
+= \frac{\Gamma(\bar a + \tfrac{1}{2})}{\Gamma(\bar a)\sqrt{2\pi c\,\bar d}}\;
+\bar d^{\,-\bar a}\bar d^{\,\bar a}
+\left(1 + \frac{r}{2c\bar d}\right)^{-\bar a - 1/2},
+$$
+where the last step factors $\bar d$ out of the bracket. Everything in front of the final bracket is a
+constant in $y^*$, so the shape is
+$$
+p(y^* \mid y) \;\propto\; \left(1 + \frac{(y^* - x_*^\top\bar b)^2}{2\bar a}
+\cdot \frac{\bar a}{c\,\bar d}\right)^{-\frac{2\bar a + 1}{2}} .
+$$
+Compare this with the density of a Student $t$ with $\nu$ degrees of freedom, location $\mu$ and scale
+$s$, which is proportional to $\left(1 + (y-\mu)^2/(\nu s^2)\right)^{-(\nu+1)/2}$. Matching the
+exponents gives $\nu = 2\bar a$, and matching the quadratic term gives
+$s^2 = c\,\bar d/\bar a$. Hence
+$$
+y^* \mid y \;\sim\; t_{2\bar a}\!\left(x_*^\top\bar b,\;
+\frac{\bar d}{\bar a}\left(1 + x_*^\top \bar V x_*\right)\right),
+$$
+which is the result quoted above, with the second argument being the squared scale rather than the
+variance. The variance, when it exists, is $\nu/(\nu - 2)$ times the squared scale, so it is slightly
+larger, and it does not exist at all when $\bar a \le 1$.
+
+Two readings are worth keeping. The degrees of freedom $2\bar a = 2a_0 + n$ grow with the sample, so the
+$t$ converges to a Normal as $n$ grows: heavy predictive tails are a small-sample phenomenon caused by
+not knowing $\sigma^2$, and they vanish once the variance is well pinned down. The factor
+$c = 1 + x_*^\top\bar V x_*$, by contrast, does not vanish, because the leading one is the variance of
+the future shock and no amount of data removes it. This is why a long sample makes the interval around
+the *conditional mean* shrink to nothing while the interval around the *realised outcome* converges to
+a fixed width set by $\sigma$. Confusing the two is the single most common error in reporting a
+forecast interval.
+:::
+
 ## Scoring predictive distributions
 
 If forecasts are distributions they must be graded as distributions. The **log predictive score** of a
@@ -275,6 +353,69 @@ over repeated outcomes, so a single observation can favour a worse forecast.
 Log scores also depend on measurement units; compare densities for the same
 outcomes expressed in the same units.
 
+
+The Kullback-Leibler argument says the honest density wins on average, but it does not say what a
+forecaster is being rewarded and punished for. Decomposing the score answers that, and the answer is
+the pair of words that organises the whole forecasting literature.
+
+::: {.callout-note collapse="true"}
+## Derivation: why the log score decomposes into calibration and sharpness
+
+Take a Normal forecast $q = N(m, s^2)$ and an outcome $Y$ drawn from the true conditional distribution,
+whatever it is, with mean $\mu$ and variance $\tau^2$. The log score of that forecast at the realised
+outcome is
+$$
+\log q(Y) = -\tfrac{1}{2}\log(2\pi) - \log s - \frac{(Y - m)^2}{2s^2}.
+$$
+Take expectations under the truth. Split the squared error using $Y - m = (Y - \mu) + (\mu - m)$, whose
+cross term has expectation zero because $E[Y - \mu] = 0$:
+$$
+E\left[(Y - m)^2\right] = \tau^2 + (\mu - m)^2 .
+$$
+Substituting,
+$$
+E[\log q(Y)] = -\tfrac{1}{2}\log(2\pi) - \log s
+- \frac{\tau^2}{2s^2} - \frac{(\mu - m)^2}{2s^2}.
+$$
+The last term is a pure penalty for a mislocated forecast and is zero when $m = \mu$. Set it aside and
+consider the remaining three terms as a function of the quoted spread $s$. Differentiating
+$-\log s - \tau^2/(2s^2)$ with respect to $s$ gives $-1/s + \tau^2/s^3$, which is zero at $s = \tau$ and
+changes sign from positive to negative there, so the expected score is maximised by quoting exactly the
+true spread. Evaluating at that optimum gives
+$$
+E[\log q(Y)]\big|_{m = \mu,\, s = \tau} = -\tfrac{1}{2}\log(2\pi) - \log\tau - \tfrac{1}{2},
+$$
+which is the negative entropy of the truth and is the ceiling no forecaster can beat.
+
+Now read the three pieces. The term $(\mu - m)^2/(2s^2)$ is a location error: getting the centre wrong.
+The pair $-\log s - \tau^2/(2s^2)$ trades off two competing pressures on the width. The
+$-\log s$ term rewards a *narrow* forecast, which is what the literature calls sharpness: a forecaster
+who quotes a tight density earns a large $-\log s$ when things go well. The $-\tau^2/(2s^2)$ term
+punishes a forecast that is narrower than the truth, which is what the literature calls calibration:
+quote $s$ too small and the realised errors, which have variance $\tau^2$, are divided by a small $s^2$
+and the score collapses. The log score is therefore the unique combination that says: be as sharp as
+you can, subject to being calibrated. That slogan, due to Gneiting and Raftery, is not a rule of thumb;
+it is what the two terms in this expansion are.
+
+The asymmetry matters in applications. Set $\mu = m$ and $\tau = 1$ and let $s = f$ be the quoted
+standard deviation. The expected score is $-\tfrac{1}{2}\log(2\pi) - \log f - 1/(2f^2)$, so relative to
+the optimum the loss is $\log f + 1/(2f^2) - 1/2$. At $f = 2$, twice too wide, that is
+$0.693 + 0.125 - 0.5 = 0.318$. At $f = 0.5$, twice too narrow, it is $-0.693 + 2 - 0.5 = 0.807$, more
+than twice as costly. Overconfidence is punished harder than timidity, and it gets worse without bound
+as $f \to 0$ while timidity only costs logarithmically as $f \to \infty$. This is exactly the pattern
+printed in the table above, and it is the formal reason a forecaster who is unsure about the variance
+should err on the wide side.
+
+The same decomposition explains what Occam's razor buys a model averager. A single selected model is a
+sharp forecast: it quotes one model's predictive spread and ignores the possibility that the model is
+wrong. If the selection is right, the extra sharpness earns a better score. If it is wrong, the
+$(\mu - m)^2/(2s^2)$ term is divided by a spread that is too small and the penalty is severe. Averaging
+over models deliberately gives up some sharpness, since the mixture's variance carries the
+between-model disagreement term derived above, in exchange for protection against that severe penalty.
+Whether the trade is worth making is an empirical question, which is precisely what the backtest later
+in this chapter is for, and the answer is not always yes.
+:::
+
 ### Separate within-model and between-model uncertainty
 
 For model probabilities $w_j$, predictive means $m_j$, and variances $v_j$,
@@ -309,6 +450,94 @@ a model spreading its prior over many conceivable datasets must assign less dens
 saw. A useful regressor repays that cost through a larger reduction in $\bar d$, a useless one does
 not. This is Bayesian **Occam's razor**, and the **Bayes factor**
 $B_{12} = p(y \mid M_1)/p(y \mid M_2)$ is how far the data shift the prior odds.
+
+
+Saying that the determinant ratio does the penalising is correct but vague. Under one particular and
+very widely used choice of prior, Zellner's g-prior, the ratio collapses to a single closed-form factor
+whose dependence on the number of regressors can be read off, and the whole marginal likelihood reduces
+to an expression in the sample size, the number of regressors and the model's ordinary $R^2$. The
+horse race later in this chapter uses that expression, so it is worth deriving.
+
+::: {.callout-note collapse="true"}
+## Derivation: the marginal likelihood under the g-prior and how it penalises dimension
+
+Zellner's g-prior is the natural conjugate prior with $b_0 = 0$ and the prior covariance matrix taken
+proportional to the inverse of the design's cross-product matrix,
+$$
+\beta \mid \sigma^2 \sim N\!\left(0,\; \sigma^2 g (X^\top X)^{-1}\right), \qquad
+\sigma^2 \sim IG(\alpha_0, \delta_0),
+$$
+so $V_0 = g(X^\top X)^{-1}$ and the single scalar $g$ says how diffuse the coefficient prior is
+relative to the information the data carry about the same coefficients. The point of shaping $V_0$ like
+$(X^\top X)^{-1}$ is that the prior is then automatically scaled to each regressor: a variable measured
+in basis points and the same variable measured in percentage points get priors that imply exactly the
+same beliefs, so the comparison between models is invariant to units. That is a property a diagonal
+prior does not have, and it matters a great deal when the marginal likelihood is used to compare
+models, because an arbitrary rescaling of a regressor would otherwise change its evidence.
+
+Start with the posterior covariance. Substituting $V_0^{-1} = (X^\top X)/g$,
+$$
+\bar V = \left(V_0^{-1} + X^\top X\right)^{-1}
+= \left(\frac{X^\top X}{g} + X^\top X\right)^{-1}
+= \frac{g}{1 + g}\,(X^\top X)^{-1}.
+$$
+The posterior mean is then
+$$
+\bar b = \bar V\left(V_0^{-1}b_0 + X^\top y\right)
+= \frac{g}{1+g}(X^\top X)^{-1}X^\top y
+= \frac{g}{1+g}\,\hat\beta_{\text{OLS}},
+$$
+since $b_0 = 0$. The shrinkage factor $s = g/(1+g)$ pulls the least-squares estimate towards zero by a
+constant proportion, the same proportion for every coefficient and every model, which is the second
+reason the g-prior is convenient for model comparison.
+
+Now the two ingredients of the marginal likelihood. The determinant ratio is
+$$
+\frac{|\bar V|^{1/2}}{|V_0|^{1/2}}
+= \left(\frac{\left|\frac{g}{1+g}(X^\top X)^{-1}\right|}{\left|g (X^\top X)^{-1}\right|}\right)^{1/2}
+= \left(\left(\frac{1}{1+g}\right)^{k}\right)^{1/2}
+= (1 + g)^{-k/2},
+$$
+where $k$ is the number of columns of $X$, because each of the $k$ diagonal entries of the ratio in the
+determinant contributes a factor $1/(1+g)$ and the $(X^\top X)^{-1}$ terms cancel exactly. This is the
+dimension penalty in closed form: every regressor added to the model multiplies the evidence by
+$(1+g)^{-1/2}$, regardless of what that regressor is or how useful it turns out to be. With the common
+unit-information choice $g = n$, this is a fixed toll of $\tfrac{1}{2}\log(1 + n)$ log points per
+regressor, which for the seven hundred and eighty-four monthly observations used below is $3.33$ log
+points. A regressor has to earn more than that before the evidence prefers the larger model, and a
+Bayes factor of $e^{3.33} \approx 28$ against inclusion is where any new predictor starts.
+
+The second ingredient is the posterior scale parameter. With $b_0 = 0$ the quadratic form simplifies:
+$$
+Q = (y - X\bar b)^\top y + (b_0 - \bar b)^\top V_0^{-1} b_0 = y^\top y - \bar b^\top X^\top y
+= y^\top y - s\,\hat\beta_{\text{OLS}}^\top X^\top y = y^\top y\left(1 - s\,R^2_u\right),
+$$
+where $R^2_u = \hat\beta^\top X^\top y / (y^\top y)$ is the uncentred coefficient of determination of
+the least-squares fit. So $\bar d = \delta_0 + \tfrac{1}{2}y^\top y(1 - sR^2_u)$, and the whole log
+marginal likelihood is
+$$
+\log p(y \mid M) = -\frac{n}{2}\log(2\pi) \;-\; \frac{k}{2}\log(1+g)
+\;+\; \log\Gamma(\bar a) - \log\Gamma(\alpha_0) + \alpha_0\log\delta_0
+\;-\; \bar a \log\!\left(\delta_0 + \tfrac{1}{2}y^\top y\left(1 - sR^2_u\right)\right),
+$$
+with $\bar a = \alpha_0 + n/2$. Only two terms differ across models: the dimension penalty
+$-\tfrac{k}{2}\log(1+g)$, which always hurts, and the fit term, which improves when $R^2_u$ rises.
+
+Comparing two nested models, $M_1$ with $k_1$ regressors and $M_2$ with $k_2 > k_1$, the log Bayes
+factor is
+$$
+\log B_{12} = \frac{k_2 - k_1}{2}\log(1 + g)
+- \bar a \log\frac{\delta_0 + \tfrac{1}{2}y^\top y(1 - sR^2_{u,1})}
+{\delta_0 + \tfrac{1}{2}y^\top y(1 - sR^2_{u,2})} .
+$$
+The first term is positive and grows linearly in the number of extra regressors; the second is negative
+whenever the bigger model fits better, and for small improvements in $R^2$ it is approximately
+$\bar a\, s\,\Delta R^2_u \big/ (1 - sR^2_u)$, which for large $n$ is of order $n\,\Delta R^2_u/2$. So
+a regressor pays its way exactly when it raises $R^2$ by more than about $\log(1+n)/n$, a threshold that
+shrinks as the sample grows but never reaches zero. That is Bayesian Occam's razor with the arithmetic
+attached: it is not a penalty someone chose and inserted, it is what integrating a prior over a larger
+space does to the density it can assign to the data actually observed.
+:::
 
 ## Posterior model probabilities and Bayesian model averaging
 
@@ -484,6 +713,454 @@ fade, though never to zero, and the ordering of the curves stays unsettled for a
 sample. This is why the mean top weight was well under one: the winner was rarely a foregone
 conclusion, which is exactly the situation in which BMA has something to offer over picking a single
 model early and never revisiting it.
+
+## A real horse race: forecasting the market's excess return
+
+Simulated data were the right place to learn the mechanics, because there we knew which model was true
+and could check that the machinery found it. They are the wrong place to learn what model averaging is
+worth, for the simple reason that we chose the signal ourselves and made it strong enough to be found.
+This section runs the same apparatus on the least forgiving forecasting problem in empirical finance and
+reports what happens, which is not what the simulation suggested.
+
+The target is the monthly excess return on the US market portfolio, the Fama-French market factor, in
+percentage points. We predict it, one month ahead, from five variables that the return-predictability
+literature has used for forty years:
+
+the term spread, the ten-year Treasury yield minus the federal funds rate, the classic business-cycle
+state variable, high when policy is easy relative to expected growth; the monthly change in the federal
+funds rate, a proxy for the policy stance turning; the year-on-year rate of consumer price inflation,
+which the Modigliani-Cohn hypothesis and the Fama-Schwert evidence both connect to equity valuations;
+the unemployment rate, a countercyclical state variable that proxies for risk aversion in habit models;
+and last month's excess return, which tests for short-horizon momentum or reversal.
+
+Returns rather than industrial production growth, and for a specific reason: return predictability is
+the case where model uncertainty is most severe, because the signal is so weak that the data never
+decisively favour any specification, and it is therefore the case where BMA has the most to offer and
+also the case where the temptation to fool oneself with in-sample results is greatest. A chapter on
+model averaging that only showed a problem with a strong signal would be teaching the wrong lesson.
+
+Timing is where such exercises go wrong, so it is spelled out. The term spread and the funds-rate
+change are built from market interest rates averaged within month $t$ and are known by the end of month
+$t$. The consumer price index for month $t$ is published in the middle of month $t+1$ and the
+unemployment rate for month $t$ in the first week of month $t+1$, so both are lagged one further month
+before use. The lagged return is month $t$'s realised market factor. Every predictor used to forecast
+the return of month $t+1$ was public before that month began.
+
+**Reading the computation.** The target column is the market factor shifted back one month, so the row
+dated $t$ pairs predictors known at $t$ with the return earned in $t+1$. Returns are in percentage
+points, rates in percentage points, and inflation in annual percentage points.
+
+```{python}
+from pathlib import Path
+
+DATA = next(p for p in (Path("data"), Path("../data")) if p.exists())
+
+fred_p = pd.read_parquet(DATA / "fred_macro_monthly.parquet")
+ff_p = pd.read_parquet(DATA / "ff_factors_monthly.parquet")
+cpi_yoy = 100.0 * np.log(fred_p["cpi"]).diff(12)
+
+panel = pd.DataFrame({
+    "term_spread": fred_p["yield_10y"] - fred_p["fed_funds"],   # known within month t
+    "d_ffr": fred_p["fed_funds"].diff(),                        # known within month t
+    "inflation": cpi_yoy.shift(1),                              # published during month t
+    "unemp": fred_p["unemployment"].shift(1),                   # published during month t
+    "lag_ret": 100.0 * ff_p["mkt_rf"],                          # realised in month t
+})
+panel["target"] = 100.0 * ff_p["mkt_rf"].shift(-1)              # earned in month t+1
+panel = panel.dropna()
+
+pred_names = ["term_spread", "d_ffr", "inflation", "unemp", "lag_ret"]
+Zp = panel[pred_names].to_numpy()
+yp = panel["target"].to_numpy()
+n_p, k_p = Zp.shape
+dates_p = panel.index
+
+print(f"{n_p} months, {dates_p[0]:%Y-%m} to {dates_p[-1]:%Y-%m}")
+print(panel.describe().loc[["mean", "std", "min", "max"]].round(3).T)
+print("\ncorrelation of each predictor with next month's return:")
+print(panel.corr()["target"][pred_names].round(4))
+```
+
+Seven hundred and eighty-four months, February 1961 to June 2026. The market excess return averages
+$0.593$ percentage points a month with a standard deviation of $4.460$, which is the Sharpe ratio of
+about $0.46$ a year that everybody knows. The predictors are not obviously useless: the term spread
+correlates $+0.081$ with next month's return, the unemployment rate $+0.088$, the funds-rate change
+$-0.092$ and inflation $-0.077$, all with the signs the literature reports. But a correlation of
+$0.09$ implies an $R^2$ of eight tenths of one per cent from a single regressor, and that is the whole
+problem in one number.
+
+### Enumerating thirty-two models under the g-prior
+
+With five candidate predictors and an always-included intercept there are $2^5 = 32$ models, so the
+model space can be enumerated exactly and no sampler over model indicators is needed. Each model gets
+the g-prior derived above, with $g = n$, the unit-information choice: the prior carries the weight of
+one observation, which is about as weakly informative as one can be while remaining proper and
+therefore comparable across models. The variance prior is the same
+$\sigma^2 \sim IG(\alpha_0, \delta_0)$ with $\alpha_0 = \delta_0 = 2.5$ used throughout this chapter,
+and since it is identical in every model it cancels almost entirely from the comparison.
+
+**Reading the computation.** `gprior` builds $V_0 = g(X^\top X)^{-1}$ for whatever design matrix it is
+handed, so the existing `log_marglik`, `nig_posterior` and `predictive_t` functions can be reused
+unchanged. Each model is fitted on the rows supplied and, optionally, asked for a one-step predictive
+density at a future regressor row.
+
+```{python}
+models_r = [tuple(s) for kk in range(k_p + 1) for s in combinations(range(k_p), kk)]
+labels_r = ["{" + ", ".join(pred_names[j] for j in m) + "}" if m else "{constant only}"
+            for m in models_r]
+
+def gprior(X, g):
+    return np.zeros(X.shape[1]), g * np.linalg.inv(X.T @ X)
+
+def fit_g(rows, x_row=None, y_new=None):
+    g = float(len(rows))
+    lml = np.empty(len(models_r))
+    ld = np.full(len(models_r), np.nan)
+    mu = np.full(len(models_r), np.nan)
+    sc = np.full(len(models_r), np.nan)
+    nu = np.full(len(models_r), np.nan)
+    for j, m in enumerate(models_r):
+        Xm = np.column_stack([np.ones(len(rows))] + [Zp[rows, i] for i in m])
+        b0m, V0m = gprior(Xm, g)
+        lml[j] = log_marglik(Xm, yp[rows], b0m, V0m, a0, d0)
+        if x_row is not None:
+            post = nig_posterior(Xm, yp[rows], b0m, V0m, a0, d0)
+            nu[j], mu[j], sc[j] = predictive_t(np.r_[1.0, x_row[list(m)]], *post)
+            ld[j] = stats.t.logpdf(y_new, nu[j], mu[j], sc[j])
+    return np.exp(lml - logsumexp(lml)), lml, ld, mu, sc, nu
+
+w_r, lml_r, *_ = fit_g(np.arange(n_p))
+j_const = models_r.index(())
+j_full_r = models_r.index(tuple(range(k_p)))
+pip_r = np.array([w_r[[j for j, m in enumerate(models_r) if v in m]].sum()
+                  for v in range(k_p)])
+
+print(pd.DataFrame({"model": labels_r, "log ML": lml_r, "P(M|y)": w_r})
+      .sort_values("P(M|y)", ascending=False).head(6).round(4).to_string(index=False))
+print(f"\nposterior probability of the constant-only model: {w_r[j_const]:.4f}")
+print(f"log Bayes factor, best model over constant only: "
+      f"{lml_r.max() - lml_r[j_const]:.2f}")
+print(f"log Bayes factor, best model over the full model: "
+      f"{lml_r.max() - lml_r[j_full_r]:.2f}")
+print("posterior inclusion probabilities:",
+      {pred_names[v]: round(float(pip_r[v]), 3) for v in range(k_p)})
+X_full = np.column_stack([np.ones(n_p), Zp])
+b_full = np.linalg.lstsq(X_full, yp, rcond=None)[0]
+e_full = yp - X_full @ b_full
+print(f"in-sample R2 of the full five-predictor regression: "
+      f"{1 - e_full @ e_full / ((yp - yp.mean()) @ (yp - yp.mean())):.4f}")
+print(f"dimension penalty per regressor under g = n: {0.5 * np.log(1 + n_p):.2f} log points")
+```
+
+Read that table slowly, because it is the central result of the section and it is a negative one. The
+best-supported single model is the one containing only the funds-rate change, with posterior probability
+$0.1702$. The second best-supported model is the one with no predictors at all, at $0.1676$. The log
+Bayes factor of the best model over the constant-only model is $0.02$, which is not weak evidence, it is
+no evidence: on any of the usual verbal scales a log Bayes factor below one is "not worth more than a
+bare mention", and $0.02$ corresponds to odds of $1.02$ to one. After sixty-five years of monthly data
+and five of the profession's favourite predictors, the evidence cannot distinguish a world with
+predictable returns from a world without.
+
+The inclusion probabilities say the same thing predictor by predictor. Every one of them is below the
+prior inclusion probability of one half: the funds-rate change reaches $0.433$, the unemployment rate
+$0.372$, inflation $0.264$, the term spread only $0.160$ and the lagged return $0.056$. A posterior
+inclusion probability below the prior means the data have argued *against* the variable, and that is the
+verdict on four of the five. Meanwhile the log Bayes factor of the best model over the full model is
+$7.81$, which is substantial evidence against throwing all five in at once: $e^{7.81} \approx 2465$ to
+one. The razor derived above is doing exactly its job, charging $3.33$ log points per regressor and
+finding that almost none of them repays it.
+
+**Reading the computation.** The left panel shows the six best-supported models, the right panel the
+inclusion probability of each predictor against the prior line of one half. The constant-only model is
+shaded differently because it is the "no predictability" hypothesis.
+
+```{python}
+ord_r = np.argsort(w_r)[::-1][:6]
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+cols = ["C7" if j == j_const else "C0" for j in ord_r]
+axes[0].bar(range(6), w_r[ord_r], color=cols,
+            tick_label=[labels_r[j].replace(", ", ",\n") for j in ord_r])
+axes[0].set_ylabel("posterior model probability")
+axes[0].set_title("Six best-supported models")
+axes[0].tick_params(axis="x", labelsize=7)
+axes[1].bar(pred_names, pip_r, color="C2")
+axes[1].axhline(0.5, color="grey", ls=":", label="prior inclusion probability")
+axes[1].set_ylabel("posterior inclusion probability")
+axes[1].set_ylim(0, 1)
+axes[1].legend(fontsize=8)
+axes[1].set_title("Posterior inclusion probabilities")
+axes[1].tick_params(axis="x", rotation=25, labelsize=8)
+plt.tight_layout(); plt.show()
+```
+
+Compare this picture with the simulated one earlier in the chapter, where the leading model carried
+roughly three quarters of the mass and the two true predictors had inclusion probabilities near one.
+Here the leading model carries a sixth of the mass, the distribution over models is nearly flat, and no
+predictor clears one half. That flatness is not a failure of the method. It is the correct posterior
+for a problem in which the signal, if it exists, is a fraction of a per cent of return variance.
+
+### An expanding-window backtest from 1990
+
+In-sample evidence is not the question a forecaster faces. We therefore run a proper out-of-sample
+exercise. Starting in January 1990, and at every month thereafter, we refit all thirty-two models on the
+data available up to but not including that month, compute the posterior model probabilities from that
+information only, form each model's one-step predictive $t$ density at the known regressor row, and
+score the realised return under four competing forecasts. BMA scores the probability-weighted mixture of
+all thirty-two densities. Best single scores the density of whichever model has the highest posterior
+probability at that date, which is what a researcher who selects a specification and then forecasts with
+it would report. Full always uses all five predictors. Prevailing mean is the constant-only model, the
+benchmark of Goyal and Welch and the standard against which return-predictability claims are judged.
+
+The start date of 1990 leaves twenty-nine years of data for the first fit, which is enough that the
+posteriors are not dominated by their priors, and $437$ months to score, which is enough that a
+difference of a few hundredths of a log point per month would show up as a visible cumulative gap.
+
+**Reading the computation.** The loop refits everything at every date, so nothing computed after month
+$t$ can influence the forecast for month $t$. The mixture is formed on the density scale, using
+log-sum-exp, before its logarithm is taken.
+
+```{python}
+t_start = dates_p.get_loc(pd.Timestamp("1990-01-01"))
+n_oos = n_p - t_start
+W_path = np.zeros((n_oos, len(models_r)))
+rec = []
+for i, t in enumerate(range(t_start, n_p)):
+    w, lml, ld, mu, sc, nu = fit_g(np.arange(t), Zp[t], yp[t])
+    W_path[i] = w
+    jb = int(np.argmax(w))
+    rec.append({"date": dates_p[t], "y": yp[t], "leader": jb, "top_w": w.max(),
+                "lps_bma": logsumexp(ld + np.log(w)), "lps_sel": ld[jb],
+                "lps_full": ld[j_full_r], "lps_bench": ld[j_const],
+                "mu_bma": float(w @ mu), "mu_sel": mu[jb],
+                "mu_full": mu[j_full_r], "mu_bench": mu[j_const],
+                "pit_bma": float(w @ stats.t.cdf(yp[t], nu, mu, sc))})
+bt = pd.DataFrame(rec).set_index("date")
+
+def r2_oos(col):
+    e = bt["y"] - bt[col]; base = bt["y"] - bt["mu_bench"]
+    return 1.0 - (e @ e) / (base @ base)
+
+strategies = [("BMA", "bma"), ("best single model", "sel"),
+              ("full model", "full"), ("prevailing mean", "bench")]
+tbl = pd.DataFrame({"mean log score": [bt["lps_" + s].mean() for _, s in strategies],
+                    "cumulative log score": [bt["lps_" + s].sum() for _, s in strategies],
+                    "out-of-sample R2": [r2_oos("mu_" + s) for _, s in strategies]},
+                   index=[nm for nm, _ in strategies])
+print(f"{len(bt)} out-of-sample months, {bt.index[0]:%Y-%m} to {bt.index[-1]:%Y-%m}")
+print(tbl.round(4))
+print(f"\nmean weight on the leading model: {bt['top_w'].mean():.3f}; "
+      f"{bt['leader'].nunique()} distinct models ever led")
+print(bt["leader"].value_counts().rename(index=lambda j: labels_r[j]).to_string())
+```
+
+Nothing beats the prevailing mean. The out-of-sample $R^2$ of BMA is $-0.0030$, of the full model
+$-0.0001$ and of the single best model $-0.0169$; by construction the benchmark's is zero. Negative
+out-of-sample $R^2$ means that a forecaster who ignored all five predictors and simply projected the
+historical average excess return would have produced smaller squared errors than any of the alternatives
+over these $437$ months. That is the Goyal and Welch result, reproduced here with Bayesian machinery on
+a fresh sample, and it is the honest headline.
+
+The log predictive scores tell a slightly richer story, because they grade the whole density rather than
+the centre. The full model scores $-2.8983$ per month, the prevailing mean $-2.8995$, BMA $-2.9004$ and
+selection $-2.9073$. Those four numbers differ in the third decimal. Cumulated over $437$ months, BMA
+ends $0.37$ log points below the benchmark and the full model $0.55$ above it, which after three and a
+half decades of monthly forecasting is nothing: a single well-forecast month can move a cumulative log
+score by more than that. Any claim that one of these strategies has been shown to beat another would be
+overreading noise.
+
+One comparison in the table is not noise. Selecting the single most probable model costs $3.42$
+cumulative log points relative to the benchmark, roughly nine times BMA's shortfall, and its
+out-of-sample $R^2$ of $-0.0169$ is more than five times worse than BMA's. That is the practical case for
+averaging, and it does not depend on predictability existing. When the posterior is nearly flat over
+thirty-two models, the leader is close to arbitrary, and forecasting as though it were the truth quotes
+a density that is too sharp around a centre that is picked by noise, which is exactly the combination
+the calibration-and-sharpness decomposition says will be punished hardest. Averaging concedes the
+sharpness and avoids the punishment. The mean weight on the leading model over the backtest is $0.274$,
+so on a typical date the leader is only about a quarter of the story and the researcher who reports it
+alone is discarding three quarters of the posterior.
+
+**Reading the computation.** Each line is the running sum of one strategy's log score minus the
+benchmark's, so a rising line means that strategy was beating the prevailing mean over that stretch and
+the final height is the whole-sample verdict. The vertical scale is deliberately left in raw log
+points, because shrinking it would hide how small these differences are.
+
+```{python}
+fig, ax = plt.subplots(figsize=(7.8, 4.3))
+for lab, key, col in [("BMA", "bma", "C0"), ("best single model", "sel", "C3"),
+                      ("full model", "full", "C2")]:
+    ax.plot(bt.index, np.cumsum(bt["lps_" + key] - bt["lps_bench"]), color=col, label=lab)
+ax.axhline(0.0, color="black", ls=":", lw=1.0)
+ax.set_xlabel("forecast origin")
+ax.set_ylabel("cumulative log score minus prevailing mean")
+ax.legend(fontsize=8)
+ax.set_title("Thirty-six years of forecasting, and almost nothing to show for it")
+plt.tight_layout(); plt.show()
+
+for lab, key in [("BMA", "bma"), ("best single", "sel"), ("full", "full")]:
+    c = np.cumsum(bt["lps_" + key] - bt["lps_bench"])
+    print(f"{lab:12s}: cumulative gain ends at {c.iloc[-1]:+.2f}, "
+          f"ranging from {c.min():+.2f} to {c.max():+.2f}")
+```
+
+The curves wander around zero for three decades and end within a few log points of where they started,
+which is the visual form of the table above. BMA ends at $-0.37$ after touching $+0.53$ and $-1.05$
+along the way, the full model ends at $+0.55$, and the single best model ends at $-3.42$, the only line
+with a discernible downward drift. A student who has seen cumulative-score plots in the applied
+literature will recognise how different this looks from a plot of a genuine forecasting improvement,
+where the line climbs steadily as it did in the simulated backtest earlier in this chapter. Here the
+only reliable pattern is that selection loses.
+
+The identity of the leader is itself instructive. Only four of the thirty-two models ever led, and the
+term-spread model led in $347$ of the $437$ months, yet its inclusion probability at the end of the
+sample is only $0.160$. A variable can be the single most useful thing available for decades and still
+not clear the evidence threshold for inclusion, because "best of a weak field" and "worth its dimension
+penalty" are different tests.
+
+### The predictive density, not the point forecast
+
+A point forecast of monthly equity returns is very nearly useless, because the forecastable part is tiny
+next to the noise. The density is not useless: it is what tells a risk manager how much can go wrong. It
+is therefore worth drawing the object BMA actually produces at the final forecast origin, which is a
+mixture of thirty-two Student $t$ densities, and decomposing its variance into the within-model and
+between-model pieces derived earlier.
+
+**Reading the computation.** The mixture density is evaluated on a grid by summing weighted component
+densities. The variance decomposition uses the Student $t$ variance $\nu/(\nu-2)$ times the squared
+scale for each component, and the weighted spread of component means for the between-model term.
+
+```{python}
+t_last = n_p - 1
+w_L, _, _, mu_L, sc_L, nu_L = fit_g(np.arange(t_last), Zp[t_last], yp[t_last])
+grid_r = np.linspace(-18, 18, 801)
+mix = sum(w_L[j] * stats.t.pdf(grid_r, nu_L[j], mu_L[j], sc_L[j])
+          for j in range(len(models_r)))
+bench_d = stats.t.pdf(grid_r, nu_L[j_const], mu_L[j_const], sc_L[j_const])
+j_lead = int(np.argmax(w_L))
+
+mean_bma = float(w_L @ mu_L)
+var_within = float(w_L @ (sc_L ** 2 * nu_L / (nu_L - 2)))
+var_between = float(w_L @ (mu_L - mean_bma) ** 2)
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+axes[0].plot(grid_r, mix, color="C0", lw=2.0, label="BMA mixture")
+axes[0].plot(grid_r, bench_d, color="C7", lw=1.4, ls="--", label="prevailing mean")
+axes[0].plot(grid_r, stats.t.pdf(grid_r, nu_L[j_lead], mu_L[j_lead], sc_L[j_lead]),
+             color="C3", lw=1.0, ls=":", label=f"leader {labels_r[j_lead]}")
+axes[0].axvline(0.0, color="black", lw=0.8)
+axes[0].set_xlabel("excess return next month (percentage points)")
+axes[0].set_ylabel("predictive density")
+axes[0].legend(fontsize=8)
+axes[0].set_title(f"One-step predictive density for {dates_p[t_last]:%Y-%m}")
+axes[1].hist(bt["pit_bma"], bins=np.linspace(0, 1, 11), density=True,
+             color="C0", alpha=0.75, edgecolor="white")
+axes[1].axhline(1.0, color="grey", ls="--")
+axes[1].set_xlabel("probability integral transform of the BMA density")
+axes[1].set_ylabel("density")
+axes[1].set_title("Calibration over the 437 backtest months")
+plt.tight_layout(); plt.show()
+
+print(f"BMA predictive mean {mean_bma:.4f}, prevailing-mean forecast {mu_L[j_const]:.4f}")
+print(f"predictive sd {np.sqrt(var_within + var_between):.3f}: within-model variance "
+      f"{var_within:.3f}, between-model variance {var_between:.4f} "
+      f"({100 * var_between / (var_within + var_between):.2f}% of the total)")
+print(f"P(negative return next month): BMA "
+      f"{np.trapezoid(mix[grid_r < 0], grid_r[grid_r < 0]):.4f}, benchmark "
+      f"{np.trapezoid(bench_d[grid_r < 0], grid_r[grid_r < 0]):.4f}")
+print(f"PIT: mean {bt['pit_bma'].mean():.3f}, share below 0.1 "
+      f"{(bt['pit_bma'] < 0.1).mean():.3f}, share above 0.9 "
+      f"{(bt['pit_bma'] > 0.9).mean():.3f}")
+```
+
+The left panel is the whole lesson of this section in one picture. The BMA mixture, the prevailing-mean
+density and the leading model's density are visually indistinguishable: three curves of standard
+deviation near $4.44$ percentage points centred within a fifth of a point of each other. The variance
+decomposition puts a number on it. The within-model variance is $19.68$ and the between-model variance
+$0.03$, so disagreement among thirty-two models about next month's expected return accounts for
+$0.15$ per cent of the total predictive variance. All but that fraction of a forecaster's
+uncertainty about next month's market return is irreducible noise that no model in the set claims to
+explain. The probability of a negative month is $0.456$ under BMA and $0.443$ under the benchmark, a
+difference of just over one percentage point, which is the practical size of everything the five
+predictors have to say.
+
+That is the honest picture of return predictability, and it is worth contrasting with how such exercises
+are often reported. A researcher who ran the same regression, found the leading model, reported the
+in-sample $R^2$ of $0.0223$ for the full specification, and stopped there, would have produced
+something that looks like a finding. The out-of-sample columns and the variance decomposition say it is
+not one.
+
+The right panel is the consolation prize, and it is a real one. The probability integral transforms of
+the BMA predictive densities are close to uniform over the $437$ backtest months: their mean is $0.525$
+against a target of one half, $9.8$ per cent of outcomes fall below the tenth percentile of the quoted
+density and $9.4$ per cent above the ninetieth, both close to the ten per cent a calibrated forecaster
+should see. The model cannot tell you where the market is going, but it can tell you honestly how
+uncertain you should be about it, and for a risk manager sizing a position that is the more valuable of
+the two statements.
+
+### How the model weights move through time
+
+The posterior model probabilities are themselves a time series, and watching them move is the clearest
+diagnostic of whether a model space is settling down or churning. If one model were genuinely right, its
+weight would climb towards one and stay there, as it did in the simulated example earlier. The stacked
+area below shows what happens instead.
+
+**Reading the computation.** Each vertical slice sums to one across all thirty-two models. The six
+models with the highest average weight are shown individually and the remaining twenty-six are collected
+into a residual band, so that the area of each colour is the share of posterior belief that model held
+at that date.
+
+```{python}
+mean_w = W_path.mean(axis=0)
+top6 = np.argsort(mean_w)[::-1][:6]
+stack = np.vstack([W_path[:, top6].T, 1.0 - W_path[:, top6].sum(axis=1)])
+
+fig, ax = plt.subplots(figsize=(8.2, 4.6))
+ax.stackplot(bt.index, stack,
+             labels=[labels_r[j] for j in top6] + ["all 26 other models"],
+             colors=["C0", "C7", "C1", "C2", "C3", "C4", "lightgrey"], alpha=0.9)
+ax.set_ylim(0, 1); ax.set_xlim(bt.index[0], bt.index[-1])
+ax.set_xlabel("forecast origin"); ax.set_ylabel("posterior model probability")
+ax.legend(fontsize=7, loc="upper center", ncol=3, framealpha=0.9)
+ax.set_title("Posterior model weights never settle down")
+plt.tight_layout(); plt.show()
+
+pip_path = np.column_stack([W_path[:, [j for j, m in enumerate(models_r) if v in m]].sum(axis=1)
+                            for v in range(k_p)])
+print("average weight of the six leading models:")
+for j in top6:
+    print(f"  {labels_r[j]:36s} mean {mean_w[j]:.3f}, final {W_path[-1, j]:.3f}")
+print(f"the six together hold {mean_w[top6].sum():.3f} of the mass on average")
+print(f"constant-only model: weight from {W_path[:, j_const].min():.3f} to "
+      f"{W_path[:, j_const].max():.3f}, mean {W_path[:, j_const].mean():.3f}")
+print("\ninclusion probability range over the backtest:")
+for v in range(k_p):
+    print(f"  {pred_names[v]:12s} {pip_path[:, v].min():.3f} to {pip_path[:, v].max():.3f}, "
+          f"final {pip_path[-1, v]:.3f}")
+```
+
+The term-spread model is the largest band, averaging $0.259$ of the posterior, but its share is not a
+plateau: it rises through the 1990s, dominates around the turn of the century, and then erodes steadily
+until by the end of the sample it holds only $0.082$. The funds-rate model takes over in the later
+years, ending at $0.172$. Behind them, the constant-only band never disappears and never takes over:
+its weight ranges from $0.067$ to $0.323$ and averages $0.146$, so at every single forecast origin in
+thirty-six years the posterior kept between seven and thirty-two per cent of its belief on the
+proposition that none of these variables predicts anything. The six leading models together hold only
+$0.774$ of the mass on average, leaving nearly a quarter spread thinly across twenty-six alternatives.
+
+The inclusion probabilities move just as much. The term spread's inclusion probability runs from
+$0.741$ at its peak down to $0.159$, so a researcher enumerating this model space in 2000 and one doing
+it in 2026 would write different papers about the same variable using overlapping data. This is the
+strongest available argument against reporting a single selected specification in this literature: the
+selection is not stable, it is a function of the vintage of the data, and only an average over models
+reports the instability rather than hiding it.
+
+A final caution about what this exercise does and does not show. It does not show that returns are
+unpredictable, which is not a statement any finite sample can establish; it shows that these five
+predictors, in a linear model, at a one-month horizon, cannot be distinguished from no predictability by
+sixty-five years of data. Longer horizons, nonlinear specifications and predictors constructed from
+valuation ratios are all live research areas, and several of them survive out-of-sample tests better
+than what we have used here. What the exercise does show, and shows robustly, is the ranking among
+strategies when the signal is this weak: averaging beats selecting, both are close to the benchmark, and
+a density forecast can be well calibrated even when its centre carries no information at all.
 
 ## When averaging helps, and when it does not
 
